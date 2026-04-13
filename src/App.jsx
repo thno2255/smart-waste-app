@@ -17,8 +17,8 @@ import {
   LineChart, Line, AreaChart, Area, PieChart, Pie, Cell, RadarChart, Radar, PolarGrid,
   PolarAngleAxis, PolarRadiusAxis, ComposedChart,
 } from "recharts";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } from "firebase/auth";
-import { doc, setDoc, getDoc } from "firebase/firestore";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, updatePassword, EmailAuthProvider, reauthenticateWithCredential, sendPasswordResetEmail } from "firebase/auth";
+import { doc, setDoc, getDoc, collection, getDocs, updateDoc, query, orderBy, where, deleteDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
 
 // ============================================================
@@ -59,25 +59,23 @@ const AuthProvider = ({ children }) => {
 
   const register = async ({ email, password, fullName, phone, district, role }) => {
     try {
-      console.log("🔄 جاري إنشاء الحساب...", { email, fullName, role });
       const cred = await createUserWithEmailAndPassword(auth, email, password);
-      console.log("✅ تم إنشاء Auth بنجاح:", cred.user.uid);
       await updateProfile(cred.user, { displayName: fullName });
-      console.log("✅ تم تحديث الاسم");
+      // المواطن يدخل مباشرة، الموظف والإدارة العليا ينتظرون الموافقة
+      const needsApproval = role === "employee" || role === "executive";
       const userDocData = {
         uid: cred.user.uid, email, fullName, phone: phone || "", district: district || "",
         role: role || "citizen",
         roleAr: role === "executive" ? "إدارة عليا" : role === "employee" ? "موظف" : "مواطن",
-        status: "active", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        status: needsApproval ? "pending" : "active",
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       };
-      console.log("🔄 جاري الحفظ في Firestore...");
       await setDoc(doc(db, "users", cred.user.uid), userDocData);
-      console.log("✅ تم الحفظ في Firestore");
       setUserRole(userDocData.role);
       setUserData(userDocData);
-      return { success: true };
+      return { success: true, pending: needsApproval };
     } catch (error) {
-      console.error("❌ خطأ:", error.code, error.message, error);
+      console.error("❌ خطأ:", error.code, error.message);
       const msgs = {
         "auth/email-already-in-use": "البريد الإلكتروني مستخدم بالفعل",
         "auth/weak-password": "كلمة المرور ضعيفة - 6 أحرف على الأقل",
@@ -109,8 +107,54 @@ const AuthProvider = ({ children }) => {
     setUser(null); setUserRole(null); setUserData(null);
   };
 
+  const changePassword = async (currentPassword, newPassword) => {
+    try {
+      const credential = EmailAuthProvider.credential(user.email, currentPassword);
+      await reauthenticateWithCredential(user, credential);
+      await updatePassword(user, newPassword);
+      return { success: true };
+    } catch (error) {
+      const msgs = {
+        "auth/wrong-password": "كلمة المرور الحالية غير صحيحة",
+        "auth/weak-password": "كلمة المرور الجديدة ضعيفة - 6 أحرف على الأقل",
+        "auth/requires-recent-login": "يرجى تسجيل الخروج والدخول مرة أخرى ثم المحاولة",
+        "auth/invalid-credential": "كلمة المرور الحالية غير صحيحة",
+      };
+      return { success: false, error: msgs[error.code] || "حدث خطأ: " + error.message };
+    }
+  };
+
+  const resetPassword = async (email) => {
+    try {
+      await sendPasswordResetEmail(auth, email);
+      return { success: true };
+    } catch (error) {
+      const msgs = {
+        "auth/user-not-found": "لا يوجد حساب مرتبط بهذا البريد الإلكتروني",
+        "auth/invalid-email": "البريد الإلكتروني غير صحيح",
+        "auth/too-many-requests": "محاولات كثيرة - حاول لاحقاً",
+      };
+      return { success: false, error: msgs[error.code] || "حدث خطأ: " + error.message };
+    }
+  };
+
+  const updateUserProfile = async (updates) => {
+    try {
+      if (!user) return { success: false, error: "يجب تسجيل الدخول أولاً" };
+      // Update Firestore
+      await updateDoc(doc(db, "users", user.uid), { ...updates, updatedAt: new Date().toISOString() });
+      // Update Firebase Auth display name if changed
+      if (updates.fullName) await updateProfile(user, { displayName: updates.fullName });
+      // Update local state
+      setUserData(prev => ({ ...prev, ...updates }));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: "حدث خطأ أثناء تحديث البيانات: " + error.message };
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, userRole, userData, loading, register, login, logout, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, userRole, userData, loading, register, login, logout, changePassword, resetPassword, updateUserProfile, isAuthenticated: !!user }}>
       {children}
     </AuthContext.Provider>
   );
@@ -129,11 +173,12 @@ const ROLES_LIST = [
 const inputStyle = { width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:"'Noto Kufi Arabic',sans-serif", outline:"none", boxSizing:"border-box" };
 
 const AuthPage = () => {
-  const { login, register } = useAuth();
+  const { login, register, resetPassword } = useAuth();
   const [mode, setMode] = useState("login");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [resetEmail, setResetEmail] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -142,7 +187,17 @@ const AuthPage = () => {
   const [district, setDistrict] = useState("");
   const [role, setRole] = useState("citizen");
 
-  const resetForm = () => { setEmail(""); setPassword(""); setConfirmPassword(""); setFullName(""); setPhone(""); setDistrict(""); setRole("citizen"); setError(""); setSuccess(""); };
+  const resetForm = () => { setEmail(""); setPassword(""); setConfirmPassword(""); setFullName(""); setPhone(""); setDistrict(""); setRole("citizen"); setError(""); setSuccess(""); setResetEmail(""); };
+
+  const handleResetPassword = async (e) => {
+    if (e) e.preventDefault();
+    if (!resetEmail) { setError("يرجى إدخال بريدك الإلكتروني"); return; }
+    setLoading(true); setError("");
+    const r = await resetPassword(resetEmail);
+    if (r.success) { setSuccess("تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني"); setResetEmail(""); }
+    else setError(r.error);
+    setLoading(false);
+  };
 
   const handleLogin = async (e) => {
     if (e) e.preventDefault();
@@ -181,11 +236,13 @@ const AuthPage = () => {
         </div>
 
         {/* Tabs */}
-        <div style={{ display:"flex", gap:0, marginBottom:24, background:"#0a0e1a", borderRadius:12, padding:4 }}>
-          {[{key:"login",label:"تسجيل دخول"},{key:"register",label:"إنشاء حساب"}].map(tab=>(
-            <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"none", background:mode===tab.key?"#10b981":"transparent", color:mode===tab.key?"#000":"#94a3b8", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s" }}>{tab.label}</button>
-          ))}
-        </div>
+        {mode !== "forgot" && (
+          <div style={{ display:"flex", gap:0, marginBottom:24, background:"#0a0e1a", borderRadius:12, padding:4 }}>
+            {[{key:"login",label:"تسجيل دخول"},{key:"register",label:"إنشاء حساب"}].map(tab=>(
+              <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"none", background:mode===tab.key?"#10b981":"transparent", color:mode===tab.key?"#000":"#94a3b8", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s" }}>{tab.label}</button>
+            ))}
+          </div>
+        )}
 
         {error && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, marginBottom:16, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {error}</div>}
         {success && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, marginBottom:16, textAlign:"center", border:"1px solid #10b98130" }}>✅ {success}</div>}
@@ -193,8 +250,27 @@ const AuthPage = () => {
         {mode==="login" && (
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
             <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} /></div>
-            <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>كلمة المرور</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="أدخل كلمة المرور" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleLogin(e)} /></div>
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <label style={{fontSize:12,color:"#94a3b8"}}>كلمة المرور</label>
+                <button onClick={()=>{setMode("forgot");resetForm();}} style={{background:"none",border:"none",color:"#10b981",fontSize:11,cursor:"pointer",fontFamily:F,padding:0}}>نسيت كلمة المرور؟</button>
+              </div>
+              <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="أدخل كلمة المرور" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleLogin(e)} />
+            </div>
             <button onClick={handleLogin} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading?"جاري تسجيل الدخول...":"تسجيل الدخول"}</button>
+          </div>
+        )}
+
+        {mode==="forgot" && (
+          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+            <div style={{textAlign:"center",marginBottom:4}}>
+              <div style={{fontSize:32,marginBottom:8}}>🔑</div>
+              <div style={{fontSize:15,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>إعادة تعيين كلمة المرور</div>
+              <div style={{fontSize:12,color:"#64748b"}}>أدخل بريدك الإلكتروني وسنرسل لك رابط إعادة التعيين</div>
+            </div>
+            <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني</label><input type="email" value={resetEmail} onChange={e=>setResetEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleResetPassword(e)} /></div>
+            <button onClick={handleResetPassword} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading?"جاري الإرسال...":"إرسال رابط إعادة التعيين"}</button>
+            <button onClick={()=>{setMode("login");resetForm();}} style={{background:"none",border:"none",color:"#94a3b8",fontSize:12,cursor:"pointer",fontFamily:F}}>← العودة لتسجيل الدخول</button>
           </div>
         )}
 
@@ -228,6 +304,170 @@ const AuthPage = () => {
     </div>
   );
 };
+
+// ============================================================
+// ⚙️ ACCOUNT SETTINGS MODAL (Profile + Password)
+// ============================================================
+const AccountSettingsModal = ({ onClose }) => {
+  const { userData, changePassword, updateUserProfile, user } = useAuth();
+  const [activeTab, setActiveTab] = useState("profile");
+  const F = "'Noto Kufi Arabic',sans-serif";
+  const inputSt = { width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" };
+
+  // Profile state
+  const [fullName, setFullName] = useState(userData?.fullName || "");
+  const [phone, setPhone] = useState(userData?.phone || "");
+  const [district, setDistrict] = useState(userData?.district || "");
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileMsg, setProfileMsg] = useState("");
+  const [profileError, setProfileError] = useState("");
+
+  // Password state
+  const [currentPass, setCurrentPass] = useState("");
+  const [newPass, setNewPass] = useState("");
+  const [confirmPass, setConfirmPass] = useState("");
+  const [passLoading, setPassLoading] = useState(false);
+  const [passMsg, setPassMsg] = useState("");
+  const [passError, setPassError] = useState("");
+
+  const handleProfileSave = async () => {
+    setProfileError(""); setProfileMsg("");
+    if (!fullName.trim()) { setProfileError("الاسم مطلوب"); return; }
+    setProfileLoading(true);
+    const result = await updateUserProfile({ fullName: fullName.trim(), phone: phone.trim(), district });
+    if (result.success) { setProfileMsg("✅ تم تحديث البيانات بنجاح"); setTimeout(() => setProfileMsg(""), 3000); }
+    else setProfileError(result.error);
+    setProfileLoading(false);
+  };
+
+  const handlePassChange = async () => {
+    setPassError(""); setPassMsg("");
+    if (!currentPass || !newPass || !confirmPass) { setPassError("يرجى تعبئة جميع الحقول"); return; }
+    if (newPass !== confirmPass) { setPassError("كلمة المرور الجديدة غير متطابقة"); return; }
+    if (newPass.length < 6) { setPassError("كلمة المرور يجب أن تكون 6 أحرف على الأقل"); return; }
+    if (currentPass === newPass) { setPassError("كلمة المرور الجديدة يجب أن تكون مختلفة"); return; }
+    setPassLoading(true);
+    const result = await changePassword(currentPass, newPass);
+    if (result.success) { setPassMsg("✅ تم تغيير كلمة المرور بنجاح"); setCurrentPass(""); setNewPass(""); setConfirmPass(""); setTimeout(() => setPassMsg(""), 3000); }
+    else setPassError(result.error);
+    setPassLoading(false);
+  };
+
+  const roleMap = { executive: { label: "إدارة عليا", color: "#f59e0b", icon: "🏛️" }, employee: { label: "موظف", color: "#3b82f6", icon: "👷" }, citizen: { label: "مواطن", color: "#10b981", icon: "🏠" } };
+  const r = roleMap[userData?.role] || roleMap.citizen;
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, direction:"rtl", fontFamily:F }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width:500, maxHeight:"90vh", overflow:"auto", padding:"0", background:"#111827", borderRadius:20, border:"1px solid #1e293b" }}>
+        {/* Header */}
+        <div style={{ padding:"24px 28px 0", textAlign:"center" }}>
+          <div style={{ width:60, height:60, borderRadius:16, background:`${r.color}15`, border:`2px solid ${r.color}30`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:30, margin:"0 auto 12px" }}>{r.icon}</div>
+          <h3 style={{ fontSize:18, fontWeight:900, color:"#f1f5f9", margin:"0 0 4px" }}>إعدادات الحساب</h3>
+          <p style={{ fontSize:12, color:"#64748b", margin:0 }}>{userData?.email}</p>
+          <span style={{ display:"inline-block", marginTop:8, padding:"3px 12px", borderRadius:20, fontSize:11, fontWeight:600, background:`${r.color}20`, color:r.color }}>{r.label}</span>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display:"flex", gap:0, margin:"20px 28px 0", background:"#0a0e1a", borderRadius:12, padding:4 }}>
+          {[{ key:"profile", label:"👤 البيانات الشخصية" }, { key:"password", label:"🔐 كلمة المرور" }].map(tab => (
+            <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
+              flex:1, padding:"10px 0", borderRadius:10, border:"none",
+              background: activeTab === tab.key ? "#10b981" : "transparent",
+              color: activeTab === tab.key ? "#000" : "#94a3b8",
+              fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s",
+            }}>{tab.label}</button>
+          ))}
+        </div>
+
+        <div style={{ padding:"20px 28px 28px" }}>
+          {/* ===== PROFILE TAB ===== */}
+          {activeTab === "profile" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+              {profileMsg && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{profileMsg}</div>}
+              {profileError && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {profileError}</div>}
+
+              <div>
+                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>الاسم الكامل *</label>
+                <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} placeholder="الاسم الثلاثي" style={inputSt} />
+              </div>
+
+              <div>
+                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>البريد الإلكتروني</label>
+                <input type="email" value={userData?.email || ""} disabled style={{ ...inputSt, opacity:0.5, cursor:"not-allowed" }} />
+                <span style={{ fontSize:10, color:"#64748b", marginTop:4, display:"block" }}>لا يمكن تغيير البريد الإلكتروني</span>
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                <div>
+                  <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>رقم الجوال</label>
+                  <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="05XXXXXXXX" style={{ ...inputSt, direction:"ltr", textAlign:"right" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>الحي</label>
+                  <select value={district} onChange={e => setDistrict(e.target.value)} style={{ ...inputSt, appearance:"auto" }}>
+                    <option value="">اختر الحي</option>
+                    {DISTRICTS.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                <div style={{ background:"#0a0e1a", borderRadius:10, padding:12 }}>
+                  <div style={{ fontSize:10, color:"#64748b" }}>نوع الحساب</div>
+                  <div style={{ fontSize:14, fontWeight:700, color:r.color, marginTop:4 }}>{r.icon} {r.label}</div>
+                </div>
+                <div style={{ background:"#0a0e1a", borderRadius:10, padding:12 }}>
+                  <div style={{ fontSize:10, color:"#64748b" }}>تاريخ التسجيل</div>
+                  <div style={{ fontSize:13, fontWeight:600, color:"#f1f5f9", marginTop:4 }}>{userData?.createdAt?.split("T")[0] || "-"}</div>
+                </div>
+              </div>
+
+              <div style={{ display:"flex", gap:10, marginTop:4 }}>
+                <button onClick={handleProfileSave} disabled={profileLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:profileLoading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:14, fontWeight:700, cursor:profileLoading?"not-allowed":"pointer", fontFamily:F }}>{profileLoading ? "جاري الحفظ..." : "💾 حفظ التغييرات"}</button>
+                <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
+              </div>
+            </div>
+          )}
+
+          {/* ===== PASSWORD TAB ===== */}
+          {activeTab === "password" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+              {passMsg && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{passMsg}</div>}
+              {passError && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {passError}</div>}
+
+              <div>
+                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الحالية</label>
+                <input type="password" value={currentPass} onChange={e => setCurrentPass(e.target.value)} placeholder="أدخل كلمة المرور الحالية" style={inputSt} />
+              </div>
+              <div>
+                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الجديدة</label>
+                <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="6 أحرف على الأقل" style={inputSt} />
+              </div>
+              <div>
+                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>تأكيد كلمة المرور الجديدة</label>
+                <input type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="أعد كتابة كلمة المرور الجديدة" style={inputSt} onKeyDown={e => e.key === "Enter" && handlePassChange()} />
+              </div>
+
+              <div style={{ background:"#0a0e1a", borderRadius:10, padding:12, fontSize:11, color:"#64748b", lineHeight:1.8 }}>
+                💡 <strong style={{ color:"#94a3b8" }}>شروط كلمة المرور:</strong><br/>
+                • يجب أن تكون 6 أحرف على الأقل<br/>
+                • يجب أن تكون مختلفة عن الحالية
+              </div>
+
+              <div style={{ display:"flex", gap:10, marginTop:4 }}>
+                <button onClick={handlePassChange} disabled={passLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:passLoading?"#64748b":"linear-gradient(135deg,#f59e0b,#d97706)", color:"#000", fontSize:14, fontWeight:700, cursor:passLoading?"not-allowed":"pointer", fontFamily:F }}>{passLoading ? "جاري التغيير..." : "🔐 تغيير كلمة المرور"}</button>
+                <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Keep old name as alias for backward compatibility
+const ChangePasswordModal = AccountSettingsModal;
 
 // ============================================================
 // ⏳ LOADING SCREEN
@@ -2208,6 +2448,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
   const [tab, setTab] = useState("overview");
   const [selectedScenario, setSelectedScenario] = useState(null);
   const [time, setTime] = useState(new Date());
+  const [showPassModal, setShowPassModal] = useState(false);
 
   useEffect(() => { const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
 
@@ -2266,9 +2507,12 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
             <div style={{ fontSize: 10, color: "#f59e0b" }}>{user.role}</div>
           </div>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: "#f59e0b20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>{user.avatar}</div>
+          <button onClick={() => window.__showAdminPanel && window.__showAdminPanel()} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #8b5cf640", background: "#8b5cf615", color: "#8b5cf6", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>👑 إدارة المستخدمين</button>
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: "#10b981", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>⚙️ إعدادات الحساب</button>
           <button onClick={onLogout} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #ef444440", background: "#ef444415", color: "#ef4444", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>تسجيل خروج</button>
         </div>
       </header>
+      {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
 
       {/* Tabs */}
       <div style={{ padding: "12px 28px 0", display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -2687,6 +2931,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
   const [reportType, setReportType] = useState("");
   const [reportDesc, setReportDesc] = useState("");
   const [reqAddress, setReqAddress] = useState("");
+  const [showPassModal, setShowPassModal] = useState(false);
   const [reqBinType, setReqBinType] = useState("عضوية");
   const [time, setTime] = useState(new Date());
 
@@ -2714,6 +2959,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
   return (
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+      {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
 
       {/* Header */}
       <header style={{ padding: "12px 24px", background: C.card, borderBottom: `1px solid ${C.accent}30`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -2730,6 +2976,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
             <div style={{ fontSize: 10, color: C.accent }}>{user.district}</div>
           </div>
           <div style={{ width: 38, height: 38, borderRadius: 10, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>👤</div>
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid #10b98140`, background: `#10b98115`, color: "#10b981", cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>⚙️ إعدادات الحساب</button>
           <button onClick={onLogout} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.danger}40`, background: `${C.danger}15`, color: C.danger, cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>خروج</button>
         </div>
       </header>
@@ -3165,6 +3412,7 @@ function SmartWasteManagement() {
   const [page, setPage] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [time, setTime] = useState(new Date());
+  const [showPassModal, setShowPassModal] = useState(false);
 
   const stations = useMemo(() => generateStations(), []);
   const weeklyData = useMemo(() => generateWeeklyData(), []);
@@ -3245,6 +3493,15 @@ function SmartWasteManagement() {
               </div>
             </div>
           )}
+          <button onClick={() => setShowPassModal(true)} style={{
+            display: "flex", alignItems: "center", gap: 10, width: "100%", padding: sidebarOpen ? "10px 14px" : "10px 0",
+            justifyContent: sidebarOpen ? "flex-start" : "center", borderRadius: 10, marginBottom: 6,
+            border: `1px solid #10b98130`, background: `#10b98110`, color: "#10b981",
+            cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
+          }}>
+            <span style={{ fontSize: 16 }}>⚙️</span>
+            {sidebarOpen && "إعدادات الحساب"}
+          </button>
           <button onClick={handleLogout} style={{
             display: "flex", alignItems: "center", gap: 10, width: "100%", padding: sidebarOpen ? "10px 14px" : "10px 0",
             justifyContent: sidebarOpen ? "flex-start" : "center", borderRadius: 10,
@@ -3256,6 +3513,8 @@ function SmartWasteManagement() {
           </button>
         </div>
       </aside>
+
+      {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
 
       <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <header style={{ padding: "14px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", background: C.card, flexShrink: 0 }}>
@@ -3288,12 +3547,299 @@ function SmartWasteManagement() {
 
 
 // ============================================================
+// ⏳ PENDING APPROVAL SCREEN
+// ============================================================
+const PendingApprovalScreen = () => {
+  const { logout, userData } = useAuth();
+  const F = "'Noto Kufi Arabic',sans-serif";
+  return (
+    <div dir="rtl" style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0a0e1a,#1a1040,#0a0e1a)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F }}>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+      <div style={{ width:460, padding:"40px", background:"#111827", borderRadius:24, border:"1px solid #f59e0b30", textAlign:"center" }}>
+        <div style={{ width:80, height:80, borderRadius:20, background:"#f59e0b15", display:"flex", alignItems:"center", justifyContent:"center", fontSize:42, margin:"0 auto 20px", border:"2px solid #f59e0b30" }}>⏳</div>
+        <h2 style={{ fontSize:22, fontWeight:900, color:"#f1f5f9", margin:"0 0 10px" }}>بانتظار الموافقة</h2>
+        <p style={{ fontSize:14, color:"#94a3b8", lineHeight:1.8, margin:"0 0 20px" }}>
+          تم إنشاء حسابك بنجاح كـ <span style={{ color:"#f59e0b", fontWeight:700 }}>{userData?.roleAr}</span>
+          <br />حسابك قيد المراجعة من الإدارة. ستتمكن من الدخول بعد الموافقة.
+        </p>
+        <div style={{ background:"#0a0e1a", borderRadius:12, padding:16, marginBottom:20, textAlign:"right" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8, fontSize:13 }}>
+            <span style={{ color:"#64748b" }}>الاسم:</span>
+            <span style={{ color:"#f1f5f9", fontWeight:600 }}>{userData?.fullName}</span>
+          </div>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8, fontSize:13 }}>
+            <span style={{ color:"#64748b" }}>البريد:</span>
+            <span style={{ color:"#f1f5f9", fontWeight:600 }}>{userData?.email}</span>
+          </div>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8, fontSize:13 }}>
+            <span style={{ color:"#64748b" }}>الدور المطلوب:</span>
+            <span style={{ color:"#f59e0b", fontWeight:600 }}>{userData?.roleAr}</span>
+          </div>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:13 }}>
+            <span style={{ color:"#64748b" }}>الحالة:</span>
+            <span style={{ color:"#f59e0b", fontWeight:600 }}>⏳ بانتظار الموافقة</span>
+          </div>
+        </div>
+        <button onClick={logout} style={{ padding:"12px 30px", borderRadius:10, border:"1px solid #ef444440", background:"#ef444415", color:"#ef4444", cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:F }}>
+          تسجيل خروج
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// 👑 ADMIN PANEL — إدارة المستخدمين والصلاحيات
+// ============================================================
+const AdminPanel = ({ onBack }) => {
+  const [users, setUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [filter, setFilter] = useState("الكل");
+  const [search, setSearch] = useState("");
+  const [actionMsg, setActionMsg] = useState("");
+  const F = "'Noto Kufi Arabic',sans-serif";
+
+  const fetchUsers = async () => {
+    setLoadingUsers(true);
+    try {
+      const q = query(collection(db, "users"), orderBy("createdAt", "desc"));
+      const snap = await getDocs(q);
+      setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (e) { console.error(e); }
+    setLoadingUsers(false);
+  };
+
+  useEffect(() => { fetchUsers(); }, []);
+
+  const updateUserRole = async (uid, newRole) => {
+    const roleAr = newRole === "executive" ? "إدارة عليا" : newRole === "employee" ? "موظف" : "مواطن";
+    await updateDoc(doc(db, "users", uid), { role: newRole, roleAr, updatedAt: new Date().toISOString() });
+    setActionMsg("✅ تم تغيير الدور بنجاح");
+    setTimeout(() => setActionMsg(""), 3000);
+    fetchUsers();
+  };
+
+  const updateUserStatus = async (uid, newStatus) => {
+    await updateDoc(doc(db, "users", uid), { status: newStatus, updatedAt: new Date().toISOString() });
+    setActionMsg(newStatus === "active" ? "✅ تم تفعيل الحساب" : "⛔ تم تعطيل الحساب");
+    setTimeout(() => setActionMsg(""), 3000);
+    fetchUsers();
+  };
+
+  const approveUser = async (uid) => {
+    await updateDoc(doc(db, "users", uid), { status: "active", updatedAt: new Date().toISOString() });
+    setActionMsg("✅ تم قبول المستخدم");
+    setTimeout(() => setActionMsg(""), 3000);
+    fetchUsers();
+  };
+
+  const rejectUser = async (uid) => {
+    await updateDoc(doc(db, "users", uid), { status: "rejected", updatedAt: new Date().toISOString() });
+    setActionMsg("❌ تم رفض المستخدم");
+    setTimeout(() => setActionMsg(""), 3000);
+    fetchUsers();
+  };
+
+  const pendingUsers = users.filter(u => u.status === "pending");
+  const filteredUsers = users.filter(u => {
+    if (filter !== "الكل") {
+      const roleMap = { "إدارة عليا": "executive", "موظف": "employee", "مواطن": "citizen", "بانتظار": "pending" };
+      if (filter === "بانتظار") return u.status === "pending";
+      if (roleMap[filter] && u.role !== roleMap[filter]) return false;
+    }
+    if (search && !u.fullName?.includes(search) && !u.email?.includes(search)) return false;
+    return true;
+  });
+
+  const stats = {
+    total: users.length,
+    active: users.filter(u => u.status === "active").length,
+    pending: pendingUsers.length,
+    executives: users.filter(u => u.role === "executive").length,
+    employees: users.filter(u => u.role === "employee").length,
+    citizens: users.filter(u => u.role === "citizen").length,
+  };
+
+  const statusBadge = (status) => {
+    const map = { active: { label: "نشط", bg: "#10b98120", color: "#10b981" }, pending: { label: "بانتظار", bg: "#f59e0b20", color: "#f59e0b" }, suspended: { label: "معطّل", bg: "#ef444420", color: "#ef4444" }, rejected: { label: "مرفوض", bg: "#64748b20", color: "#64748b" } };
+    const s = map[status] || map.suspended;
+    return <span style={{ padding:"3px 10px", borderRadius:20, fontSize:10, fontWeight:600, background:s.bg, color:s.color }}>{s.label}</span>;
+  };
+
+  const roleBadge = (role) => {
+    const map = { executive: { label: "إدارة عليا", bg: "#f59e0b20", color: "#f59e0b" }, employee: { label: "موظف", bg: "#3b82f620", color: "#3b82f6" }, citizen: { label: "مواطن", bg: "#10b98120", color: "#10b981" } };
+    const r = map[role] || map.citizen;
+    return <span style={{ padding:"3px 10px", borderRadius:20, fontSize:10, fontWeight:600, background:r.bg, color:r.color }}>{r.label}</span>;
+  };
+
+  return (
+    <div dir="rtl" style={{ minHeight:"100vh", background:"#070b14", fontFamily:F, color:"#f1f5f9" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+      {/* Header */}
+      <header style={{ padding:"14px 28px", background:"linear-gradient(90deg,#111827,#1a1040)", borderBottom:"1px solid #8b5cf630", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+          <div style={{ width:42, height:42, borderRadius:12, background:"linear-gradient(135deg,#8b5cf6,#6d28d9)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:22 }}>👑</div>
+          <div>
+            <div style={{ fontSize:16, fontWeight:900, color:"#8b5cf6" }}>لوحة إدارة النظام</div>
+            <div style={{ fontSize:10, color:"#94a3b8" }}>إدارة المستخدمين والصلاحيات</div>
+          </div>
+        </div>
+        <button onClick={onBack} style={{ padding:"8px 18px", borderRadius:8, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:F }}>← العودة للوحة الرئيسية</button>
+      </header>
+
+      <div style={{ padding:"20px 28px" }}>
+        {/* Action Message */}
+        {actionMsg && <div style={{ padding:"12px 18px", borderRadius:10, background:"#10b98115", border:"1px solid #10b98130", color:"#10b981", fontSize:13, fontWeight:600, marginBottom:16, textAlign:"center" }}>{actionMsg}</div>}
+
+        {/* Stats */}
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:12, marginBottom:20 }}>
+          {[
+            { label: "إجمالي المستخدمين", val: stats.total, icon: "👥", color: "#8b5cf6" },
+            { label: "نشط", val: stats.active, icon: "✅", color: "#10b981" },
+            { label: "بانتظار الموافقة", val: stats.pending, icon: "⏳", color: "#f59e0b" },
+            { label: "إدارة عليا", val: stats.executives, icon: "🏛️", color: "#f59e0b" },
+            { label: "موظفون", val: stats.employees, icon: "👷", color: "#3b82f6" },
+            { label: "مواطنون", val: stats.citizens, icon: "🏠", color: "#10b981" },
+          ].map((s, i) => (
+            <div key={i} style={{ background:"#111827", border:`1px solid ${s.color}25`, borderRadius:14, padding:16, textAlign:"center" }}>
+              <div style={{ fontSize:24, marginBottom:4 }}>{s.icon}</div>
+              <div style={{ fontSize:24, fontWeight:900, color:s.color }}>{s.val}</div>
+              <div style={{ fontSize:11, color:"#64748b" }}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Pending Approvals */}
+        {pendingUsers.length > 0 && (
+          <div style={{ background:"#111827", border:"1px solid #f59e0b30", borderRadius:16, padding:20, marginBottom:20 }}>
+            <div style={{ fontSize:15, fontWeight:700, color:"#f59e0b", marginBottom:14 }}>⏳ طلبات بانتظار الموافقة ({pendingUsers.length})</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {pendingUsers.map(u => (
+                <div key={u.id} style={{ background:"#0a0e1a", borderRadius:12, padding:"14px 18px", display:"flex", justifyContent:"space-between", alignItems:"center", border:"1px solid #1e293b" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                    <div style={{ width:40, height:40, borderRadius:10, background:"#f59e0b15", display:"flex", alignItems:"center", justifyContent:"center", fontSize:20 }}>
+                      {u.role === "executive" ? "🏛️" : "👷"}
+                    </div>
+                    <div>
+                      <div style={{ fontSize:14, fontWeight:700, color:"#f1f5f9" }}>{u.fullName}</div>
+                      <div style={{ fontSize:11, color:"#64748b" }}>{u.email} • يطلب: <span style={{ color:"#f59e0b" }}>{u.roleAr}</span> • {u.district || "بدون حي"}</div>
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={() => approveUser(u.id)} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:"#10b981", color:"#fff", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F }}>✅ قبول</button>
+                    <button onClick={() => rejectUser(u.id)} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:"#ef4444", color:"#fff", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F }}>❌ رفض</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Filters & Search */}
+        <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
+          {["الكل", "إدارة عليا", "موظف", "مواطن", "بانتظار"].map(f => (
+            <button key={f} onClick={() => setFilter(f)} style={{
+              padding:"7px 16px", borderRadius:10, border:`1px solid ${filter===f ? "#8b5cf6" : "#1e293b"}`,
+              background: filter===f ? "#8b5cf620" : "transparent", color: filter===f ? "#8b5cf6" : "#94a3b8",
+              cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:F,
+            }}>{f}{f==="بانتظار" && stats.pending > 0 ? ` (${stats.pending})` : ""}</button>
+          ))}
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 بحث بالاسم أو البريد..." style={{ flex:1, minWidth:200, padding:"8px 14px", borderRadius:10, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:12, fontFamily:F, outline:"none" }} />
+        </div>
+
+        {/* Users Table */}
+        <div style={{ background:"#111827", borderRadius:16, border:"1px solid #1e293b", overflow:"hidden" }}>
+          {loadingUsers ? (
+            <div style={{ padding:40, textAlign:"center", color:"#64748b" }}>جاري التحميل...</div>
+          ) : (
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead>
+                  <tr>
+                    {["الاسم", "البريد", "الدور", "الحي", "الحالة", "تاريخ التسجيل", "الإجراءات"].map(h => (
+                      <th key={h} style={{ padding:"12px 14px", textAlign:"right", color:"#94a3b8", borderBottom:"1px solid #1e293b", fontWeight:600, fontSize:11, whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredUsers.map(u => (
+                    <tr key={u.id} style={{ borderBottom:"1px solid #1e293b10" }}>
+                      <td style={{ padding:"12px 14px", fontWeight:600 }}>{u.fullName}</td>
+                      <td style={{ padding:"12px 14px", color:"#94a3b8", direction:"ltr", textAlign:"right" }}>{u.email}</td>
+                      <td style={{ padding:"12px 14px" }}>{roleBadge(u.role)}</td>
+                      <td style={{ padding:"12px 14px", color:"#94a3b8" }}>{u.district || "-"}</td>
+                      <td style={{ padding:"12px 14px" }}>{statusBadge(u.status)}</td>
+                      <td style={{ padding:"12px 14px", color:"#64748b", fontSize:11 }}>{u.createdAt?.split("T")[0]}</td>
+                      <td style={{ padding:"12px 14px" }}>
+                        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                          {u.status === "pending" && <>
+                            <button onClick={() => approveUser(u.id)} style={{ padding:"4px 10px", borderRadius:6, border:"none", background:"#10b981", color:"#fff", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>قبول</button>
+                            <button onClick={() => rejectUser(u.id)} style={{ padding:"4px 10px", borderRadius:6, border:"none", background:"#ef4444", color:"#fff", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>رفض</button>
+                          </>}
+                          <select value={u.role} onChange={e => updateUserRole(u.id, e.target.value)} style={{ padding:"4px 8px", borderRadius:6, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:10, fontFamily:F, cursor:"pointer" }}>
+                            <option value="citizen">مواطن</option>
+                            <option value="employee">موظف</option>
+                            <option value="executive">إدارة عليا</option>
+                          </select>
+                          {u.status === "active" ? (
+                            <button onClick={() => updateUserStatus(u.id, "suspended")} style={{ padding:"4px 10px", borderRadius:6, border:"1px solid #ef444440", background:"#ef444415", color:"#ef4444", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>تعطيل</button>
+                          ) : u.status !== "pending" && (
+                            <button onClick={() => updateUserStatus(u.id, "active")} style={{ padding:"4px 10px", borderRadius:6, border:"1px solid #10b98140", background:"#10b98115", color:"#10b981", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>تفعيل</button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {filteredUsers.length === 0 && <div style={{ padding:30, textAlign:"center", color:"#64748b" }}>لا يوجد نتائج</div>}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
 // 🚀 ROOT APP — ENTRY POINT
 // ============================================================
 function AppRouter() {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, userData, userRole, loading } = useAuth();
+  const [showAdmin, setShowAdmin] = useState(false);
+
   if (loading) return <LoadingScreen />;
   if (!isAuthenticated) return <AuthPage />;
+
+  // حساب بانتظار الموافقة
+  if (userData?.status === "pending") return <PendingApprovalScreen />;
+
+  // حساب مرفوض أو معطّل
+  if (userData?.status === "suspended" || userData?.status === "rejected") {
+    const SuspendedScreen = () => {
+      const { logout: doLogout } = useAuth();
+      return (
+        <div dir="rtl" style={{ minHeight:"100vh", background:"#0a0e1a", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Noto Kufi Arabic',sans-serif" }}>
+          <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+          <div style={{ width:400, padding:40, background:"#111827", borderRadius:24, textAlign:"center", border:"1px solid #ef444430" }}>
+            <div style={{ fontSize:48, marginBottom:16 }}>⛔</div>
+            <h2 style={{ fontSize:20, fontWeight:900, color:"#ef4444", margin:"0 0 10px" }}>الحساب {userData?.status === "rejected" ? "مرفوض" : "معطّل"}</h2>
+            <p style={{ fontSize:13, color:"#94a3b8", lineHeight:1.7 }}>تواصل مع إدارة النظام لمزيد من المعلومات</p>
+            <button onClick={doLogout} style={{ marginTop:20, padding:"10px 24px", borderRadius:10, border:"1px solid #ef444440", background:"#ef444415", color:"#ef4444", cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:"'Noto Kufi Arabic',sans-serif" }}>تسجيل خروج</button>
+          </div>
+        </div>
+      );
+    };
+    return <SuspendedScreen />;
+  }
+
+  // صفحة الأدمن (فقط للإدارة العليا)
+  if (showAdmin && userRole === "executive") return <AdminPanel onBack={() => setShowAdmin(false)} />;
+
+  // حقن زر الأدمن في window عشان SmartWasteManagement يقدر يستخدمه
+  window.__showAdminPanel = () => setShowAdmin(true);
+
   return <SmartWasteManagement />;
 }
 
