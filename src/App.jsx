@@ -1,10 +1,249 @@
-import { useState, useEffect, useMemo } from "react";
+// ============================================================
+// نظام إدارة شفط النفايات الذكي - بريدة
+// ملف واحد كامل مع Firebase Auth + Firestore + Role-based Routing
+// ============================================================
+//
+// ⚠️ قبل التشغيل:
+// 1. npm install firebase recharts
+// 2. غيّر بيانات firebaseConfig بالأسفل ببيانات مشروعك
+// 3. فعّل Email/Password في Firebase Auth
+// 4. أنشئ Firestore Database
+//
+// ============================================================
+
+import { useState, useEffect, useMemo, createContext, useContext } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   LineChart, Line, AreaChart, Area, PieChart, Pie, Cell, RadarChart, Radar, PolarGrid,
   PolarAngleAxis, PolarRadiusAxis, ComposedChart,
 } from "recharts";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } from "firebase/auth";
+import { doc, setDoc, getDoc } from "firebase/firestore";
+import { auth, db } from "./firebase";
 
+// ============================================================
+// 🔐 AUTH CONTEXT
+// ============================================================
+const AuthContext = createContext(null);
+const useAuth = () => useContext(AuthContext);
+
+const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [userRole, setUserRole] = useState(null);
+  const [userData, setUserData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        setUser(firebaseUser);
+        try {
+          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+          if (userDoc.exists()) {
+            const data = userDoc.data();
+            setUserRole(data.role);
+            setUserData(data);
+          }
+        } catch (error) {
+          console.error("Error fetching user data:", error);
+        }
+      } else {
+        setUser(null);
+        setUserRole(null);
+        setUserData(null);
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const register = async ({ email, password, fullName, phone, district, role }) => {
+    try {
+      console.log("🔄 جاري إنشاء الحساب...", { email, fullName, role });
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      console.log("✅ تم إنشاء Auth بنجاح:", cred.user.uid);
+      await updateProfile(cred.user, { displayName: fullName });
+      console.log("✅ تم تحديث الاسم");
+      const userDocData = {
+        uid: cred.user.uid, email, fullName, phone: phone || "", district: district || "",
+        role: role || "citizen",
+        roleAr: role === "executive" ? "إدارة عليا" : role === "employee" ? "موظف" : "مواطن",
+        status: "active", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      console.log("🔄 جاري الحفظ في Firestore...");
+      await setDoc(doc(db, "users", cred.user.uid), userDocData);
+      console.log("✅ تم الحفظ في Firestore");
+      setUserRole(userDocData.role);
+      setUserData(userDocData);
+      return { success: true };
+    } catch (error) {
+      console.error("❌ خطأ:", error.code, error.message, error);
+      const msgs = {
+        "auth/email-already-in-use": "البريد الإلكتروني مستخدم بالفعل",
+        "auth/weak-password": "كلمة المرور ضعيفة - 6 أحرف على الأقل",
+        "auth/invalid-email": "البريد الإلكتروني غير صحيح",
+      };
+      return { success: false, error: msgs[error.code] || ("خطأ: " + error.code + " - " + error.message) };
+    }
+  };
+
+  const login = async (email, password) => {
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email, password);
+      const userDoc = await getDoc(doc(db, "users", cred.user.uid));
+      if (userDoc.exists()) { const d = userDoc.data(); setUserRole(d.role); setUserData(d); }
+      return { success: true };
+    } catch (error) {
+      const msgs = {
+        "auth/user-not-found": "لا يوجد حساب بهذا البريد",
+        "auth/wrong-password": "كلمة المرور غير صحيحة",
+        "auth/invalid-credential": "بيانات الدخول غير صحيحة",
+        "auth/too-many-requests": "محاولات كثيرة - حاول لاحقاً",
+      };
+      return { success: false, error: msgs[error.code] || "حدث خطأ أثناء تسجيل الدخول" };
+    }
+  };
+
+  const logout = async () => {
+    await signOut(auth);
+    setUser(null); setUserRole(null); setUserData(null);
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, userRole, userData, loading, register, login, logout, isAuthenticated: !!user }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+// ============================================================
+// 🔑 AUTH PAGE (LOGIN + REGISTER)
+// ============================================================
+const DISTRICTS = ["حي الخليج","حي الفايزية","حي الإسكان","حي الريان","حي السالمية","حي الحمر","حي المنتزه","حي الأفق","حي النقع","حي الضاحي","حي الهلالية","حي البصيرة"];
+const ROLES_LIST = [
+  { value: "citizen", label: "مواطن", icon: "🏠", desc: "طلب حاويات ومتابعة الخدمات", color: "#10b981" },
+  { value: "employee", label: "موظف", icon: "👷", desc: "إدارة المحطات والعمليات", color: "#3b82f6" },
+  { value: "executive", label: "إدارة عليا", icon: "🏛️", desc: "لوحة متخذي القرار", color: "#f59e0b" },
+];
+
+const inputStyle = { width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:"'Noto Kufi Arabic',sans-serif", outline:"none", boxSizing:"border-box" };
+
+const AuthPage = () => {
+  const { login, register } = useAuth();
+  const [mode, setMode] = useState("login");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [district, setDistrict] = useState("");
+  const [role, setRole] = useState("citizen");
+
+  const resetForm = () => { setEmail(""); setPassword(""); setConfirmPassword(""); setFullName(""); setPhone(""); setDistrict(""); setRole("citizen"); setError(""); setSuccess(""); };
+
+  const handleLogin = async (e) => {
+    if (e) e.preventDefault();
+    if (!email || !password) { setError("يرجى تعبئة جميع الحقول"); return; }
+    setLoading(true); setError("");
+    const r = await login(email, password);
+    if (!r.success) setError(r.error);
+    setLoading(false);
+  };
+
+  const handleRegister = async (e) => {
+    if (e) e.preventDefault();
+    if (!email || !password || !fullName) { setError("يرجى تعبئة الحقول المطلوبة"); return; }
+    if (password !== confirmPassword) { setError("كلمة المرور غير متطابقة"); return; }
+    if (password.length < 6) { setError("كلمة المرور يجب أن تكون 6 أحرف على الأقل"); return; }
+    setLoading(true); setError("");
+    const r = await register({ email, password, fullName, phone, district, role });
+    if (r.success) setSuccess("تم إنشاء الحساب بنجاح!");
+    else setError(r.error);
+    setLoading(false);
+  };
+
+  const F = "'Noto Kufi Arabic',sans-serif";
+
+  return (
+    <div dir="rtl" style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0a0e1a 0%,#1a1040 50%,#0a0e1a 100%)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F, padding:20 }}>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+      <div style={{ width: mode==="register"?520:440, padding:"36px 40px", background:"#111827", borderRadius:24, border:"1px solid #1e293b", position:"relative", overflow:"hidden", transition:"width 0.3s" }}>
+        <div style={{ position:"absolute", top:-60, left:"50%", transform:"translateX(-50%)", width:200, height:200, background:"radial-gradient(circle,#10b98120,transparent)", borderRadius:"50%" }} />
+
+        {/* Header */}
+        <div style={{ textAlign:"center", marginBottom:28, position:"relative" }}>
+          <div style={{ width:68, height:68, borderRadius:18, background:"linear-gradient(135deg,#10b981,#059669)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:34, margin:"0 auto 14px", boxShadow:"0 8px 30px #10b98130" }}>♻️</div>
+          <h1 style={{ fontSize:22, fontWeight:900, color:"#f1f5f9", margin:"0 0 6px 0" }}>نظام إدارة النفايات الذكي</h1>
+          <p style={{ fontSize:13, color:"#94a3b8", margin:0 }}>مدينة بريدة - منطقة القصيم</p>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display:"flex", gap:0, marginBottom:24, background:"#0a0e1a", borderRadius:12, padding:4 }}>
+          {[{key:"login",label:"تسجيل دخول"},{key:"register",label:"إنشاء حساب"}].map(tab=>(
+            <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"none", background:mode===tab.key?"#10b981":"transparent", color:mode===tab.key?"#000":"#94a3b8", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s" }}>{tab.label}</button>
+          ))}
+        </div>
+
+        {error && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, marginBottom:16, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {error}</div>}
+        {success && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, marginBottom:16, textAlign:"center", border:"1px solid #10b98130" }}>✅ {success}</div>}
+
+        {mode==="login" && (
+          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+            <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} /></div>
+            <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>كلمة المرور</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="أدخل كلمة المرور" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleLogin(e)} /></div>
+            <button onClick={handleLogin} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading?"جاري تسجيل الدخول...":"تسجيل الدخول"}</button>
+          </div>
+        )}
+
+        {mode==="register" && (
+          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+            <div>
+              <label style={{fontSize:12,color:"#94a3b8",marginBottom:8,display:"block"}}>نوع الحساب</label>
+              <div style={{display:"flex",gap:8}}>
+                {ROLES_LIST.map(r=>(
+                  <button key={r.value} onClick={()=>setRole(r.value)} style={{ flex:1, padding:"12px 8px", borderRadius:12, border:`2px solid ${role===r.value?r.color:"#1e293b"}`, background:role===r.value?r.color+"15":"transparent", cursor:"pointer", textAlign:"center" }}>
+                    <div style={{fontSize:24,marginBottom:4}}>{r.icon}</div>
+                    <div style={{fontSize:12,fontWeight:700,color:role===r.value?r.color:"#94a3b8",fontFamily:F}}>{r.label}</div>
+                    <div style={{fontSize:9,color:"#64748b",marginTop:2,fontFamily:F}}>{r.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <div style={{gridColumn:"1/-1"}}><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>الاسم الكامل *</label><input type="text" value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="الاسم الثلاثي" style={inputStyle} /></div>
+              <div style={{gridColumn:"1/-1"}}><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني *</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} /></div>
+              <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>كلمة المرور *</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="6 أحرف على الأقل" style={inputStyle} /></div>
+              <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>تأكيد كلمة المرور *</label><input type="password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="أعد كتابة كلمة المرور" style={inputStyle} /></div>
+              <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>رقم الجوال</label><input type="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="05XXXXXXXX" style={{...inputStyle,direction:"ltr",textAlign:"right"}} /></div>
+              <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>الحي</label><select value={district} onChange={e=>setDistrict(e.target.value)} style={{...inputStyle,appearance:"auto"}}><option value="">اختر الحي</option>{DISTRICTS.map(d=><option key={d} value={d}>{d}</option>)}</select></div>
+            </div>
+            <button onClick={handleRegister} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, marginTop:4 }}>{loading?"جاري إنشاء الحساب...":"إنشاء حساب جديد"}</button>
+          </div>
+        )}
+        <div style={{textAlign:"center",marginTop:20,fontSize:11,color:"#64748b"}}>🔒 جميع البيانات مشفرة ومحمية</div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// ⏳ LOADING SCREEN
+// ============================================================
+const LoadingScreen = () => (
+  <div dir="rtl" style={{ minHeight:"100vh", background:"#0a0e1a", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", fontFamily:"'Noto Kufi Arabic',sans-serif", gap:20 }}>
+    <style>{"@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}} @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}"}</style>
+    <div style={{fontSize:48,animation:"spin 2s linear infinite"}}>♻️</div>
+    <div style={{fontSize:16,fontWeight:700,color:"#f1f5f9",animation:"pulse 1.5s ease infinite"}}>جاري التحميل...</div>
+    <div style={{fontSize:12,color:"#64748b"}}>نظام إدارة النفايات الذكي - بريدة</div>
+  </div>
+);
+
+// ============================================================
+// 🏭 DASHBOARD + ALL PAGES (3000+ lines)
+// ============================================================
 const ARABIC_FONT = "'Noto Kufi Arabic', 'Segoe UI', Tahoma, sans-serif";
 
 // --- Simulated Data ---
@@ -2921,8 +3160,8 @@ const UnifiedLoginPage = ({ onLogin }) => {
 };
 
 // ======================== MAIN ========================
-export default function App() {
-  const [loggedInUser, setLoggedInUser] = useState(null);
+function SmartWasteManagement() {
+  const { userData, userRole, logout } = useAuth();
   const [page, setPage] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [time, setTime] = useState(new Date());
@@ -2935,12 +3174,19 @@ export default function App() {
 
   useEffect(() => { const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
 
-  const handleLogout = () => { setLoggedInUser(null); setPage("dashboard"); };
+  // Build user object for child components from Firebase data
+  const loggedInUser = userData ? {
+    name: userData.fullName,
+    email: userData.email,
+    role: userData.role,
+    roleTitle: userData.roleAr || (userData.role === "executive" ? "إدارة عليا" : userData.role === "employee" ? "موظف" : "مواطن"),
+    district: userData.district || "حي الخليج",
+    avatar: userData.role === "executive" ? "🏛️" : userData.role === "employee" ? "👷" : "🏠",
+  } : null;
 
-  // Not logged in -> show unified login
-  if (!loggedInUser) {
-    return <UnifiedLoginPage onLogin={(user) => setLoggedInUser(user)} />;
-  }
+  if (!loggedInUser) return null;
+
+  const handleLogout = () => { logout(); };
 
   // Citizen portal
   if (loggedInUser.role === "citizen") {
@@ -3037,5 +3283,24 @@ export default function App() {
         </div>
       </main>
     </div>
+  );
+}
+
+
+// ============================================================
+// 🚀 ROOT APP — ENTRY POINT
+// ============================================================
+function AppRouter() {
+  const { isAuthenticated, loading } = useAuth();
+  if (loading) return <LoadingScreen />;
+  if (!isAuthenticated) return <AuthPage />;
+  return <SmartWasteManagement />;
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppRouter />
+    </AuthProvider>
   );
 }
