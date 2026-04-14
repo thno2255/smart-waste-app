@@ -1,3 +1,4 @@
+
 // ============================================================
 // نظام إدارة شفط النفايات الذكي - بريدة
 // ملف واحد كامل مع Firebase Auth + Firestore + Role-based Routing
@@ -17,7 +18,7 @@ import {
   LineChart, Line, AreaChart, Area, PieChart, Pie, Cell, RadarChart, Radar, PolarGrid,
   PolarAngleAxis, PolarRadiusAxis, ComposedChart,
 } from "recharts";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, updatePassword, EmailAuthProvider, reauthenticateWithCredential, sendPasswordResetEmail } from "firebase/auth";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { doc, setDoc, getDoc, collection, getDocs, updateDoc, query, orderBy, where, deleteDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
 
@@ -108,20 +109,6 @@ const AuthProvider = ({ children }) => {
     setUser(null); setUserRole(null); setUserData(null);
   };
 
-  const resetPassword = async (email) => {
-    try {
-      await sendPasswordResetEmail(auth, email);
-      return { success: true };
-    } catch (error) {
-      const msgs = {
-        "auth/user-not-found": "لا يوجد حساب مرتبط بهذا البريد",
-        "auth/invalid-email": "البريد الإلكتروني غير صحيح",
-        "auth/too-many-requests": "محاولات كثيرة - حاول لاحقاً",
-      };
-      return { success: false, error: msgs[error.code] || "حدث خطأ: " + error.message };
-    }
-  };
-
   const changePassword = async (currentPassword, newPassword) => {
     try {
       const credential = EmailAuthProvider.credential(user.email, currentPassword);
@@ -139,23 +126,8 @@ const AuthProvider = ({ children }) => {
     }
   };
 
-  const updateUserProfile = async (updates) => {
-    try {
-      if (!user) return { success: false, error: "يجب تسجيل الدخول أولاً" };
-      // Update Firestore
-      await updateDoc(doc(db, "users", user.uid), { ...updates, updatedAt: new Date().toISOString() });
-      // Update Firebase Auth display name if changed
-      if (updates.fullName) await updateProfile(user, { displayName: updates.fullName });
-      // Update local state
-      setUserData(prev => ({ ...prev, ...updates }));
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: "حدث خطأ أثناء تحديث البيانات: " + error.message };
-    }
-  };
-
   return (
-    <AuthContext.Provider value={{ user, userRole, userData, loading, register, login, logout, changePassword, resetPassword, updateUserProfile, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, userRole, userData, loading, register, login, logout, changePassword, isAuthenticated: !!user }}>
       {children}
     </AuthContext.Provider>
   );
@@ -174,7 +146,7 @@ const ROLES_LIST = [
 const inputStyle = { width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:"'Noto Kufi Arabic',sans-serif", outline:"none", boxSizing:"border-box" };
 
 const AuthPage = () => {
-  const { login, register, resetPassword } = useAuth();
+  const { login, register } = useAuth();
   const [mode, setMode] = useState("login");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -186,19 +158,8 @@ const AuthPage = () => {
   const [phone, setPhone] = useState("");
   const [district, setDistrict] = useState("");
   const [role, setRole] = useState("citizen");
-  const [resetEmail, setResetEmail] = useState("");
 
-  const resetForm = () => { setEmail(""); setPassword(""); setConfirmPassword(""); setFullName(""); setPhone(""); setDistrict(""); setRole("citizen"); setError(""); setSuccess(""); setResetEmail(""); };
-
-  const handleResetPassword = async (e) => {
-    if (e) e.preventDefault();
-    if (!resetEmail) { setError("يرجى إدخال بريدك الإلكتروني"); return; }
-    setLoading(true); setError("");
-    const r = await resetPassword(resetEmail);
-    if (r.success) { setSuccess("تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك"); setResetEmail(""); }
-    else setError(r.error);
-    setLoading(false);
-  };
+  const resetForm = () => { setEmail(""); setPassword(""); setConfirmPassword(""); setFullName(""); setPhone(""); setDistrict(""); setRole("citizen"); setError(""); setSuccess(""); };
 
   const handleLogin = async (e) => {
     if (e) e.preventDefault();
@@ -237,13 +198,11 @@ const AuthPage = () => {
         </div>
 
         {/* Tabs */}
-        {mode !== "forgot" && (
-          <div style={{ display:"flex", gap:0, marginBottom:24, background:"#0a0e1a", borderRadius:12, padding:4 }}>
-            {[{key:"login",label:"تسجيل دخول"},{key:"register",label:"إنشاء حساب"}].map(tab=>(
-              <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"none", background:mode===tab.key?"#10b981":"transparent", color:mode===tab.key?"#000":"#94a3b8", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s" }}>{tab.label}</button>
-            ))}
-          </div>
-        )}
+        <div style={{ display:"flex", gap:0, marginBottom:24, background:"#0a0e1a", borderRadius:12, padding:4 }}>
+          {[{key:"login",label:"تسجيل دخول"},{key:"register",label:"إنشاء حساب"}].map(tab=>(
+            <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"none", background:mode===tab.key?"#10b981":"transparent", color:mode===tab.key?"#000":"#94a3b8", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s" }}>{tab.label}</button>
+          ))}
+        </div>
 
         {error && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, marginBottom:16, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {error}</div>}
         {success && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, marginBottom:16, textAlign:"center", border:"1px solid #10b98130" }}>✅ {success}</div>}
@@ -251,27 +210,8 @@ const AuthPage = () => {
         {mode==="login" && (
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
             <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} /></div>
-            <div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                <label style={{fontSize:12,color:"#94a3b8"}}>كلمة المرور</label>
-                <button onClick={()=>{setMode("forgot");resetForm();}} style={{background:"none",border:"none",color:"#10b981",fontSize:11,cursor:"pointer",fontFamily:F,padding:0}}>نسيت كلمة المرور؟</button>
-              </div>
-              <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="أدخل كلمة المرور" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleLogin(e)} />
-            </div>
+            <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>كلمة المرور</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="أدخل كلمة المرور" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleLogin(e)} /></div>
             <button onClick={handleLogin} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading?"جاري تسجيل الدخول...":"تسجيل الدخول"}</button>
-          </div>
-        )}
-
-        {mode==="forgot" && (
-          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-            <div style={{textAlign:"center",marginBottom:4}}>
-              <div style={{fontSize:36,marginBottom:8}}>🔑</div>
-              <div style={{fontSize:15,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>إعادة تعيين كلمة المرور</div>
-              <div style={{fontSize:12,color:"#64748b"}}>أدخل بريدك وسنرسل لك رابط إعادة التعيين</div>
-            </div>
-            <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني</label><input type="email" value={resetEmail} onChange={e=>setResetEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleResetPassword(e)} /></div>
-            <button onClick={handleResetPassword} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading?"جاري الإرسال...":"إرسال رابط إعادة التعيين"}</button>
-            <button onClick={()=>{setMode("login");resetForm();}} style={{background:"none",border:"none",color:"#94a3b8",fontSize:12,cursor:"pointer",fontFamily:F}}>← العودة لتسجيل الدخول</button>
           </div>
         )}
 
@@ -307,168 +247,71 @@ const AuthPage = () => {
 };
 
 // ============================================================
-// ⚙️ ACCOUNT SETTINGS MODAL (Profile + Password)
+// 🔑 CHANGE PASSWORD MODAL
 // ============================================================
-const AccountSettingsModal = ({ onClose }) => {
-  const { userData, changePassword, updateUserProfile, user } = useAuth();
-  const [activeTab, setActiveTab] = useState("profile");
-  const F = "'Noto Kufi Arabic',sans-serif";
-  const inputSt = { width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" };
-
-  // Profile state
-  const [fullName, setFullName] = useState(userData?.fullName || "");
-  const [phone, setPhone] = useState(userData?.phone || "");
-  const [district, setDistrict] = useState(userData?.district || "");
-  const [profileLoading, setProfileLoading] = useState(false);
-  const [profileMsg, setProfileMsg] = useState("");
-  const [profileError, setProfileError] = useState("");
-
-  // Password state
+const ChangePasswordModal = ({ onClose }) => {
+  const { changePassword } = useAuth();
   const [currentPass, setCurrentPass] = useState("");
   const [newPass, setNewPass] = useState("");
   const [confirmPass, setConfirmPass] = useState("");
-  const [passLoading, setPassLoading] = useState(false);
-  const [passMsg, setPassMsg] = useState("");
-  const [passError, setPassError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const F = "'Noto Kufi Arabic',sans-serif";
 
-  const handleProfileSave = async () => {
-    setProfileError(""); setProfileMsg("");
-    if (!fullName.trim()) { setProfileError("الاسم مطلوب"); return; }
-    setProfileLoading(true);
-    const result = await updateUserProfile({ fullName: fullName.trim(), phone: phone.trim(), district });
-    if (result.success) { setProfileMsg("✅ تم تحديث البيانات بنجاح"); setTimeout(() => setProfileMsg(""), 3000); }
-    else setProfileError(result.error);
-    setProfileLoading(false);
-  };
-
-  const handlePassChange = async () => {
-    setPassError(""); setPassMsg("");
-    if (!currentPass || !newPass || !confirmPass) { setPassError("يرجى تعبئة جميع الحقول"); return; }
-    if (newPass !== confirmPass) { setPassError("كلمة المرور الجديدة غير متطابقة"); return; }
-    if (newPass.length < 6) { setPassError("كلمة المرور يجب أن تكون 6 أحرف على الأقل"); return; }
-    if (currentPass === newPass) { setPassError("كلمة المرور الجديدة يجب أن تكون مختلفة"); return; }
-    setPassLoading(true);
+  const handleChange = async () => {
+    setError("");
+    if (!currentPass || !newPass || !confirmPass) { setError("يرجى تعبئة جميع الحقول"); return; }
+    if (newPass !== confirmPass) { setError("كلمة المرور الجديدة غير متطابقة"); return; }
+    if (newPass.length < 6) { setError("كلمة المرور يجب أن تكون 6 أحرف على الأقل"); return; }
+    if (currentPass === newPass) { setError("كلمة المرور الجديدة يجب أن تكون مختلفة عن الحالية"); return; }
+    setLoading(true);
     const result = await changePassword(currentPass, newPass);
-    if (result.success) { setPassMsg("✅ تم تغيير كلمة المرور بنجاح"); setCurrentPass(""); setNewPass(""); setConfirmPass(""); setTimeout(() => setPassMsg(""), 3000); }
-    else setPassError(result.error);
-    setPassLoading(false);
+    if (result.success) { setSuccess(true); setTimeout(() => onClose(), 2000); }
+    else setError(result.error);
+    setLoading(false);
   };
-
-  const roleMap = { executive: { label: "إدارة عليا", color: "#f59e0b", icon: "🏛️" }, employee: { label: "موظف", color: "#3b82f6", icon: "👷" }, citizen: { label: "مواطن", color: "#10b981", icon: "🏠" } };
-  const r = roleMap[userData?.role] || roleMap.citizen;
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, direction:"rtl", fontFamily:F }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ width:500, maxHeight:"90vh", overflow:"auto", padding:"0", background:"#111827", borderRadius:20, border:"1px solid #1e293b" }}>
-        {/* Header */}
-        <div style={{ padding:"24px 28px 0", textAlign:"center" }}>
-          <div style={{ width:60, height:60, borderRadius:16, background:`${r.color}15`, border:`2px solid ${r.color}30`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:30, margin:"0 auto 12px" }}>{r.icon}</div>
-          <h3 style={{ fontSize:18, fontWeight:900, color:"#f1f5f9", margin:"0 0 4px" }}>إعدادات الحساب</h3>
-          <p style={{ fontSize:12, color:"#64748b", margin:0 }}>{userData?.email}</p>
-          <span style={{ display:"inline-block", marginTop:8, padding:"3px 12px", borderRadius:20, fontSize:11, fontWeight:600, background:`${r.color}20`, color:r.color }}>{r.label}</span>
+      <div onClick={e => e.stopPropagation()} style={{ width:400, padding:"32px", background:"#111827", borderRadius:20, border:"1px solid #1e293b" }}>
+        <div style={{ textAlign:"center", marginBottom:24 }}>
+          <div style={{ fontSize:36, marginBottom:8 }}>🔐</div>
+          <h3 style={{ fontSize:18, fontWeight:800, color:"#f1f5f9", margin:0 }}>تغيير كلمة المرور</h3>
         </div>
 
-        {/* Tabs */}
-        <div style={{ display:"flex", gap:0, margin:"20px 28px 0", background:"#0a0e1a", borderRadius:12, padding:4 }}>
-          {[{ key:"profile", label:"👤 البيانات الشخصية" }, { key:"password", label:"🔐 كلمة المرور" }].map(tab => (
-            <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
-              flex:1, padding:"10px 0", borderRadius:10, border:"none",
-              background: activeTab === tab.key ? "#10b981" : "transparent",
-              color: activeTab === tab.key ? "#000" : "#94a3b8",
-              fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s",
-            }}>{tab.label}</button>
-          ))}
-        </div>
+        {success ? (
+          <div style={{ textAlign:"center", padding:20 }}>
+            <div style={{ fontSize:48, marginBottom:12 }}>✅</div>
+            <div style={{ fontSize:15, fontWeight:700, color:"#10b981" }}>تم تغيير كلمة المرور بنجاح!</div>
+          </div>
+        ) : (
+          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+            {error && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {error}</div>}
 
-        <div style={{ padding:"20px 28px 28px" }}>
-          {/* ===== PROFILE TAB ===== */}
-          {activeTab === "profile" && (
-            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-              {profileMsg && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{profileMsg}</div>}
-              {profileError && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {profileError}</div>}
-
-              <div>
-                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>الاسم الكامل *</label>
-                <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} placeholder="الاسم الثلاثي" style={inputSt} />
-              </div>
-
-              <div>
-                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>البريد الإلكتروني</label>
-                <input type="email" value={userData?.email || ""} disabled style={{ ...inputSt, opacity:0.5, cursor:"not-allowed" }} />
-                <span style={{ fontSize:10, color:"#64748b", marginTop:4, display:"block" }}>لا يمكن تغيير البريد الإلكتروني</span>
-              </div>
-
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-                <div>
-                  <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>رقم الجوال</label>
-                  <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="05XXXXXXXX" style={{ ...inputSt, direction:"ltr", textAlign:"right" }} />
-                </div>
-                <div>
-                  <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>الحي</label>
-                  <select value={district} onChange={e => setDistrict(e.target.value)} style={{ ...inputSt, appearance:"auto" }}>
-                    <option value="">اختر الحي</option>
-                    {DISTRICTS.map(d => <option key={d} value={d}>{d}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-                <div style={{ background:"#0a0e1a", borderRadius:10, padding:12 }}>
-                  <div style={{ fontSize:10, color:"#64748b" }}>نوع الحساب</div>
-                  <div style={{ fontSize:14, fontWeight:700, color:r.color, marginTop:4 }}>{r.icon} {r.label}</div>
-                </div>
-                <div style={{ background:"#0a0e1a", borderRadius:10, padding:12 }}>
-                  <div style={{ fontSize:10, color:"#64748b" }}>تاريخ التسجيل</div>
-                  <div style={{ fontSize:13, fontWeight:600, color:"#f1f5f9", marginTop:4 }}>{userData?.createdAt?.split("T")[0] || "-"}</div>
-                </div>
-              </div>
-
-              <div style={{ display:"flex", gap:10, marginTop:4 }}>
-                <button onClick={handleProfileSave} disabled={profileLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:profileLoading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:14, fontWeight:700, cursor:profileLoading?"not-allowed":"pointer", fontFamily:F }}>{profileLoading ? "جاري الحفظ..." : "💾 حفظ التغييرات"}</button>
-                <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
-              </div>
+            <div>
+              <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الحالية</label>
+              <input type="password" value={currentPass} onChange={e => setCurrentPass(e.target.value)} placeholder="أدخل كلمة المرور الحالية" style={{ width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" }} />
             </div>
-          )}
-
-          {/* ===== PASSWORD TAB ===== */}
-          {activeTab === "password" && (
-            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-              {passMsg && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{passMsg}</div>}
-              {passError && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {passError}</div>}
-
-              <div>
-                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الحالية</label>
-                <input type="password" value={currentPass} onChange={e => setCurrentPass(e.target.value)} placeholder="أدخل كلمة المرور الحالية" style={inputSt} />
-              </div>
-              <div>
-                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الجديدة</label>
-                <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="6 أحرف على الأقل" style={inputSt} />
-              </div>
-              <div>
-                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>تأكيد كلمة المرور الجديدة</label>
-                <input type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="أعد كتابة كلمة المرور الجديدة" style={inputSt} onKeyDown={e => e.key === "Enter" && handlePassChange()} />
-              </div>
-
-              <div style={{ background:"#0a0e1a", borderRadius:10, padding:12, fontSize:11, color:"#64748b", lineHeight:1.8 }}>
-                💡 <strong style={{ color:"#94a3b8" }}>شروط كلمة المرور:</strong><br/>
-                • يجب أن تكون 6 أحرف على الأقل<br/>
-                • يجب أن تكون مختلفة عن الحالية
-              </div>
-
-              <div style={{ display:"flex", gap:10, marginTop:4 }}>
-                <button onClick={handlePassChange} disabled={passLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:passLoading?"#64748b":"linear-gradient(135deg,#f59e0b,#d97706)", color:"#000", fontSize:14, fontWeight:700, cursor:passLoading?"not-allowed":"pointer", fontFamily:F }}>{passLoading ? "جاري التغيير..." : "🔐 تغيير كلمة المرور"}</button>
-                <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
-              </div>
+            <div>
+              <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الجديدة</label>
+              <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="6 أحرف على الأقل" style={{ width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" }} />
             </div>
-          )}
-        </div>
+            <div>
+              <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>تأكيد كلمة المرور الجديدة</label>
+              <input type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="أعد كتابة كلمة المرور الجديدة" style={{ width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" }} onKeyDown={e => e.key === "Enter" && handleChange()} />
+            </div>
+
+            <div style={{ display:"flex", gap:10, marginTop:4 }}>
+              <button onClick={handleChange} disabled={loading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:14, fontWeight:700, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading ? "جاري التغيير..." : "تغيير كلمة المرور"}</button>
+              <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:13, fontFamily:F }}>إلغاء</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 };
-
-// Keep old name as alias for backward compatibility
-const ChangePasswordModal = AccountSettingsModal;
 
 // ============================================================
 // ⏳ LOADING SCREEN
@@ -2509,7 +2352,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
           </div>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: "#f59e0b20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>{user.avatar}</div>
           <button onClick={() => window.__showAdminPanel && window.__showAdminPanel()} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #8b5cf640", background: "#8b5cf615", color: "#8b5cf6", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>👑 إدارة المستخدمين</button>
-          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: "#10b981", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>⚙️ إعدادات الحساب</button>
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: "#10b981", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>🔐 تغيير كلمة المرور</button>
           <button onClick={onLogout} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #ef444440", background: "#ef444415", color: "#ef4444", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>تسجيل خروج</button>
         </div>
       </header>
@@ -2977,7 +2820,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
             <div style={{ fontSize: 10, color: C.accent }}>{user.district}</div>
           </div>
           <div style={{ width: 38, height: 38, borderRadius: 10, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>👤</div>
-          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid #10b98140`, background: `#10b98115`, color: "#10b981", cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>⚙️ إعدادات الحساب</button>
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid #10b98140`, background: `#10b98115`, color: "#10b981", cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>🔐 تغيير كلمة المرور</button>
           <button onClick={onLogout} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.danger}40`, background: `${C.danger}15`, color: C.danger, cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>خروج</button>
         </div>
       </header>
@@ -3408,11 +3251,20 @@ const UnifiedLoginPage = ({ onLogin }) => {
 };
 
 // ======================== MAIN ========================
+const LiveClock = () => {
+  const [time, setTime] = useState(new Date());
+  useEffect(() => { const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
+  return (
+    <span style={{ fontSize: 12, color: C.dim }}>
+      مدينة بريدة • {time.toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} • {time.toLocaleTimeString("ar-SA")}
+    </span>
+  );
+};
+
 function SmartWasteManagement() {
   const { userData, userRole, logout } = useAuth();
   const [page, setPage] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [time, setTime] = useState(new Date());
   const [showPassModal, setShowPassModal] = useState(false);
 
   const stations = useMemo(() => generateStations(), []);
@@ -3420,8 +3272,6 @@ function SmartWasteManagement() {
   const monthlyTrend = useMemo(() => generateMonthlyTrend(), []);
   const hourlyData = useMemo(() => generateHourlyData(), []);
   const alerts = useMemo(() => generateAlerts(), []);
-
-  useEffect(() => { const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
 
   // Build user object for child components from Firebase data
   const loggedInUser = userData ? {
@@ -3500,8 +3350,8 @@ function SmartWasteManagement() {
             border: `1px solid #10b98130`, background: `#10b98110`, color: "#10b981",
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
           }}>
-            <span style={{ fontSize: 16 }}>⚙️</span>
-            {sidebarOpen && "إعدادات الحساب"}
+            <span style={{ fontSize: 16 }}>🔐</span>
+            {sidebarOpen && "تغيير كلمة المرور"}
           </button>
           <button onClick={handleLogout} style={{
             display: "flex", alignItems: "center", gap: 10, width: "100%", padding: sidebarOpen ? "10px 14px" : "10px 0",
@@ -3521,7 +3371,7 @@ function SmartWasteManagement() {
         <header style={{ padding: "14px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", background: C.card, flexShrink: 0 }}>
           <div>
             <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: C.text }}>{navItems.find((n) => n.key === page)?.label}</h1>
-            <span style={{ fontSize: 12, color: C.dim }}>مدينة بريدة • {time.toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} • {time.toLocaleTimeString("ar-SA")}</span>
+            <LiveClock />
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <div style={{ position: "relative", width: 40, height: 40, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
