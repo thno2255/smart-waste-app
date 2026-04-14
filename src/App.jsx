@@ -21,6 +21,7 @@ import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, on
 import { doc, setDoc, getDoc, collection, getDocs, updateDoc, query, orderBy, where, deleteDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
 
+
 // ============================================================
 // 🔐 AUTH CONTEXT
 // ============================================================
@@ -107,6 +108,20 @@ const AuthProvider = ({ children }) => {
     setUser(null); setUserRole(null); setUserData(null);
   };
 
+  const resetPassword = async (email) => {
+    try {
+      await sendPasswordResetEmail(auth, email);
+      return { success: true };
+    } catch (error) {
+      const msgs = {
+        "auth/user-not-found": "لا يوجد حساب مرتبط بهذا البريد",
+        "auth/invalid-email": "البريد الإلكتروني غير صحيح",
+        "auth/too-many-requests": "محاولات كثيرة - حاول لاحقاً",
+      };
+      return { success: false, error: msgs[error.code] || "حدث خطأ: " + error.message };
+    }
+  };
+
   const changePassword = async (currentPassword, newPassword) => {
     try {
       const credential = EmailAuthProvider.credential(user.email, currentPassword);
@@ -119,20 +134,6 @@ const AuthProvider = ({ children }) => {
         "auth/weak-password": "كلمة المرور الجديدة ضعيفة - 6 أحرف على الأقل",
         "auth/requires-recent-login": "يرجى تسجيل الخروج والدخول مرة أخرى ثم المحاولة",
         "auth/invalid-credential": "كلمة المرور الحالية غير صحيحة",
-      };
-      return { success: false, error: msgs[error.code] || "حدث خطأ: " + error.message };
-    }
-  };
-
-  const resetPassword = async (email) => {
-    try {
-      await sendPasswordResetEmail(auth, email);
-      return { success: true };
-    } catch (error) {
-      const msgs = {
-        "auth/user-not-found": "لا يوجد حساب مرتبط بهذا البريد الإلكتروني",
-        "auth/invalid-email": "البريد الإلكتروني غير صحيح",
-        "auth/too-many-requests": "محاولات كثيرة - حاول لاحقاً",
       };
       return { success: false, error: msgs[error.code] || "حدث خطأ: " + error.message };
     }
@@ -178,7 +179,6 @@ const AuthPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [resetEmail, setResetEmail] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -186,6 +186,7 @@ const AuthPage = () => {
   const [phone, setPhone] = useState("");
   const [district, setDistrict] = useState("");
   const [role, setRole] = useState("citizen");
+  const [resetEmail, setResetEmail] = useState("");
 
   const resetForm = () => { setEmail(""); setPassword(""); setConfirmPassword(""); setFullName(""); setPhone(""); setDistrict(""); setRole("citizen"); setError(""); setSuccess(""); setResetEmail(""); };
 
@@ -194,7 +195,7 @@ const AuthPage = () => {
     if (!resetEmail) { setError("يرجى إدخال بريدك الإلكتروني"); return; }
     setLoading(true); setError("");
     const r = await resetPassword(resetEmail);
-    if (r.success) { setSuccess("تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني"); setResetEmail(""); }
+    if (r.success) { setSuccess("تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك"); setResetEmail(""); }
     else setError(r.error);
     setLoading(false);
   };
@@ -264,9 +265,9 @@ const AuthPage = () => {
         {mode==="forgot" && (
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
             <div style={{textAlign:"center",marginBottom:4}}>
-              <div style={{fontSize:32,marginBottom:8}}>🔑</div>
+              <div style={{fontSize:36,marginBottom:8}}>🔑</div>
               <div style={{fontSize:15,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>إعادة تعيين كلمة المرور</div>
-              <div style={{fontSize:12,color:"#64748b"}}>أدخل بريدك الإلكتروني وسنرسل لك رابط إعادة التعيين</div>
+              <div style={{fontSize:12,color:"#64748b"}}>أدخل بريدك وسنرسل لك رابط إعادة التعيين</div>
             </div>
             <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني</label><input type="email" value={resetEmail} onChange={e=>setResetEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleResetPassword(e)} /></div>
             <button onClick={handleResetPassword} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading?"جاري الإرسال...":"إرسال رابط إعادة التعيين"}</button>
