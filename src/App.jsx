@@ -11,7 +11,7 @@
 //
 // ============================================================
 
-import { useState, useEffect, useMemo, createContext, useContext } from "react";
+import { useState, useEffect, useMemo, useRef, createContext, useContext } from "react";
 
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -3187,13 +3187,82 @@ const generateScenarios = () => [
   },
 ];
 
+// ── Isolated clock — لمنع re-render الكامل كل ثانية ──────────
+const ExecHeaderClock = () => {
+  const [t, setT] = useState(new Date());
+  useEffect(() => { const i = setInterval(() => setT(new Date()), 1000); return () => clearInterval(i); }, []);
+  return <span>{t.toLocaleDateString("ar-SA")} • {t.toLocaleTimeString("ar-SA")}</span>;
+};
+
+// ── Session Timeout — انتهاء الجلسة التلقائي ──────────────────
+const SessionTimeout = ({ onLogout, timeoutMin = 30, countdownSec = 10 }) => {
+  const [warning, setWarning] = useState(false);
+  const [countdown, setCountdown] = useState(countdownSec);
+  const timerRef    = useRef(null);
+  const countRef    = useRef(null);
+  const F = ARABIC_FONT;
+
+  const resetTimer = () => {
+    setWarning(false);
+    setCountdown(countdownSec);
+    clearTimeout(timerRef.current);
+    clearInterval(countRef.current);
+    timerRef.current = setTimeout(() => {
+      setWarning(true);
+      let left = countdownSec;
+      countRef.current = setInterval(() => {
+        left -= 1;
+        setCountdown(left);
+        if (left <= 0) { clearInterval(countRef.current); onLogout(); }
+      }, 1000);
+    }, timeoutMin * 60 * 1000);
+  };
+
+  useEffect(() => {
+    const events = ["mousemove","keydown","click","touchstart","scroll"];
+    events.forEach(e => window.addEventListener(e, resetTimer, { passive: true }));
+    resetTimer();
+    return () => {
+      events.forEach(e => window.removeEventListener(e, resetTimer));
+      clearTimeout(timerRef.current);
+      clearInterval(countRef.current);
+    };
+  }, []);
+
+  if (!warning) return null;
+  return (
+    <div style={{ position:"fixed", inset:0, background:"#000c", zIndex:9999, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ background:C.card, border:`2px solid ${C.warning}`, borderRadius:20, padding:"36px 40px", width:400, maxWidth:"95vw", textAlign:"center", direction:"rtl", fontFamily:F }}>
+        <div style={{ fontSize:48, marginBottom:12 }}>⏰</div>
+        <div style={{ fontSize:18, fontWeight:800, color:C.warning, marginBottom:8 }}>انتهت مدة الجلسة قريباً</div>
+        <div style={{ fontSize:13, color:C.muted, marginBottom:20, lineHeight:1.7 }}>
+          مضى {timeoutMin} دقيقة بدون نشاط.<br/>
+          سيتم تسجيل الخروج تلقائياً خلال
+        </div>
+        <div style={{ fontSize:52, fontWeight:900, color: countdown <= 5 ? C.danger : C.warning, marginBottom:20 }}>{countdown}</div>
+        <div style={{ height:6, background:C.bg, borderRadius:3, marginBottom:24, overflow:"hidden" }}>
+          <div style={{ height:"100%", background: countdown <= 5 ? C.danger : C.warning, borderRadius:3,
+            width:`${(countdown/countdownSec)*100}%`, transition:"width 1s linear" }} />
+        </div>
+        <div style={{ display:"flex", gap:10 }}>
+          <button onClick={resetTimer} style={{ flex:1, padding:13, borderRadius:10, border:"none",
+            background:"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontWeight:800, fontSize:14, cursor:"pointer", fontFamily:F }}>
+            ✅ تمديد الجلسة
+          </button>
+          <button onClick={onLogout} style={{ padding:"13px 20px", borderRadius:10, border:`1px solid ${C.danger}`,
+            background:C.danger+"15", color:C.danger, fontWeight:700, fontSize:14, cursor:"pointer", fontFamily:F }}>
+            خروج
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) => {
   const [tab, setTab] = useState("overview");
   const [selectedScenario, setSelectedScenario] = useState(null);
-  const [time, setTime] = useState(new Date());
   const [showPassModal, setShowPassModal] = useState(false);
-
-  useEffect(() => { const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
 
   const quarterlyData = useMemo(() => generateQuarterlyData(), []);
   const districtPerf = useMemo(() => generateDistrictPerformance(), []);
@@ -3241,7 +3310,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
           <div style={{ width: 42, height: 42, borderRadius: 12, background: "linear-gradient(135deg, #f59e0b, #d97706)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🏛️</div>
           <div>
             <div style={{ fontSize: 16, fontWeight: 900, color: "#f59e0b" }}>بوابة متخذي القرار</div>
-            <div style={{ fontSize: 10, color: "#94a3b8" }}>نظام إدارة النفايات الذكي - بريدة • {time.toLocaleDateString("ar-SA")} • {time.toLocaleTimeString("ar-SA")}</div>
+            <div style={{ fontSize: 10, color: "#94a3b8" }}>نظام إدارة النفايات الذكي - بريدة • <ExecHeaderClock /></div>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -3256,6 +3325,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
         </div>
       </header>
       {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
+      <SessionTimeout onLogout={onLogout} timeoutMin={30} countdownSec={10} />
 
       {/* Tabs */}
       <div style={{ padding: "12px 28px 0", display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -3433,7 +3503,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
 
               <Card title="عدد الحوادث لكل حي" icon="🚨">
                 <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={districtPerf.sort((a, b) => b.الحوادث - a.الحوادث)} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+                  <BarChart data={[...districtPerf].sort((a, b) => b.الحوادث - a.الحوادث)} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                     <XAxis dataKey="district" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
@@ -4226,6 +4296,7 @@ function SmartWasteManagement() {
   return (
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", overflow: "hidden" }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+      <SessionTimeout onLogout={handleLogout} timeoutMin={30} countdownSec={10} />
 
       <aside style={{ width: sidebarOpen ? 240 : 64, background: C.card, borderLeft: `1px solid ${C.border}`, display: "flex", flexDirection: "column", transition: "width 0.3s ease", overflow: "hidden", flexShrink: 0 }}>
         <div style={{ padding: sidebarOpen ? "20px 18px" : "20px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12, minHeight: 70 }}>
