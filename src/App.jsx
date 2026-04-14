@@ -1,4 +1,3 @@
-
 // ============================================================
 // نظام إدارة شفط النفايات الذكي - بريدة
 // ملف واحد كامل مع Firebase Auth + Firestore + Role-based Routing
@@ -13,16 +12,41 @@
 // ============================================================
 
 import { useState, useEffect, useMemo, createContext, useContext } from "react";
+
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  LineChart, Line, AreaChart, Area, PieChart, Pie, Cell, RadarChart, Radar, PolarGrid,
-  PolarAngleAxis, PolarRadiusAxis, ComposedChart,
+  LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
+  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ComposedChart,
 } from "recharts";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
-import { doc, setDoc, getDoc, collection, getDocs, updateDoc, query, orderBy, where, deleteDoc } from "firebase/firestore";
+
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  updateProfile,
+  updatePassword,
+  sendPasswordResetEmail,
+  EmailAuthProvider,
+  reauthenticateWithCredential
+} from "firebase/auth";
+
+import {
+  doc,
+  setDoc,
+  getDoc,
+  collection,
+  getDocs,
+  addDoc,
+  onSnapshot,
+  updateDoc,
+  query,
+  orderBy,
+  where,
+  deleteDoc
+} from "firebase/firestore";
+
 import { auth, db } from "./firebase";
-
-
 // ============================================================
 // 🔐 AUTH CONTEXT
 // ============================================================
@@ -109,25 +133,63 @@ const AuthProvider = ({ children }) => {
     setUser(null); setUserRole(null); setUserData(null);
   };
 
-  const changePassword = async (currentPassword, newPassword) => {
+  const resetPassword = async (email) => {
     try {
-      const credential = EmailAuthProvider.credential(user.email, currentPassword);
-      await reauthenticateWithCredential(user, credential);
-      await updatePassword(user, newPassword);
+      await sendPasswordResetEmail(auth, email);
       return { success: true };
     } catch (error) {
       const msgs = {
-        "auth/wrong-password": "كلمة المرور الحالية غير صحيحة",
-        "auth/weak-password": "كلمة المرور الجديدة ضعيفة - 6 أحرف على الأقل",
-        "auth/requires-recent-login": "يرجى تسجيل الخروج والدخول مرة أخرى ثم المحاولة",
-        "auth/invalid-credential": "كلمة المرور الحالية غير صحيحة",
+        "auth/user-not-found": "لا يوجد حساب بهذا البريد الإلكتروني",
+        "auth/invalid-email": "البريد الإلكتروني غير صحيح",
+        "auth/too-many-requests": "محاولات كثيرة - حاول لاحقاً",
       };
-      return { success: false, error: msgs[error.code] || "حدث خطأ: " + error.message };
+      return { success: false, error: msgs[error.code] || "حدث خطأ أثناء إرسال رابط الاستعادة" };
+    }
+  };
+
+  const changePassword = async (currentPassword, newPassword) => {
+  try {
+    if (!user) {
+      return { success: false, error: "يجب تسجيل الدخول أولاً" };
+    }
+
+    const credential = EmailAuthProvider.credential(user.email, currentPassword);
+    await reauthenticateWithCredential(user, credential);
+    await updatePassword(user, newPassword);
+
+    return { success: true };
+  } catch (error) {
+    const msgs = {
+      "auth/wrong-password": "كلمة المرور الحالية غير صحيحة",
+      "auth/weak-password": "كلمة المرور الجديدة ضعيفة - 6 أحرف على الأقل",
+      "auth/requires-recent-login": "يرجى تسجيل الخروج والدخول مرة أخرى ثم المحاولة",
+      "auth/invalid-credential": "كلمة المرور الحالية غير صحيحة",
+    };
+
+    return {
+      success: false,
+      error: msgs[error.code] || "حدث خطأ: " + error.message
+    };
+  }
+};
+
+  const updateUserProfile = async (updates) => {
+    try {
+      if (!user) return { success: false, error: "يجب تسجيل الدخول أولاً" };
+      // Update Firestore
+      await updateDoc(doc(db, "users", user.uid), { ...updates, updatedAt: new Date().toISOString() });
+      // Update Firebase Auth display name if changed
+      if (updates.fullName) await updateProfile(user, { displayName: updates.fullName });
+      // Update local state
+      setUserData(prev => ({ ...prev, ...updates }));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: "حدث خطأ أثناء تحديث البيانات: " + error.message };
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, userRole, userData, loading, register, login, logout, changePassword, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, userRole, userData, loading, register, login, logout, resetPassword, changePassword, updateUserProfile, isAuthenticated: !!user }}>
       {children}
     </AuthContext.Provider>
   );
@@ -146,7 +208,7 @@ const ROLES_LIST = [
 const inputStyle = { width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:"'Noto Kufi Arabic',sans-serif", outline:"none", boxSizing:"border-box" };
 
 const AuthPage = () => {
-  const { login, register } = useAuth();
+  const { login, register, resetPassword } = useAuth();
   const [mode, setMode] = useState("login");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -182,6 +244,16 @@ const AuthPage = () => {
     setLoading(false);
   };
 
+  const handleResetPassword = async (e) => {
+    if (e) e.preventDefault();
+    if (!email) { setError("يرجى إدخال البريد الإلكتروني أولاً"); return; }
+    setLoading(true); setError(""); setSuccess("");
+    const r = await resetPassword(email);
+    if (r.success) setSuccess("تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني ✉️");
+    else setError(r.error);
+    setLoading(false);
+  };
+
   const F = "'Noto Kufi Arabic',sans-serif";
 
   return (
@@ -197,12 +269,22 @@ const AuthPage = () => {
           <p style={{ fontSize:13, color:"#94a3b8", margin:0 }}>مدينة بريدة - منطقة القصيم</p>
         </div>
 
-        {/* Tabs */}
-        <div style={{ display:"flex", gap:0, marginBottom:24, background:"#0a0e1a", borderRadius:12, padding:4 }}>
-          {[{key:"login",label:"تسجيل دخول"},{key:"register",label:"إنشاء حساب"}].map(tab=>(
-            <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"none", background:mode===tab.key?"#10b981":"transparent", color:mode===tab.key?"#000":"#94a3b8", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s" }}>{tab.label}</button>
-          ))}
-        </div>
+        {/* Tabs — تظهر فقط في login و register */}
+        {mode !== "forgot" && (
+          <div style={{ display:"flex", gap:0, marginBottom:24, background:"#0a0e1a", borderRadius:12, padding:4 }}>
+            {[{key:"login",label:"تسجيل دخول"},{key:"register",label:"إنشاء حساب"}].map(tab=>(
+              <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"none", background:mode===tab.key?"#10b981":"transparent", color:mode===tab.key?"#000":"#94a3b8", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s" }}>{tab.label}</button>
+            ))}
+          </div>
+        )}
+
+        {/* عنوان صفحة نسيت كلمة المرور */}
+        {mode === "forgot" && (
+          <div style={{ textAlign:"center", marginBottom:24 }}>
+            <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:6 }}>🔑 استعادة كلمة المرور</div>
+            <div style={{ fontSize:12, color:"#94a3b8" }}>أدخل بريدك الإلكتروني وسنرسل لك رابط إعادة التعيين</div>
+          </div>
+        )}
 
         {error && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, marginBottom:16, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {error}</div>}
         {success && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, marginBottom:16, textAlign:"center", border:"1px solid #10b98130" }}>✅ {success}</div>}
@@ -211,7 +293,18 @@ const AuthPage = () => {
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
             <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} /></div>
             <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>كلمة المرور</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="أدخل كلمة المرور" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleLogin(e)} /></div>
+            <div style={{ textAlign:"left" }}>
+              <button onClick={()=>{setMode("forgot");resetForm();}} style={{ background:"none", border:"none", color:"#10b981", fontSize:12, cursor:"pointer", fontFamily:F, padding:0 }}>نسيت كلمة المرور؟</button>
+            </div>
             <button onClick={handleLogin} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading?"جاري تسجيل الدخول...":"تسجيل الدخول"}</button>
+          </div>
+        )}
+
+        {mode==="forgot" && (
+          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+            <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleResetPassword(e)} /></div>
+            <button onClick={handleResetPassword} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading?"جاري الإرسال...":"إرسال رابط الاستعادة"}</button>
+            <button onClick={()=>{setMode("login");resetForm();}} style={{ padding:10, borderRadius:12, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", fontSize:13, cursor:"pointer", fontFamily:F }}>← العودة لتسجيل الدخول</button>
           </div>
         )}
 
@@ -247,71 +340,168 @@ const AuthPage = () => {
 };
 
 // ============================================================
-// 🔑 CHANGE PASSWORD MODAL
+// ⚙️ ACCOUNT SETTINGS MODAL (Profile + Password)
 // ============================================================
-const ChangePasswordModal = ({ onClose }) => {
-  const { changePassword } = useAuth();
+const AccountSettingsModal = ({ onClose }) => {
+  const { userData, changePassword, updateUserProfile, user } = useAuth();
+  const [activeTab, setActiveTab] = useState("profile");
+  const F = "'Noto Kufi Arabic',sans-serif";
+  const inputSt = { width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" };
+
+  // Profile state
+  const [fullName, setFullName] = useState(userData?.fullName || "");
+  const [phone, setPhone] = useState(userData?.phone || "");
+  const [district, setDistrict] = useState(userData?.district || "");
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileMsg, setProfileMsg] = useState("");
+  const [profileError, setProfileError] = useState("");
+
+  // Password state
   const [currentPass, setCurrentPass] = useState("");
   const [newPass, setNewPass] = useState("");
   const [confirmPass, setConfirmPass] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
-  const F = "'Noto Kufi Arabic',sans-serif";
+  const [passLoading, setPassLoading] = useState(false);
+  const [passMsg, setPassMsg] = useState("");
+  const [passError, setPassError] = useState("");
 
-  const handleChange = async () => {
-    setError("");
-    if (!currentPass || !newPass || !confirmPass) { setError("يرجى تعبئة جميع الحقول"); return; }
-    if (newPass !== confirmPass) { setError("كلمة المرور الجديدة غير متطابقة"); return; }
-    if (newPass.length < 6) { setError("كلمة المرور يجب أن تكون 6 أحرف على الأقل"); return; }
-    if (currentPass === newPass) { setError("كلمة المرور الجديدة يجب أن تكون مختلفة عن الحالية"); return; }
-    setLoading(true);
-    const result = await changePassword(currentPass, newPass);
-    if (result.success) { setSuccess(true); setTimeout(() => onClose(), 2000); }
-    else setError(result.error);
-    setLoading(false);
+  const handleProfileSave = async () => {
+    setProfileError(""); setProfileMsg("");
+    if (!fullName.trim()) { setProfileError("الاسم مطلوب"); return; }
+    setProfileLoading(true);
+    const result = await updateUserProfile({ fullName: fullName.trim(), phone: phone.trim(), district });
+    if (result.success) { setProfileMsg("✅ تم تحديث البيانات بنجاح"); setTimeout(() => setProfileMsg(""), 3000); }
+    else setProfileError(result.error);
+    setProfileLoading(false);
   };
+
+  const handlePassChange = async () => {
+    setPassError(""); setPassMsg("");
+    if (!currentPass || !newPass || !confirmPass) { setPassError("يرجى تعبئة جميع الحقول"); return; }
+    if (newPass !== confirmPass) { setPassError("كلمة المرور الجديدة غير متطابقة"); return; }
+    if (newPass.length < 6) { setPassError("كلمة المرور يجب أن تكون 6 أحرف على الأقل"); return; }
+    if (currentPass === newPass) { setPassError("كلمة المرور الجديدة يجب أن تكون مختلفة"); return; }
+    setPassLoading(true);
+    const result = await changePassword(currentPass, newPass);
+    if (result.success) { setPassMsg("✅ تم تغيير كلمة المرور بنجاح"); setCurrentPass(""); setNewPass(""); setConfirmPass(""); setTimeout(() => setPassMsg(""), 3000); }
+    else setPassError(result.error);
+    setPassLoading(false);
+  };
+
+  const roleMap = { executive: { label: "إدارة عليا", color: "#f59e0b", icon: "🏛️" }, employee: { label: "موظف", color: "#3b82f6", icon: "👷" }, citizen: { label: "مواطن", color: "#10b981", icon: "🏠" } };
+  const r = roleMap[userData?.role] || roleMap.citizen;
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, direction:"rtl", fontFamily:F }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ width:400, padding:"32px", background:"#111827", borderRadius:20, border:"1px solid #1e293b" }}>
-        <div style={{ textAlign:"center", marginBottom:24 }}>
-          <div style={{ fontSize:36, marginBottom:8 }}>🔐</div>
-          <h3 style={{ fontSize:18, fontWeight:800, color:"#f1f5f9", margin:0 }}>تغيير كلمة المرور</h3>
+      <div onClick={e => e.stopPropagation()} style={{ width:500, maxHeight:"90vh", overflow:"auto", padding:"0", background:"#111827", borderRadius:20, border:"1px solid #1e293b" }}>
+        {/* Header */}
+        <div style={{ padding:"24px 28px 0", textAlign:"center" }}>
+          <div style={{ width:60, height:60, borderRadius:16, background:`${r.color}15`, border:`2px solid ${r.color}30`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:30, margin:"0 auto 12px" }}>{r.icon}</div>
+          <h3 style={{ fontSize:18, fontWeight:900, color:"#f1f5f9", margin:"0 0 4px" }}>إعدادات الحساب</h3>
+          <p style={{ fontSize:12, color:"#64748b", margin:0 }}>{userData?.email}</p>
+          <span style={{ display:"inline-block", marginTop:8, padding:"3px 12px", borderRadius:20, fontSize:11, fontWeight:600, background:`${r.color}20`, color:r.color }}>{r.label}</span>
         </div>
 
-        {success ? (
-          <div style={{ textAlign:"center", padding:20 }}>
-            <div style={{ fontSize:48, marginBottom:12 }}>✅</div>
-            <div style={{ fontSize:15, fontWeight:700, color:"#10b981" }}>تم تغيير كلمة المرور بنجاح!</div>
-          </div>
-        ) : (
-          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-            {error && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {error}</div>}
+        {/* Tabs */}
+        <div style={{ display:"flex", gap:0, margin:"20px 28px 0", background:"#0a0e1a", borderRadius:12, padding:4 }}>
+          {[{ key:"profile", label:"👤 البيانات الشخصية" }, { key:"password", label:"🔐 كلمة المرور" }].map(tab => (
+            <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
+              flex:1, padding:"10px 0", borderRadius:10, border:"none",
+              background: activeTab === tab.key ? "#10b981" : "transparent",
+              color: activeTab === tab.key ? "#000" : "#94a3b8",
+              fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s",
+            }}>{tab.label}</button>
+          ))}
+        </div>
 
-            <div>
-              <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الحالية</label>
-              <input type="password" value={currentPass} onChange={e => setCurrentPass(e.target.value)} placeholder="أدخل كلمة المرور الحالية" style={{ width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" }} />
-            </div>
-            <div>
-              <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الجديدة</label>
-              <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="6 أحرف على الأقل" style={{ width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" }} />
-            </div>
-            <div>
-              <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>تأكيد كلمة المرور الجديدة</label>
-              <input type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="أعد كتابة كلمة المرور الجديدة" style={{ width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" }} onKeyDown={e => e.key === "Enter" && handleChange()} />
-            </div>
+        <div style={{ padding:"20px 28px 28px" }}>
+          {/* ===== PROFILE TAB ===== */}
+          {activeTab === "profile" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+              {profileMsg && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{profileMsg}</div>}
+              {profileError && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {profileError}</div>}
 
-            <div style={{ display:"flex", gap:10, marginTop:4 }}>
-              <button onClick={handleChange} disabled={loading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:14, fontWeight:700, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading ? "جاري التغيير..." : "تغيير كلمة المرور"}</button>
-              <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:13, fontFamily:F }}>إلغاء</button>
+              <div>
+                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>الاسم الكامل *</label>
+                <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} placeholder="الاسم الثلاثي" style={inputSt} />
+              </div>
+
+              <div>
+                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>البريد الإلكتروني</label>
+                <input type="email" value={userData?.email || ""} disabled style={{ ...inputSt, opacity:0.5, cursor:"not-allowed" }} />
+                <span style={{ fontSize:10, color:"#64748b", marginTop:4, display:"block" }}>لا يمكن تغيير البريد الإلكتروني</span>
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                <div>
+                  <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>رقم الجوال</label>
+                  <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="05XXXXXXXX" style={{ ...inputSt, direction:"ltr", textAlign:"right" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>الحي</label>
+                  <select value={district} onChange={e => setDistrict(e.target.value)} style={{ ...inputSt, appearance:"auto" }}>
+                    <option value="">اختر الحي</option>
+                    {DISTRICTS.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                <div style={{ background:"#0a0e1a", borderRadius:10, padding:12 }}>
+                  <div style={{ fontSize:10, color:"#64748b" }}>نوع الحساب</div>
+                  <div style={{ fontSize:14, fontWeight:700, color:r.color, marginTop:4 }}>{r.icon} {r.label}</div>
+                </div>
+                <div style={{ background:"#0a0e1a", borderRadius:10, padding:12 }}>
+                  <div style={{ fontSize:10, color:"#64748b" }}>تاريخ التسجيل</div>
+                  <div style={{ fontSize:13, fontWeight:600, color:"#f1f5f9", marginTop:4 }}>{userData?.createdAt?.split("T")[0] || "-"}</div>
+                </div>
+              </div>
+
+              <div style={{ display:"flex", gap:10, marginTop:4 }}>
+                <button onClick={handleProfileSave} disabled={profileLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:profileLoading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:14, fontWeight:700, cursor:profileLoading?"not-allowed":"pointer", fontFamily:F }}>{profileLoading ? "جاري الحفظ..." : "💾 حفظ التغييرات"}</button>
+                <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* ===== PASSWORD TAB ===== */}
+          {activeTab === "password" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+              {passMsg && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{passMsg}</div>}
+              {passError && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {passError}</div>}
+
+              <div>
+                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الحالية</label>
+                <input type="password" value={currentPass} onChange={e => setCurrentPass(e.target.value)} placeholder="أدخل كلمة المرور الحالية" style={inputSt} />
+              </div>
+              <div>
+                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الجديدة</label>
+                <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="6 أحرف على الأقل" style={inputSt} />
+              </div>
+              <div>
+                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>تأكيد كلمة المرور الجديدة</label>
+                <input type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="أعد كتابة كلمة المرور الجديدة" style={inputSt} onKeyDown={e => e.key === "Enter" && handlePassChange()} />
+              </div>
+
+              <div style={{ background:"#0a0e1a", borderRadius:10, padding:12, fontSize:11, color:"#64748b", lineHeight:1.8 }}>
+                💡 <strong style={{ color:"#94a3b8" }}>شروط كلمة المرور:</strong><br/>
+                • يجب أن تكون 6 أحرف على الأقل<br/>
+                • يجب أن تكون مختلفة عن الحالية
+              </div>
+
+              <div style={{ display:"flex", gap:10, marginTop:4 }}>
+                <button onClick={handlePassChange} disabled={passLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:passLoading?"#64748b":"linear-gradient(135deg,#f59e0b,#d97706)", color:"#000", fontSize:14, fontWeight:700, cursor:passLoading?"not-allowed":"pointer", fontFamily:F }}>{passLoading ? "جاري التغيير..." : "🔐 تغيير كلمة المرور"}</button>
+                <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 };
+
+// Keep old name as alias for backward compatibility
+const ChangePasswordModal = AccountSettingsModal;
 
 // ============================================================
 // ⏳ LOADING SCREEN
@@ -388,14 +578,21 @@ const generateHourlyData = () =>
     الضغط: +(1 + Math.sin((i - 8) * 0.25) * 2 + Math.random() * 0.5).toFixed(1),
   }));
 
-const generateAlerts = () => [
-  { id: 1, type: "حرج", message: "محطة حي الخليج - مستوى الامتلاء تجاوز 90%", time: "منذ 5 دقائق", icon: "🔴" },
-  { id: 2, type: "تحذير", message: "محطة حي الفايزية - ضغط مرتفع في نظام الشفط", time: "منذ 15 دقيقة", icon: "🟡" },
-  { id: 3, type: "صيانة", message: "محطة حي الريان - موعد الصيانة الدورية غداً", time: "منذ ساعة", icon: "🔵" },
-  { id: 4, type: "حرج", message: "محطة حي الحمر - عطل في المستشعر الرئيسي", time: "منذ ساعتين", icon: "🔴" },
-  { id: 5, type: "معلومة", message: "تم تحديث برمجيات 3 محطات بنجاح", time: "منذ 3 ساعات", icon: "🟢" },
-  { id: 6, type: "تحذير", message: "محطة حي الضاحي - درجة حرارة مرتفعة", time: "منذ 4 ساعات", icon: "🟡" },
-];
+const generateAlerts = (stations = []) => {
+  const alerts = [];
+  stations.forEach((s) => {
+    const status = getStatus(s.fillLevel);
+    if (status === "حرج") {
+      alerts.push({ id: `${s.id}_c`, type: "حرج", message: `${s.name} - مستوى الامتلاء وصل ${s.fillLevel}%`, time: "الآن", icon: "🔴" });
+    } else if (status === "تحذير") {
+      alerts.push({ id: `${s.id}_w`, type: "تحذير", message: `${s.name} - مستوى الامتلاء ${s.fillLevel}%`, time: "الآن", icon: "🟡" });
+    }
+  });
+  if (alerts.length === 0) {
+    alerts.push({ id: "ok", type: "معلومة", message: "جميع المحطات تعمل بشكل طبيعي ✅", time: "الآن", icon: "🟢" });
+  }
+  return alerts;
+};
 
 // --- Colors ---
 const C = {
@@ -458,6 +655,13 @@ const StatCard = ({ title, value, unit, icon, gradient, trend }) => (
   </div>
 );
 
+// ✅ دالة موحدة لحساب الحالة بناءً على نسبة الامتلاء فقط
+const getStatus = (fillLevel) => {
+  if (fillLevel >= 85) return "حرج";
+  if (fillLevel >= 60) return "تحذير";
+  return "طبيعي";
+};
+
 const StatusBadge = ({ status }) => {
   const m = { طبيعي: { bg: "#065f4620", c: "#10b981", b: "#10b98140" }, تحذير: { bg: "#92400e20", c: "#f59e0b", b: "#f59e0b40" }, حرج: { bg: "#7f1d1d20", c: "#ef4444", b: "#ef444440" } };
   const s = m[status] || m["طبيعي"];
@@ -473,10 +677,10 @@ const Card = ({ children, title, icon, style: sx }) => (
 
 // ======================== DASHBOARD ========================
 const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData }) => {
-  const criticalCount = stations.filter((s) => s.status === "حرج").length;
-  const avgFill = Math.round(stations.reduce((a, s) => a + s.fillLevel, 0) / stations.length);
-  const totalDaily = stations.reduce((a, s) => a + s.dailyAvg, 0);
-  const avgEff = Math.round(monthlyTrend.reduce((a, m) => a + m.الكفاءة, 0) / monthlyTrend.length);
+  const criticalCount = stations.filter((s) => getStatus(s.fillLevel) === "حرج").length;
+  const avgFill = stations.length ? Math.round(stations.reduce((a, s) => a + (s.fillLevel || 0), 0) / stations.length) : 0;
+  const totalDaily = stations.reduce((a, s) => a + (s.dailyWaste || 0), 0);
+  const avgEff = monthlyTrend.length ? Math.round(monthlyTrend.reduce((a, m) => a + m.الكفاءة, 0) / monthlyTrend.length) : 0;
 
   const fillDistribution = [
     { name: "0-30%", value: stations.filter(s => s.fillLevel <= 30).length, fill: C.accent },
@@ -616,8 +820,8 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
         {[
-          { label: "محطات طبيعية", count: stations.filter((s) => s.status === "طبيعي").length, color: C.accent, icon: "✅" },
-          { label: "محطات تحت التحذير", count: stations.filter((s) => s.status === "تحذير").length, color: C.warning, icon: "⚠️" },
+          { label: "محطات طبيعية", count: stations.filter((s) => getStatus(s.fillLevel) === "طبيعي").length, color: C.accent, icon: "✅" },
+          { label: "محطات تحت التحذير", count: stations.filter((s) => getStatus(s.fillLevel) === "تحذير").length, color: C.warning, icon: "⚠️" },
           { label: "محطات حرجة", count: criticalCount, color: C.danger, icon: "🚨" },
         ].map((item, i) => (
           <div key={i} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 16, padding: 20, textAlign: "center" }}>
@@ -633,86 +837,405 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
 
 // ======================== STATIONS ========================
 const StationsPage = ({ stations }) => {
-  const [selected, setSelected] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
   const [filter, setFilter] = useState("الكل");
-  const filtered = filter === "الكل" ? stations : stations.filter((s) => s.status === filter);
+  const [sort, setSort]   = useState("fillDesc"); // fillDesc | fillAsc | containers
+
+  // ─── Add Station ───────────────────────────────────────────
+  const [showAddStation, setShowAddStation] = useState(false);
+  const emptyStation = { name: "", district: "", fillLevel: "", pressure: "", wasteType: "عضوية", dailyWaste: "" };
+  const [stationForm, setStationForm] = useState(emptyStation);
+  const [stationLoading, setStationLoading] = useState(false);
+  const [stationError, setStationError] = useState("");
+
+  // ─── Container Modal ───────────────────────────────────────
+  const [showContainerModal, setShowContainerModal] = useState(false);
+  const [editingContainer, setEditingContainer] = useState(null);
+  const [containerForm, setContainerForm] = useState({ name: "", fillLevel: "" });
+  const [containerLoading, setContainerLoading] = useState(false);
+  const [deletingContainerId, setDeletingContainerId] = useState(null);
+
+  // Keep selected station live from onSnapshot feed
+  const currentSelected = selectedId ? (stations.find(s => s.id === selectedId) || null) : null;
+
+  const filtered = useMemo(() => {
+    const base = filter === "الكل" ? [...stations] : stations.filter(s => getStatus(s.fillLevel) === filter);
+    if (sort === "fillDesc")    return base.sort((a,b) => b.fillLevel - a.fillLevel);
+    if (sort === "fillAsc")     return base.sort((a,b) => a.fillLevel - b.fillLevel);
+    if (sort === "containers")  return base.sort((a,b) => (b.containers?.length||0) - (a.containers?.length||0));
+    return base;
+  }, [stations, filter, sort]);
 
   const fakeHistory = useMemo(() =>
     Array.from({ length: 7 }, (_, i) => ({
-      day: ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"][i],
+      day: ["الأحد","الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"][i],
       الامتلاء: Math.round(30 + Math.random() * 60),
       الضغط: +(1 + Math.random() * 3).toFixed(1),
       الكمية: Math.round(50 + Math.random() * 200),
-    })), [selected?.id]);
+    })), [selectedId]);
+
+  // ─── Handlers: Station ────────────────────────────────────
+  const handleAddStation = async () => {
+    const { name, district, fillLevel, pressure, wasteType, dailyWaste } = stationForm;
+    if (!name || !district || fillLevel === "" || pressure === "" || !dailyWaste) {
+      setStationError("يرجى تعبئة جميع الحقول"); return;
+    }
+    setStationLoading(true); setStationError("");
+    try {
+      await addDoc(collection(db, "stations"), {
+        name, district,
+        fillLevel: Number(fillLevel),
+        pressure: Number(pressure),
+        wasteType,
+        dailyWaste: Number(dailyWaste),
+        containers: [],
+      });
+      setShowAddStation(false);
+      setStationForm(emptyStation);
+    } catch (e) {
+      setStationError("حدث خطأ: " + e.message);
+    } finally {
+      setStationLoading(false);
+    }
+  };
+
+  // ─── Handlers: Containers ─────────────────────────────────
+  const handleSaveContainer = async () => {
+    if (!containerForm.name || containerForm.fillLevel === "" || !currentSelected) return;
+    setContainerLoading(true);
+    try {
+      const containers = [...(currentSelected.containers || [])];
+      if (editingContainer) {
+        const idx = containers.findIndex(c => c.id === editingContainer.id);
+        if (idx !== -1) containers[idx] = { ...containers[idx], name: containerForm.name, fillLevel: Number(containerForm.fillLevel) };
+      } else {
+        containers.push({ id: `C${Date.now()}`, name: containerForm.name, fillLevel: Number(containerForm.fillLevel) });
+      }
+      await updateDoc(doc(db, "stations", currentSelected.id), { containers });
+      setShowContainerModal(false);
+      setEditingContainer(null);
+      setContainerForm({ name: "", fillLevel: "" });
+    } catch (e) {
+      console.error("خطأ في حفظ الحاوية:", e);
+    } finally {
+      setContainerLoading(false);
+    }
+  };
+
+  const handleDeleteContainer = async (containerId) => {
+    if (!currentSelected) return;
+    const containers = (currentSelected.containers || []).filter(c => c.id !== containerId);
+    try {
+      await updateDoc(doc(db, "stations", currentSelected.id), { containers });
+    } catch (e) {
+      console.error("خطأ في حذف الحاوية:", e);
+    }
+    setDeletingContainerId(null);
+  };
+
+  const openAddContainer = () => {
+    setEditingContainer(null);
+    setContainerForm({ name: "", fillLevel: "" });
+    setShowContainerModal(true);
+  };
+
+  const openEditContainer = (c) => {
+    setEditingContainer(c);
+    setContainerForm({ name: c.name, fillLevel: String(c.fillLevel) });
+    setShowContainerModal(true);
+  };
+
+  const F = ARABIC_FONT;
+  const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: F, outline: "none", boxSizing: "border-box" };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {["الكل", "طبيعي", "تحذير", "حرج"].map((f) => (
-          <button key={f} onClick={() => setFilter(f)} style={{
-            padding: "8px 18px", borderRadius: 10, border: `1px solid ${filter === f ? C.accent : C.border}`,
-            background: filter === f ? C.accent + "20" : "transparent", color: filter === f ? C.accent : C.muted,
-            cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ARABIC_FONT,
-          }}>{f}</button>
-        ))}
-      </div>
 
-      {selected ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <button onClick={() => setSelected(null)} style={{ alignSelf: "flex-start", padding: "6px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.accent, cursor: "pointer", fontSize: 13, fontFamily: ARABIC_FONT }}>
-            ← العودة للقائمة
-          </button>
-          <Card>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-              <div>
-                <h2 style={{ fontSize: 22, fontWeight: 800, color: C.text, margin: 0 }}>{selected.name}</h2>
-                <span style={{ fontSize: 13, color: C.muted }}>{selected.id} | {selected.district} | بريدة</span>
-              </div>
-              <StatusBadge status={selected.status} />
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 16, marginBottom: 24 }}>
+      {/* ─── Toolbar ─────────────────────────────────────── */}
+      {!currentSelected && (
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          {/* Row 1: Filter + Add */}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
               {[
-                { label: "مستوى الامتلاء", val: selected.fillLevel, color: selected.fillLevel > 85 ? C.danger : selected.fillLevel > 60 ? C.warning : C.accent },
-                { label: "صحة المحرك", val: selected.motorHealth, color: selected.motorHealth > 80 ? C.accent : C.warning },
-                { label: "معدل الشفط", val: selected.suctionRate, color: C.info },
-              ].map((item, i) => (
-                <div key={i} style={{ background: C.bg, borderRadius: 12, padding: 16, textAlign: "center" }}>
-                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>{item.label}</div>
-                  <div style={{ display: "flex", justifyContent: "center" }}><CircularGauge value={item.val} color={item.color} size={90} /></div>
-                </div>
+                { key:"الكل",    color:C.accent },
+                { key:"طبيعي",  color:C.accent },
+                { key:"تحذير",  color:C.warning },
+                { key:"حرج",    color:C.danger  },
+              ].map(({key,color}) => (
+                <button key={key} onClick={() => setFilter(key)} style={{
+                  padding:"8px 18px", borderRadius:10,
+                  border:`1px solid ${filter===key ? color : C.border}`,
+                  background: filter===key ? color+"20" : "transparent",
+                  color: filter===key ? color : C.muted,
+                  cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:F,
+                }}>{key}</button>
               ))}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 24 }}>
+            <button onClick={() => { setShowAddStation(true); setStationError(""); setStationForm(emptyStation); }} style={{
+              padding:"10px 20px", borderRadius:10, border:"none",
+              background:"linear-gradient(135deg,#10b981,#059669)", color:"#000",
+              fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:F,
+            }}>➕ إضافة محطة</button>
+          </div>
+
+          {/* Row 2: Sort */}
+          <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+            <span style={{ fontSize:12, color:C.dim, fontFamily:F }}>ترتيب:</span>
+            {[
+              { key:"fillDesc",   label:"⬇ الأعلى امتلاءً" },
+              { key:"fillAsc",    label:"⬆ الأقل امتلاءً"  },
+              { key:"containers", label:"📦 عدد الحاويات"   },
+            ].map(({key,label}) => (
+              <button key={key} onClick={() => setSort(key)} style={{
+                padding:"6px 14px", borderRadius:8,
+                border:`1px solid ${sort===key ? C.info : C.border}`,
+                background: sort===key ? C.info+"20" : "transparent",
+                color: sort===key ? C.info : C.muted,
+                cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:F,
+              }}>{label}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Add Station Modal ───────────────────────────── */}
+      {showAddStation && (
+        <div style={{ position:"fixed", inset:0, background:"#000b", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }} onClick={() => setShowAddStation(false)}>
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:20, padding:28, width:500, maxWidth:"95vw", direction:"rtl" }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:18, fontWeight:800, color:C.text, marginBottom:20, fontFamily:F }}>🏭 إضافة محطة جديدة</div>
+            {stationError && <div style={{ fontSize:12, color:C.danger, background:C.danger+"15", padding:"8px 12px", borderRadius:8, marginBottom:14, border:`1px solid ${C.danger}30` }}>⚠️ {stationError}</div>}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div style={{ gridColumn:"1/-1" }}>
+                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>اسم المحطة *</label>
+                <input value={stationForm.name} onChange={e => setStationForm(p=>({...p,name:e.target.value}))} placeholder="مثال: محطة حي الخليج" style={inp} />
+              </div>
+              <div style={{ gridColumn:"1/-1" }}>
+                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>الحي *</label>
+                <input value={stationForm.district} onChange={e => setStationForm(p=>({...p,district:e.target.value}))} placeholder="اكتب اسم الحي" style={inp} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>مستوى الامتلاء (%) *</label>
+                <input type="number" min="0" max="100" value={stationForm.fillLevel} onChange={e => setStationForm(p=>({...p,fillLevel:e.target.value}))} placeholder="0–100" style={inp} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>الضغط (بار) *</label>
+                <input type="number" step="0.1" min="0" value={stationForm.pressure} onChange={e => setStationForm(p=>({...p,pressure:e.target.value}))} placeholder="مثال: 2.5" style={inp} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>نوع النفايات *</label>
+                <select value={stationForm.wasteType} onChange={e => setStationForm(p=>({...p,wasteType:e.target.value}))} style={{...inp,appearance:"auto"}}>
+                  {["عضوية","بلاستيك","ورق","زجاج","معادن","مختلط"].map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>الكمية اليومية (كجم) *</label>
+                <input type="number" min="0" value={stationForm.dailyWaste} onChange={e => setStationForm(p=>({...p,dailyWaste:e.target.value}))} placeholder="مثال: 150" style={inp} />
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:10, marginTop:20 }}>
+              <button onClick={handleAddStation} disabled={stationLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:stationLoading?"#334155":"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontWeight:700, cursor:stationLoading?"not-allowed":"pointer", fontFamily:F, fontSize:13 }}>
+                {stationLoading ? "جاري الحفظ..." : "💾 حفظ المحطة"}
+              </button>
+              <button onClick={() => setShowAddStation(false)} style={{ padding:"12px 20px", borderRadius:10, border:`1px solid ${C.border}`, background:"transparent", color:C.muted, cursor:"pointer", fontFamily:F, fontSize:13 }}>إلغاء</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Container Add/Edit Modal ────────────────────── */}
+      {showContainerModal && (
+        <div style={{ position:"fixed", inset:0, background:"#000b", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }} onClick={() => setShowContainerModal(false)}>
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:20, padding:28, width:380, maxWidth:"95vw", direction:"rtl" }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:20, fontFamily:F }}>
+              {editingContainer ? "✏️ تعديل الحاوية" : "➕ إضافة حاوية جديدة"}
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+              <div>
+                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>اسم الحاوية *</label>
+                <input value={containerForm.name} onChange={e => setContainerForm(p=>({...p,name:e.target.value}))} placeholder="مثال: حاوية منزل 5" style={inp} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>مستوى الامتلاء (%) *</label>
+                <input type="number" min="0" max="100" value={containerForm.fillLevel} onChange={e => setContainerForm(p=>({...p,fillLevel:e.target.value}))} placeholder="0–100" style={inp} />
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:10, marginTop:20 }}>
+              <button onClick={handleSaveContainer} disabled={containerLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:containerLoading?"#334155":"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontWeight:700, cursor:containerLoading?"not-allowed":"pointer", fontFamily:F, fontSize:13 }}>
+                {containerLoading ? "جاري الحفظ..." : "💾 حفظ"}
+              </button>
+              <button onClick={() => { setShowContainerModal(false); setEditingContainer(null); }} style={{ padding:"12px 20px", borderRadius:10, border:`1px solid ${C.border}`, background:"transparent", color:C.muted, cursor:"pointer", fontFamily:F, fontSize:13 }}>إلغاء</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Station Detail View ─────────────────────────── */}
+      {currentSelected ? (
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          <button onClick={() => { setSelectedId(null); setDeletingContainerId(null); }} style={{ alignSelf:"flex-start", padding:"6px 16px", borderRadius:8, border:`1px solid ${C.border}`, background:"transparent", color:C.accent, cursor:"pointer", fontSize:13, fontFamily:F }}>
+            ← العودة للقائمة
+          </button>
+
+          {/* Station Info */}
+          <Card>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+              <div>
+                <h2 style={{ fontSize:22, fontWeight:800, color:C.text, margin:0 }}>{currentSelected.name}</h2>
+                <span style={{ fontSize:13, color:C.muted }}>{currentSelected.district} | بريدة</span>
+              </div>
+              <StatusBadge status={getStatus(currentSelected.fillLevel)} />
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px,1fr))", gap:16, marginBottom:24 }}>
+              <div style={{ background:C.bg, borderRadius:12, padding:16, textAlign:"center" }}>
+                <div style={{ fontSize:12, color:C.muted, marginBottom:10 }}>مستوى الامتلاء</div>
+                <div style={{ display:"flex", justifyContent:"center" }}>
+                  <CircularGauge value={currentSelected.fillLevel} color={currentSelected.fillLevel>=85?C.danger:currentSelected.fillLevel>=60?C.warning:C.accent} size={90} />
+                </div>
+              </div>
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(180px,1fr))", gap:12 }}>
               {[
-                { label: "نوع النفايات", val: selected.wasteType, icon: "🗑️" },
-                { label: "الضغط", val: `${selected.pressure} بار`, icon: "🔧" },
-                { label: "درجة الحرارة", val: `${selected.temperature}°C`, icon: "🌡️" },
-                { label: "الكمية اليومية", val: `${selected.dailyAvg} كجم`, icon: "📦" },
-                { label: "آخر تفريغ", val: selected.lastCollection, icon: "🕐" },
-                { label: "الموقع", val: `${selected.lat.toFixed(4)}, ${selected.lng.toFixed(4)}`, icon: "📍" },
-              ].map((item, i) => (
-                <div key={i} style={{ background: C.bg, borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 20 }}>{item.icon}</span>
+                { label:"نوع النفايات", val:currentSelected.wasteType, icon:"🗑️" },
+                { label:"الضغط", val:`${currentSelected.pressure} بار`, icon:"🔧" },
+                { label:"الكمية اليومية", val:`${currentSelected.dailyWaste||0} كجم`, icon:"📦" },
+                { label:"الحي", val:currentSelected.district||"—", icon:"📍" },
+              ].map((item,i) => (
+                <div key={i} style={{ background:C.bg, borderRadius:10, padding:"12px 14px", display:"flex", alignItems:"center", gap:10 }}>
+                  <span style={{ fontSize:20 }}>{item.icon}</span>
                   <div>
-                    <div style={{ fontSize: 10, color: C.dim }}>{item.label}</div>
-                    <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{item.val}</div>
+                    <div style={{ fontSize:10, color:C.dim }}>{item.label}</div>
+                    <div style={{ fontSize:13, color:C.text, fontWeight:600 }}>{item.val}</div>
                   </div>
                 </div>
               ))}
             </div>
           </Card>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          {/* ─── Containers Section ──────────────────────── */}
+          {(() => {
+            const ctrs      = currentSelected.containers || [];
+            const cCrit     = ctrs.filter(c => getStatus(c.fillLevel) === "حرج");
+            const cWarn     = ctrs.filter(c => getStatus(c.fillLevel) === "تحذير");
+            const cNorm     = ctrs.filter(c => getStatus(c.fillLevel) === "طبيعي");
+            // مرتبة: حرج → تحذير → طبيعي
+            const sorted    = [...cCrit, ...cWarn, ...cNorm];
+            const avgFill   = ctrs.length ? Math.round(ctrs.reduce((a,c)=>a+c.fillLevel,0)/ctrs.length) : 0;
+
+            return (
+              <Card title="حاويات المنازل" icon="📦">
+                {/* ── مؤشرات الملخص ─────────────────────── */}
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, marginBottom:18 }}>
+                  {[
+                    { label:"إجمالي الحاويات", val:ctrs.length,   color:C.info,    icon:"📦" },
+                    { label:"حرج",             val:cCrit.length,  color:C.danger,  icon:"🔴" },
+                    { label:"تحذير",           val:cWarn.length,  color:C.warning, icon:"🟡" },
+                    { label:"متوسط الامتلاء",  val:`${avgFill}%`, color:avgFill>=85?C.danger:avgFill>=60?C.warning:C.accent, icon:"📊" },
+                  ].map((m,i) => (
+                    <div key={i} style={{ background:C.bg, borderRadius:12, padding:"12px 14px", textAlign:"center", border:`1px solid ${m.color}25` }}>
+                      <div style={{ fontSize:20, marginBottom:4 }}>{m.icon}</div>
+                      <div style={{ fontSize:22, fontWeight:800, color:m.color }}>{m.val}</div>
+                      <div style={{ fontSize:10, color:C.dim, marginTop:2 }}>{m.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* ── تنبيه الخطر ─────────────────────────── */}
+                {cCrit.length > 0 && (
+                  <div style={{ background:C.danger+"12", border:`1px solid ${C.danger}40`, borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:12, color:C.danger, fontWeight:600, display:"flex", alignItems:"center", gap:8 }}>
+                    ⚠️ {cCrit.length} حاوية بحالة حرج — تحتاج تفريغاً فورياً:&nbsp;
+                    {cCrit.map(c=><span key={c.id} style={{ background:C.danger+"20", borderRadius:6, padding:"2px 7px", marginLeft:4 }}>{c.name}</span>)}
+                  </div>
+                )}
+
+                {/* ── شريط الترتيب + زر الإضافة ─────────── */}
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                  <div style={{ fontSize:11, color:C.dim, fontFamily:F }}>
+                    مرتبة: حرج أولاً ← تحذير ← طبيعي
+                  </div>
+                  <button onClick={openAddContainer} style={{ padding:"8px 16px", borderRadius:8, border:"none", background:"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:F }}>
+                    ➕ إضافة حاوية
+                  </button>
+                </div>
+
+                {ctrs.length === 0 ? (
+                  <div style={{ textAlign:"center", padding:"40px 0", color:C.dim, fontSize:13 }}>
+                    <div style={{ fontSize:36, marginBottom:10 }}>📭</div>
+                    لا توجد حاويات — اضغط "إضافة حاوية" للبدء
+                  </div>
+                ) : (
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(210px,1fr))", gap:12 }}>
+                    {sorted.map((c, idx) => {
+                      const st      = getStatus(c.fillLevel);
+                      const stColor = st==="حرج" ? C.danger : st==="تحذير" ? C.warning : C.accent;
+
+                      return (
+                        <div key={c.id} style={{ background:C.bg, borderRadius:12, padding:14, border:`1px solid ${stColor}50`, position:"relative", overflow:"hidden" }}>
+                          {/* شريط الامتلاء العلوي */}
+                          <div style={{ position:"absolute", top:0, left:0, right:0, height:4, background:C.border }}>
+                            <div style={{ width:`${c.fillLevel}%`, height:"100%", background:stColor, transition:"width 0.6s" }} />
+                          </div>
+
+                          {/* رقم الترتيب */}
+                          <div style={{ position:"absolute", top:8, right:10, fontSize:9, color:C.dim }}>#{idx+1}</div>
+
+                          {/* اسم + أزرار */}
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, marginTop:6 }}>
+                            <div style={{ fontSize:13, fontWeight:700, color:C.text, flex:1, marginLeft:6, lineHeight:1.3 }}>{c.name}</div>
+                            <div style={{ display:"flex", gap:2, flexShrink:0 }}>
+                              <button onClick={e=>{e.stopPropagation();openEditContainer(c);}} title="تعديل" style={{ background:"none", border:"none", cursor:"pointer", fontSize:13, padding:"2px 4px", color:C.info }}>✏️</button>
+                              {deletingContainerId === c.id ? (
+                                <>
+                                  <button onClick={e=>{e.stopPropagation();handleDeleteContainer(c.id);}} style={{ background:C.danger, border:"none", color:"#fff", fontSize:10, fontWeight:700, cursor:"pointer", borderRadius:5, padding:"2px 7px", fontFamily:F }}>تأكيد</button>
+                                  <button onClick={e=>{e.stopPropagation();setDeletingContainerId(null);}} style={{ background:"#334155", border:"none", color:C.muted, fontSize:10, cursor:"pointer", borderRadius:5, padding:"2px 7px", fontFamily:F }}>إلغاء</button>
+                                </>
+                              ) : (
+                                <button onClick={e=>{e.stopPropagation();setDeletingContainerId(c.id);}} title="حذف" style={{ background:"none", border:"none", cursor:"pointer", fontSize:13, padding:"2px 4px" }}>🗑️</button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* نسبة + badge */}
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                            <div style={{ fontSize:28, fontWeight:900, color:stColor, lineHeight:1 }}>{c.fillLevel}%</div>
+                            <StatusBadge status={st} />
+                          </div>
+
+                          {/* شريط التقدم */}
+                          <div style={{ height:8, background:C.card, borderRadius:4, overflow:"hidden" }}>
+                            <div style={{ width:`${c.fillLevel}%`, height:"100%", background:stColor, borderRadius:4, transition:"width 0.6s ease",
+                              boxShadow: st==="حرج" ? `0 0 8px ${C.danger}80` : "none"
+                            }} />
+                          </div>
+
+                          {/* تنبيه حرج */}
+                          {st === "حرج" && (
+                            <div style={{ marginTop:8, fontSize:10, color:C.danger, fontWeight:700, textAlign:"center",
+                              background:C.danger+"15", borderRadius:6, padding:"3px 0" }}>
+                              ⚠️ يحتاج تفريغاً فورياً
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+            );
+          })()}
+
+          {/* Charts */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
             <Card title="سجل الامتلاء والضغط" icon="📈">
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={fakeHistory}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                  <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
+                  <XAxis dataKey="day" tick={{ fill:C.muted, fontSize:10, fontFamily:F }} />
+                  <YAxis tick={{ fill:C.muted, fontSize:10 }} />
                   <Tooltip content={<CustomTooltip />} />
-                  <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                  <Line type="monotone" dataKey="الامتلاء" stroke={C.warning} strokeWidth={2} dot={{ r: 3 }} name="الامتلاء %" />
-                  <Line type="monotone" dataKey="الضغط" stroke={C.info} strokeWidth={2} dot={{ r: 3 }} name="الضغط (بار)" />
+                  <Legend wrapperStyle={{ fontFamily:F, fontSize:11 }} />
+                  <Line type="monotone" dataKey="الامتلاء" stroke={C.warning} strokeWidth={2} dot={{ r:3 }} name="الامتلاء %" />
+                  <Line type="monotone" dataKey="الضغط" stroke={C.info} strokeWidth={2} dot={{ r:3 }} name="الضغط (بار)" />
                 </LineChart>
               </ResponsiveContainer>
             </Card>
@@ -720,40 +1243,104 @@ const StationsPage = ({ stations }) => {
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={fakeHistory}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                  <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
+                  <XAxis dataKey="day" tick={{ fill:C.muted, fontSize:10, fontFamily:F }} />
+                  <YAxis tick={{ fill:C.muted, fontSize:10 }} />
                   <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="الكمية" fill={C.accent} radius={[6, 6, 0, 0]} name="الكمية (كجم)" />
+                  <Bar dataKey="الكمية" fill={C.accent} radius={[6,6,0,0]} name="الكمية (كجم)" />
                 </BarChart>
               </ResponsiveContainer>
             </Card>
           </div>
         </div>
+
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
-          {filtered.map((s) => (
-            <div key={s.id} onClick={() => setSelected(s)} style={{
-              background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, cursor: "pointer",
-              transition: "all 0.2s", position: "relative", overflow: "hidden",
-            }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.accent + "60"; e.currentTarget.style.background = C.cardHover; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.card; }}
-            >
-              <div style={{ position: "absolute", top: 0, left: 0, width: `${s.fillLevel}%`, height: 3, background: s.status === "حرج" ? C.danger : s.status === "تحذير" ? C.warning : C.accent }} />
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{s.name}</div>
-                  <div style={{ fontSize: 11, color: C.dim }}>{s.id} | بريدة</div>
+        /* ─── Stations Grid ────────────────────────────── */
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(300px,1fr))", gap:16 }}>
+          {filtered.map(s => {
+            const st        = getStatus(s.fillLevel);
+            const stColor   = st==="حرج" ? C.danger : st==="تحذير" ? C.warning : C.accent;
+            const ctrs      = s.containers || [];
+            const ctrCrit   = ctrs.filter(c => getStatus(c.fillLevel)==="حرج").length;
+            const ctrWarn   = ctrs.filter(c => getStatus(c.fillLevel)==="تحذير").length;
+
+            return (
+              <div key={s.id} onClick={() => setSelectedId(s.id)} style={{
+                background:C.card, border:`1px solid ${C.border}`, borderRadius:16,
+                cursor:"pointer", transition:"all 0.2s", position:"relative", overflow:"hidden",
+              }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor=stColor+"70"; e.currentTarget.style.background=C.cardHover; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor=C.border;     e.currentTarget.style.background=C.card; }}
+              >
+                {/* Top fill bar */}
+                <div style={{ position:"absolute", top:0, left:0, width:`${s.fillLevel}%`, height:3, background:stColor, transition:"width 0.6s" }} />
+
+                <div style={{ padding:18 }}>
+                  {/* Header */}
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
+                    <div>
+                      <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{s.name}</div>
+                      <div style={{ fontSize:11, color:C.dim, marginTop:2 }}>📍 {s.district||"—"} | بريدة</div>
+                    </div>
+                    <StatusBadge status={st} />
+                  </div>
+
+                  {/* Stats row */}
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:12 }}>
+                    {[
+                      { l:"الامتلاء",  v:`${s.fillLevel}%`,         vc:stColor },
+                      { l:"الضغط",     v:`${s.pressure||0} بار`,    vc:C.text  },
+                      { l:"النوع",     v:s.wasteType||"—",           vc:C.text  },
+                      { l:"يومياً",   v:`${s.dailyWaste||0} كجم`,   vc:C.text  },
+                    ].map((x,i) => (
+                      <div key={i} style={{ background:C.bg, borderRadius:8, padding:"7px 10px" }}>
+                        <div style={{ fontSize:10, color:C.dim, marginBottom:2 }}>{x.l}</div>
+                        <div style={{ fontSize:12, fontWeight:700, color:x.vc }}>{x.v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Containers summary */}
+                  <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:10 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: ctrs.length ? 8 : 0 }}>
+                      <span style={{ fontSize:12, fontWeight:700, color:C.muted }}>📦 عدد الحاويات: <span style={{ color:C.text }}>{ctrs.length}</span></span>
+                      <div style={{ display:"flex", gap:6 }}>
+                        {ctrCrit > 0 && <span style={{ fontSize:10, fontWeight:700, color:C.danger, background:C.danger+"15", padding:"2px 7px", borderRadius:6 }}>🔴 {ctrCrit} حرج</span>}
+                        {ctrWarn > 0 && <span style={{ fontSize:10, fontWeight:700, color:C.warning, background:C.warning+"15", padding:"2px 7px", borderRadius:6 }}>🟡 {ctrWarn} تحذير</span>}
+                      </div>
+                    </div>
+
+                    {/* Container mini-list (max 3 shown) */}
+                    {ctrs.length > 0 && (
+                      <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                        {ctrs.slice(0,3).map(c => {
+                          const cSt    = getStatus(c.fillLevel);
+                          const cColor = cSt==="حرج" ? C.danger : cSt==="تحذير" ? C.warning : C.accent;
+                          return (
+                            <div key={c.id} style={{ display:"flex", alignItems:"center", gap:8, background:C.bg, borderRadius:8, padding:"6px 10px" }}>
+                              <div style={{ flex:1, fontSize:11, color:C.text, fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.name}</div>
+                              <div style={{ fontSize:11, fontWeight:700, color:cColor, whiteSpace:"nowrap" }}>{c.fillLevel}%</div>
+                              <div style={{ width:50, height:5, background:C.border, borderRadius:3, overflow:"hidden" }}>
+                                <div style={{ width:`${c.fillLevel}%`, height:"100%", background:cColor, borderRadius:3 }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {ctrs.length > 3 && (
+                          <div style={{ fontSize:11, color:C.dim, textAlign:"center", paddingTop:2 }}>+ {ctrs.length-3} حاويات أخرى — اضغط للتفاصيل</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <StatusBadge status={s.status} />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                {[{ l: "الامتلاء", v: `${s.fillLevel}%` }, { l: "الضغط", v: `${s.pressure} بار` }, { l: "النوع", v: s.wasteType }, { l: "يومياً", v: `${s.dailyAvg} كجم` }].map((x, i) => (
-                  <div key={i} style={{ fontSize: 11, color: C.dim }}>{x.l}: <span style={{ color: C.text, fontWeight: 600 }}>{x.v}</span></div>
-                ))}
-              </div>
+            );
+          })}
+          {filtered.length === 0 && (
+            <div style={{ gridColumn:"1/-1", textAlign:"center", padding:"60px 0", color:C.dim, fontSize:14 }}>
+              <div style={{ fontSize:40, marginBottom:10 }}>🔍</div>
+              لا توجد محطات في هذه الفئة
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -2136,6 +2723,318 @@ const SettingsPage = () => {
   );
 };
 
+// ======================== SUCTION CONTROL PAGE ========================
+const SuctionControlPage = ({ stations, user }) => {
+  const F = ARABIC_FONT;
+  const inp = { width:"100%", padding:"10px 14px", borderRadius:10, border:`1px solid ${C.border}`, background:C.bg, color:C.text, fontSize:13, fontFamily:F, outline:"none", boxSizing:"border-box" };
+
+  // ─── form state ────────────────────────────────────────────
+  const [cmdType, setCmdType]         = useState("container_to_station"); // | station_to_central
+  const [selStation, setSelStation]   = useState("");
+  const [selContainer, setSelContainer] = useState("");
+  const [mode, setMode]               = useState("immediate");            // | scheduled | recurring
+  const [schedDate, setSchedDate]     = useState("");
+  const [schedTime, setSchedTime]     = useState("06:00");
+  const [saving, setSaving]           = useState(false);
+  const [saveMsg, setSaveMsg]         = useState("");
+
+  // ─── live jobs from Firestore ──────────────────────────────
+  const [jobs, setJobs] = useState([]);
+  useEffect(() => {
+    const q = query(collection(db, "suctionJobs"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, snap => {
+      setJobs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, err => console.error("suctionJobs snapshot:", err));
+    return () => unsub();
+  }, []);
+
+  // ─── derived helpers ───────────────────────────────────────
+  const station     = stations.find(s => s.id === selStation);
+  const containers  = station?.containers || [];
+
+  const buildJob = () => {
+    const now = new Date().toISOString();
+    const base = {
+      type: cmdType,
+      createdAt: now,
+      createdBy: user?.name || "موظف",
+      status: mode === "immediate" ? "pending" : "scheduled",
+      mode,
+    };
+    if (cmdType === "container_to_station") {
+      const ctr = containers.find(c => c.id === selContainer);
+      return { ...base,
+        sourceName: ctr?.name || selContainer,
+        sourceId:   selContainer,
+        targetName: station?.name || selStation,
+        targetId:   selStation,
+      };
+    } else {
+      return { ...base,
+        sourceName: station?.name || selStation,
+        sourceId:   selStation,
+        targetName: "المحطة المركزية",
+        targetId:   "central",
+      };
+    }
+  };
+
+  const handleIssue = async () => {
+    if (!selStation) { setSaveMsg("⚠️ اختر المحطة أولاً"); return; }
+    if (cmdType === "container_to_station" && !selContainer) { setSaveMsg("⚠️ اختر الحاوية"); return; }
+    if (mode === "scheduled" && (!schedDate || !schedTime)) { setSaveMsg("⚠️ حدد التاريخ والوقت"); return; }
+    if (mode === "recurring" && !schedTime) { setSaveMsg("⚠️ حدد وقت التكرار اليومي"); return; }
+
+    setSaving(true); setSaveMsg("");
+    try {
+      const job = buildJob();
+      if (mode === "scheduled")  job.scheduledAt   = `${schedDate}T${schedTime}:00`;
+      if (mode === "recurring")  job.recurringTime  = schedTime;
+      await addDoc(collection(db, "suctionJobs"), job);
+      setSaveMsg("✅ تم إصدار الأمر بنجاح");
+      setSelStation(""); setSelContainer(""); setSchedDate("");
+    } catch (e) {
+      setSaveMsg("❌ خطأ: " + e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancel = async (jobId) => {
+    try { await updateDoc(doc(db, "suctionJobs", jobId), { status: "cancelled" }); }
+    catch (e) { console.error(e); }
+  };
+
+  const handleComplete = async (jobId) => {
+    try { await updateDoc(doc(db, "suctionJobs", jobId), { status: "completed", completedAt: new Date().toISOString() }); }
+    catch (e) { console.error(e); }
+  };
+
+  const statusStyle = (s) => ({
+    pending:   { bg:"#3b82f615", color:C.info,    label:"⏳ في الانتظار"  },
+    scheduled: { bg:"#8b5cf615", color:C.purple,  label:"🕐 مجدول"       },
+    active:    { bg:"#10b98115", color:C.accent,  label:"▶ جاري الشفط"   },
+    completed: { bg:"#10b98115", color:C.accent,  label:"✅ مكتمل"        },
+    cancelled: { bg:"#ef444415", color:C.danger,  label:"✖ ملغي"         },
+  }[s] || { bg:C.border, color:C.muted, label:s });
+
+  const pendingJobs   = jobs.filter(j => ["pending","scheduled","active"].includes(j.status));
+  const historyJobs   = jobs.filter(j => ["completed","cancelled"].includes(j.status)).slice(0,10);
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:18, direction:"rtl", fontFamily:F }}>
+
+      {/* ─── Stats bar ───────────────────────────────────── */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+        {[
+          { label:"أوامر نشطة",   val:jobs.filter(j=>j.status==="pending"||j.status==="active").length,  color:C.info,   icon:"⚡" },
+          { label:"مجدولة",       val:jobs.filter(j=>j.status==="scheduled").length,                     color:C.purple, icon:"🕐" },
+          { label:"مكتملة اليوم", val:jobs.filter(j=>j.status==="completed"&&j.completedAt?.startsWith(new Date().toISOString().slice(0,10))).length, color:C.accent, icon:"✅" },
+          { label:"إجمالي الأوامر",val:jobs.length,                                                      color:C.muted,  icon:"📋" },
+        ].map((m,i)=>(
+          <div key={i} style={{ background:C.card, border:`1px solid ${m.color}25`, borderRadius:14, padding:"14px 18px", textAlign:"center" }}>
+            <div style={{ fontSize:22, marginBottom:4 }}>{m.icon}</div>
+            <div style={{ fontSize:26, fontWeight:900, color:m.color }}>{m.val}</div>
+            <div style={{ fontSize:11, color:C.dim, marginTop:2 }}>{m.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+
+        {/* ─── Issue Command ───────────────────────────── */}
+        <Card title="إصدار أمر شفط" icon="🚿">
+
+          {/* نوع العملية */}
+          <div style={{ marginBottom:16 }}>
+            <label style={{ fontSize:11, color:C.muted, marginBottom:8, display:"block" }}>نوع عملية الشفط</label>
+            <div style={{ display:"flex", gap:8 }}>
+              {[
+                { key:"container_to_station", label:"🗑️ حاوية → محطة الحي"       },
+                { key:"station_to_central",   label:"🏭 محطة الحي → المركزية" },
+              ].map(t=>(
+                <button key={t.key} onClick={()=>{ setCmdType(t.key); setSelContainer(""); }} style={{
+                  flex:1, padding:"10px 8px", borderRadius:10,
+                  border:`2px solid ${cmdType===t.key?C.accent:C.border}`,
+                  background: cmdType===t.key ? C.accent+"15" : "transparent",
+                  color: cmdType===t.key ? C.accent : C.muted,
+                  cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F, textAlign:"center",
+                }}>{t.label}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* اختيار المحطة */}
+          <div style={{ marginBottom:12 }}>
+            <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>
+              {cmdType==="container_to_station" ? "محطة الحي (الوجهة)" : "محطة الحي (المصدر)"}
+            </label>
+            <select value={selStation} onChange={e=>{setSelStation(e.target.value);setSelContainer("");}}
+              style={{...inp,appearance:"auto"}}>
+              <option value="">— اختر المحطة —</option>
+              {stations.map(s=>(
+                <option key={s.id} value={s.id}>{s.name} ({getStatus(s.fillLevel)} — {s.fillLevel}%)</option>
+              ))}
+            </select>
+          </div>
+
+          {/* اختيار الحاوية (فقط لنوع container_to_station) */}
+          {cmdType==="container_to_station" && (
+            <div style={{ marginBottom:12 }}>
+              <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>الحاوية (المصدر)</label>
+              <select value={selContainer} onChange={e=>setSelContainer(e.target.value)}
+                disabled={!selStation} style={{...inp,appearance:"auto",opacity:selStation?1:0.5}}>
+                <option value="">— اختر الحاوية —</option>
+                {[...containers]
+                  .sort((a,b)=>b.fillLevel-a.fillLevel)
+                  .map(c=>(
+                  <option key={c.id} value={c.id}>
+                    {c.name} — {c.fillLevel}% ({getStatus(c.fillLevel)})
+                  </option>
+                ))}
+              </select>
+              {selStation && containers.length===0 && (
+                <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>لا توجد حاويات في هذه المحطة</div>
+              )}
+            </div>
+          )}
+
+          {/* معاينة الرحلة */}
+          {selStation && (cmdType==="station_to_central" || selContainer) && (
+            <div style={{ background:`${C.accent}10`, border:`1px solid ${C.accent}30`, borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:12, color:C.accent }}>
+              🚿 <strong>مسار الشفط:</strong>&nbsp;
+              {cmdType==="container_to_station"
+                ? `${containers.find(c=>c.id===selContainer)?.name || ""} → ${station?.name || ""}`
+                : `${station?.name || ""} → المحطة المركزية`}
+            </div>
+          )}
+
+          {/* ─── وقت التنفيذ ─── */}
+          <div style={{ marginBottom:14 }}>
+            <label style={{ fontSize:11, color:C.muted, marginBottom:8, display:"block" }}>وقت التنفيذ</label>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              {[
+                { key:"immediate", label:"⚡ فوري"       },
+                { key:"scheduled", label:"📅 وقت محدد"   },
+                { key:"recurring", label:"🔁 يومي تلقائي" },
+              ].map(m=>(
+                <button key={m.key} onClick={()=>setMode(m.key)} style={{
+                  flex:1, minWidth:80, padding:"8px 6px", borderRadius:9,
+                  border:`1px solid ${mode===m.key?C.info:C.border}`,
+                  background: mode===m.key ? C.info+"18" : "transparent",
+                  color: mode===m.key ? C.info : C.muted,
+                  cursor:"pointer", fontSize:11, fontWeight:700, fontFamily:F, textAlign:"center",
+                }}>{m.label}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* حقول الوقت */}
+          {mode==="scheduled" && (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
+              <div>
+                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>التاريخ</label>
+                <input type="date" value={schedDate} onChange={e=>setSchedDate(e.target.value)} style={inp} min={new Date().toISOString().slice(0,10)} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>الوقت</label>
+                <input type="time" value={schedTime} onChange={e=>setSchedTime(e.target.value)} style={inp} />
+              </div>
+            </div>
+          )}
+          {mode==="recurring" && (
+            <div style={{ marginBottom:12 }}>
+              <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>وقت التنفيذ اليومي</label>
+              <input type="time" value={schedTime} onChange={e=>setSchedTime(e.target.value)} style={inp} />
+              <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>🔁 سيتكرر كل يوم في هذا الوقت</div>
+            </div>
+          )}
+
+          {saveMsg && (
+            <div style={{ fontSize:12, padding:"8px 12px", borderRadius:8, marginBottom:12,
+              background: saveMsg.startsWith("✅") ? C.accent+"15" : C.danger+"15",
+              color:       saveMsg.startsWith("✅") ? C.accent       : C.danger,
+              border:`1px solid ${saveMsg.startsWith("✅")?C.accent:C.danger}30`
+            }}>{saveMsg}</div>
+          )}
+
+          <button onClick={handleIssue} disabled={saving} style={{
+            width:"100%", padding:13, borderRadius:10, border:"none",
+            background: saving ? "#334155" : "linear-gradient(135deg,#10b981,#059669)",
+            color:"#000", fontWeight:800, fontSize:14, cursor:saving?"not-allowed":"pointer", fontFamily:F,
+          }}>
+            {saving ? "جاري الإرسال..." : mode==="immediate" ? "⚡ تنفيذ الشفط الآن" : mode==="scheduled" ? "📅 جدولة الأمر" : "🔁 تفعيل الجدول اليومي"}
+          </button>
+        </Card>
+
+        {/* ─── Active + Scheduled Jobs ─────────────────── */}
+        <Card title="الأوامر النشطة والمجدولة" icon="📋">
+          {pendingJobs.length===0 ? (
+            <div style={{ textAlign:"center", padding:"50px 0", color:C.dim, fontSize:13 }}>
+              <div style={{ fontSize:36, marginBottom:8 }}>📭</div>لا توجد أوامر نشطة
+            </div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:10, maxHeight:380, overflowY:"auto" }}>
+              {pendingJobs.map(job => {
+                const ss = statusStyle(job.status);
+                return (
+                  <div key={job.id} style={{ background:C.bg, borderRadius:12, padding:"12px 14px", border:`1px solid ${C.border}` }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
+                      <div style={{ fontSize:13, fontWeight:700, color:C.text }}>
+                        {job.type==="container_to_station" ? "🗑️ → 🏭" : "🏭 → 🏛️"}&nbsp;
+                        <span style={{ fontSize:12, fontWeight:600 }}>{job.sourceName}</span>
+                        <span style={{ color:C.dim }}> → </span>
+                        <span style={{ fontSize:12, fontWeight:600 }}>{job.targetName}</span>
+                      </div>
+                      <span style={{ fontSize:11, fontWeight:700, color:ss.color, background:ss.bg, padding:"3px 9px", borderRadius:6 }}>{ss.label}</span>
+                    </div>
+                    <div style={{ fontSize:11, color:C.dim, marginBottom:8 }}>
+                      {job.mode==="immediate"  && `⚡ فوري — ${new Date(job.createdAt).toLocaleString("ar-SA")}`}
+                      {job.mode==="scheduled"  && `📅 مجدول: ${new Date(job.scheduledAt).toLocaleString("ar-SA")}`}
+                      {job.mode==="recurring"  && `🔁 يومي في ${job.recurringTime} — بواسطة ${job.createdBy}`}
+                    </div>
+                    <div style={{ display:"flex", gap:6 }}>
+                      {job.status!=="active" && (
+                        <button onClick={()=>handleComplete(job.id)} style={{ padding:"5px 12px", borderRadius:7, border:"none", background:C.accent+"20", color:C.accent, cursor:"pointer", fontSize:11, fontWeight:700, fontFamily:F }}>✅ إتمام</button>
+                      )}
+                      <button onClick={()=>handleCancel(job.id)} style={{ padding:"5px 12px", borderRadius:7, border:"none", background:C.danger+"15", color:C.danger, cursor:"pointer", fontSize:11, fontWeight:700, fontFamily:F }}>✖ إلغاء</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* ─── History ─────────────────────────────────────── */}
+      {historyJobs.length > 0 && (
+        <Card title="سجل العمليات" icon="🕓">
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {historyJobs.map(job => {
+              const ss = statusStyle(job.status);
+              return (
+                <div key={job.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 14px", background:C.bg, borderRadius:10, fontSize:12 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <span>{job.type==="container_to_station"?"🗑️ → 🏭":"🏭 → 🏛️"}</span>
+                    <span style={{ color:C.text, fontWeight:600 }}>{job.sourceName}</span>
+                    <span style={{ color:C.dim }}>→</span>
+                    <span style={{ color:C.text, fontWeight:600 }}>{job.targetName}</span>
+                  </div>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <span style={{ color:C.dim }}>{job.completedAt ? new Date(job.completedAt).toLocaleString("ar-SA") : new Date(job.createdAt).toLocaleString("ar-SA")}</span>
+                    <span style={{ fontSize:11, fontWeight:700, color:ss.color, background:ss.bg, padding:"2px 8px", borderRadius:6 }}>{ss.label}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+};
+
 // ======================== EXECUTIVE DECISION PORTAL ========================
 const EXEC_USERS = [
   { username: "admin", password: "admin123", name: "م. عبدالله الراشد", role: "المدير التنفيذي", avatar: "👔" },
@@ -2352,7 +3251,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
           </div>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: "#f59e0b20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>{user.avatar}</div>
           <button onClick={() => window.__showAdminPanel && window.__showAdminPanel()} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #8b5cf640", background: "#8b5cf615", color: "#8b5cf6", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>👑 إدارة المستخدمين</button>
-          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: "#10b981", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>🔐 تغيير كلمة المرور</button>
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: "#10b981", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>⚙️ إعدادات الحساب</button>
           <button onClick={onLogout} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #ef444440", background: "#ef444415", color: "#ef4444", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>تسجيل خروج</button>
         </div>
       </header>
@@ -2820,7 +3719,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
             <div style={{ fontSize: 10, color: C.accent }}>{user.district}</div>
           </div>
           <div style={{ width: 38, height: 38, borderRadius: 10, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>👤</div>
-          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid #10b98140`, background: `#10b98115`, color: "#10b981", cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>🔐 تغيير كلمة المرور</button>
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid #10b98140`, background: `#10b98115`, color: "#10b981", cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>⚙️ إعدادات الحساب</button>
           <button onClick={onLogout} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.danger}40`, background: `${C.danger}15`, color: C.danger, cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>خروج</button>
         </div>
       </header>
@@ -3251,27 +4150,41 @@ const UnifiedLoginPage = ({ onLogin }) => {
 };
 
 // ======================== MAIN ========================
-const LiveClock = () => {
-  const [time, setTime] = useState(new Date());
-  useEffect(() => { const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
-  return (
-    <span style={{ fontSize: 12, color: C.dim }}>
-      مدينة بريدة • {time.toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} • {time.toLocaleTimeString("ar-SA")}
-    </span>
-  );
-};
-
 function SmartWasteManagement() {
   const { userData, userRole, logout } = useAuth();
   const [page, setPage] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [time, setTime] = useState(new Date());
   const [showPassModal, setShowPassModal] = useState(false);
 
-  const stations = useMemo(() => generateStations(), []);
+  // 📦 البيانات من Firebase
+  const [stations, setStations] = useState([]);
+  const [loadingStations, setLoadingStations] = useState(true);
   const weeklyData = useMemo(() => generateWeeklyData(), []);
   const monthlyTrend = useMemo(() => generateMonthlyTrend(), []);
   const hourlyData = useMemo(() => generateHourlyData(), []);
-  const alerts = useMemo(() => generateAlerts(), []);
+
+  // ✅ التنبيهات مشتقة من بيانات المحطات الحقيقية
+  const alerts = useMemo(() => generateAlerts(stations), [stations]);
+
+  // 🔄 الاستماع المباشر للمحطات من Firestore (Realtime)
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "stations"),
+      (snapshot) => {
+        const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        setStations(data);
+        setLoadingStations(false);
+      },
+      (error) => {
+        console.error("خطأ في الاستماع لبيانات المحطات:", error);
+        setLoadingStations(false);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => { const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
 
   // Build user object for child components from Firebase data
   const loggedInUser = userData ? {
@@ -3287,6 +4200,8 @@ function SmartWasteManagement() {
 
   const handleLogout = () => { logout(); };
 
+  if (loadingStations) return <LoadingScreen />;
+
   // Citizen portal
   if (loggedInUser.role === "citizen") {
     return <CitizenPortal user={loggedInUser} onLogout={handleLogout} stations={stations} />;
@@ -3300,11 +4215,12 @@ function SmartWasteManagement() {
   // Employee portal (default operational dashboard)
   const navItems = [
     { key: "dashboard", label: "لوحة التحكم", icon: "📊" },
-    { key: "stations", label: "المحطات", icon: "🏭" },
-    { key: "fire", label: "إنذار الحرائق", icon: "🔥" },
-    { key: "predictions", label: "التنبؤات", icon: "🔮" },
-    { key: "reports", label: "التقارير", icon: "📋" },
-    { key: "settings", label: "الإعدادات", icon: "⚙️" },
+    { key: "stations",  label: "المحطات",      icon: "🏭" },
+    { key: "control",   label: "وحدة التحكم",  icon: "🚿" },
+    { key: "fire",      label: "إنذار الحرائق", icon: "🔥" },
+    { key: "predictions", label: "التنبؤات",   icon: "🔮" },
+    { key: "reports",   label: "التقارير",      icon: "📋" },
+    { key: "settings",  label: "الإعدادات",     icon: "⚙️" },
   ];
 
   return (
@@ -3350,8 +4266,8 @@ function SmartWasteManagement() {
             border: `1px solid #10b98130`, background: `#10b98110`, color: "#10b981",
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
           }}>
-            <span style={{ fontSize: 16 }}>🔐</span>
-            {sidebarOpen && "تغيير كلمة المرور"}
+            <span style={{ fontSize: 16 }}>⚙️</span>
+            {sidebarOpen && "إعدادات الحساب"}
           </button>
           <button onClick={handleLogout} style={{
             display: "flex", alignItems: "center", gap: 10, width: "100%", padding: sidebarOpen ? "10px 14px" : "10px 0",
@@ -3371,7 +4287,7 @@ function SmartWasteManagement() {
         <header style={{ padding: "14px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", background: C.card, flexShrink: 0 }}>
           <div>
             <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: C.text }}>{navItems.find((n) => n.key === page)?.label}</h1>
-            <LiveClock />
+            <span style={{ fontSize: 12, color: C.dim }}>مدينة بريدة • {time.toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} • {time.toLocaleTimeString("ar-SA")}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <div style={{ position: "relative", width: 40, height: 40, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
@@ -3386,6 +4302,7 @@ function SmartWasteManagement() {
         <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
           {page === "dashboard" && <DashboardPage stations={stations} weeklyData={weeklyData} monthlyTrend={monthlyTrend} alerts={alerts} hourlyData={hourlyData} />}
           {page === "stations" && <StationsPage stations={stations} />}
+          {page === "control"  && <SuctionControlPage stations={stations} user={loggedInUser} />}
           {page === "fire" && <FireAlertPage stations={stations} />}
           {page === "predictions" && <PredictionsPage stations={stations} />}
           {page === "reports" && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} />}
