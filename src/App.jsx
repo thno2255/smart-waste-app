@@ -47,6 +47,18 @@ import {
 } from "firebase/firestore";
 
 import { auth, db } from "./firebase";
+import {
+  useCollectionWhere,
+  addRequest,
+  addCitizenReport,
+  updateRequestStatus,
+  updateCitizenReport,
+  deleteRequest,
+  deleteCitizenReport,
+  COLLECTIONS,
+} from "./firestoreService";
+import { seedAllCollections } from "./seedFirestore";
+import { exportAllDataToExcel } from "./exportAllDataToExcel";
 // ============================================================
 // 🔐 AUTH CONTEXT
 // ============================================================
@@ -2667,11 +2679,250 @@ const FireAlertPage = ({ stations }) => {
   );
 };
 
+// ======================== REQUESTS & REPORTS MANAGEMENT ========================
+const RequestsManagementPage = () => {
+  // All requests & reports loaded directly via onSnapshot (no userId filter needed here)
+  const [requests, setRequests] = useState([]);
+  const [reports,  setReports]  = useState([]);
+  const [loadingReqs, setLoadingReqs] = useState(true);
+  const [loadingReps, setLoadingReps] = useState(true);
+  const [tab, setTab] = useState("requests");
+  const [responding, setResponding] = useState({}); // { [id]: true }
+  const [responseText, setResponseText] = useState({}); // { [id]: string }
+
+  useEffect(() => {
+    const q = query(collection(db, COLLECTIONS.REQUESTS), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, (snap) => {
+      setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setLoadingReqs(false);
+    }, (e) => { console.error(e); setLoadingReqs(false); });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, COLLECTIONS.CITIZEN_REPORTS), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, (snap) => {
+      setReports(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setLoadingReps(false);
+    }, (e) => { console.error(e); setLoadingReps(false); });
+    return () => unsub();
+  }, []);
+
+  const pendingReqs = requests.filter(r => r.status === "قيد المراجعة").length;
+  const pendingReps = reports.filter(r => r.status === "قيد المعالجة").length;
+
+  const handleRequestAction = async (id, status) => {
+    const resp = responseText[id]?.trim() || "";
+    setResponding(p => ({ ...p, [id]: true }));
+    try {
+      await updateRequestStatus(id, status, resp);
+    } catch (e) { console.error(e); }
+    setResponding(p => ({ ...p, [id]: false }));
+    setResponseText(p => ({ ...p, [id]: "" }));
+  };
+
+  const handleReportAction = async (id, status) => {
+    const resp = responseText[id]?.trim() || "";
+    setResponding(p => ({ ...p, [id]: true }));
+    try {
+      await updateCitizenReport(id, { status, response: resp });
+    } catch (e) { console.error(e); }
+    setResponding(p => ({ ...p, [id]: false }));
+    setResponseText(p => ({ ...p, [id]: "" }));
+  };
+
+  const statusColor = (s) =>
+    s === "مقبول" || s === "تم الحل"   ? C.accent  :
+    s === "مرفوض"                       ? C.danger  :
+    s === "قيد المراجعة" || s === "قيد المعالجة" ? C.warning : C.muted;
+
+  const inputStyle = { width: "100%", padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT, outline: "none", boxSizing: "border-box" };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+      {/* Summary */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
+        {[
+          { label: "إجمالي الطلبات",    val: requests.length,  icon: "📝", color: C.accent },
+          { label: "طلبات معلّقة",      val: pendingReqs,      icon: "⏳", color: C.warning },
+          { label: "إجمالي البلاغات",   val: reports.length,   icon: "📋", color: C.info },
+          { label: "بلاغات معلّقة",     val: pendingReps,      icon: "⚠️", color: C.danger },
+        ].map((s, i) => (
+          <div key={i} style={{ background: C.card, border: `1px solid ${s.color}30`, borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 28 }}>{s.icon}</span>
+            <div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.val}</div>
+              <div style={{ fontSize: 11, color: C.muted }}>{s.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: 8 }}>
+        {[
+          { key: "requests", label: `📝 طلبات الحاويات${pendingReqs > 0 ? ` (${pendingReqs} معلّق)` : ""}` },
+          { key: "reports",  label: `⚠️ البلاغات${pendingReps > 0 ? ` (${pendingReps} معلّق)` : ""}` },
+        ].map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)} style={{
+            padding: "9px 18px", borderRadius: 10, border: `1px solid ${tab === t.key ? C.accent : C.border}`,
+            background: tab === t.key ? C.accent + "18" : "transparent",
+            color: tab === t.key ? C.accent : C.muted,
+            cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ARABIC_FONT,
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* Requests */}
+      {tab === "requests" && (
+        loadingReqs ? <div style={{ color: C.muted, fontSize: 13 }}>جاري التحميل…</div> :
+        requests.length === 0 ? <div style={{ background: C.card, borderRadius: 12, padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>لا توجد طلبات.</div> :
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {requests.map(r => {
+            const sc = statusColor(r.status);
+            const isOpen = r.status === "قيد المراجعة";
+            return (
+              <div key={r.id} style={{ background: C.card, border: `1px solid ${sc}30`, borderRadius: 14, padding: 18 }}>
+                {/* Header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>📦 {r.binType}</span>
+                      <span style={{ fontSize: 10, color: C.dim, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{r.id.slice(0, 8)}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: C.muted }}>👤 {r.userName} &nbsp;•&nbsp; 📍 {r.district}</div>
+                    <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>🏠 {r.address}</div>
+                    {r.notes && <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>📝 {r.notes}</div>}
+                  </div>
+                  <span style={{ padding: "4px 12px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: sc + "20", color: sc, whiteSpace: "nowrap" }}>{r.status}</span>
+                </div>
+
+                <div style={{ fontSize: 10, color: C.dim, marginBottom: isOpen ? 12 : 0 }}>
+                  🕐 {r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}
+                </div>
+
+                {/* Response (already handled) */}
+                {!isOpen && r.response && (
+                  <div style={{ fontSize: 12, color: C.muted, background: C.bg, padding: "8px 12px", borderRadius: 8, marginTop: 8 }}>
+                    💬 الرد: {r.response}
+                  </div>
+                )}
+
+                {/* Action area (pending only) */}
+                {isOpen && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <textarea
+                      value={responseText[r.id] || ""}
+                      onChange={e => setResponseText(p => ({ ...p, [r.id]: e.target.value }))}
+                      placeholder="اكتب رداً للمواطن (اختياري)…"
+                      style={{ ...inputStyle, minHeight: 60, resize: "vertical" }}
+                    />
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        disabled={responding[r.id]}
+                        onClick={() => handleRequestAction(r.id, "مقبول")}
+                        style={{ flex: 1, padding: "9px", borderRadius: 8, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT }}
+                      >
+                        {responding[r.id] ? "…" : "✅ قبول"}
+                      </button>
+                      <button
+                        disabled={responding[r.id]}
+                        onClick={() => handleRequestAction(r.id, "مرفوض")}
+                        style={{ flex: 1, padding: "9px", borderRadius: 8, border: "none", background: C.danger, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT }}
+                      >
+                        {responding[r.id] ? "…" : "❌ رفض"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Reports */}
+      {tab === "reports" && (
+        loadingReps ? <div style={{ color: C.muted, fontSize: 13 }}>جاري التحميل…</div> :
+        reports.length === 0 ? <div style={{ background: C.card, borderRadius: 12, padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>لا توجد بلاغات.</div> :
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {reports.map(r => {
+            const sc = statusColor(r.status);
+            const isOpen = r.status === "قيد المعالجة";
+            return (
+              <div key={r.id} style={{ background: C.card, border: `1px solid ${sc}30`, borderRadius: 14, padding: 18 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>⚠️ {r.type}</span>
+                      <span style={{ fontSize: 10, color: C.dim, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{r.id.slice(0, 8)}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: C.muted }}>👤 {r.userName} &nbsp;•&nbsp; 📍 {r.location || r.district}</div>
+                    {r.description && <div style={{ fontSize: 12, color: C.muted, marginTop: 4, background: C.bg, padding: "6px 10px", borderRadius: 8 }}>{r.description}</div>}
+                  </div>
+                  <span style={{ padding: "4px 12px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: sc + "20", color: sc, whiteSpace: "nowrap" }}>{r.status}</span>
+                </div>
+
+                <div style={{ fontSize: 10, color: C.dim, marginBottom: isOpen ? 12 : 0 }}>
+                  🕐 {r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}
+                </div>
+
+                {!isOpen && r.response && (
+                  <div style={{ fontSize: 12, color: C.accent, background: C.accent + "10", padding: "8px 12px", borderRadius: 8, marginTop: 8 }}>
+                    💬 الرد: {r.response}
+                  </div>
+                )}
+
+                {isOpen && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <textarea
+                      value={responseText[r.id] || ""}
+                      onChange={e => setResponseText(p => ({ ...p, [r.id]: e.target.value }))}
+                      placeholder="اكتب رداً للمواطن (اختياري)…"
+                      style={{ ...inputStyle, minHeight: 60, resize: "vertical" }}
+                    />
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        disabled={responding[r.id]}
+                        onClick={() => handleReportAction(r.id, "تم الحل")}
+                        style={{ flex: 1, padding: "9px", borderRadius: 8, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT }}
+                      >
+                        {responding[r.id] ? "…" : "✅ تم الحل"}
+                      </button>
+                      <button
+                        disabled={responding[r.id]}
+                        onClick={() => handleReportAction(r.id, "قيد المعالجة - تحت المتابعة")}
+                        style={{ flex: 1, padding: "9px", borderRadius: 8, border: `1px solid ${C.info}`, background: "transparent", color: C.info, fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT }}
+                      >
+                        {responding[r.id] ? "…" : "🔄 تحت المتابعة"}
+                      </button>
+                      <button
+                        disabled={responding[r.id]}
+                        onClick={() => handleReportAction(r.id, "مرفوض")}
+                        style={{ flex: 1, padding: "9px", borderRadius: 8, border: "none", background: C.danger, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT }}
+                      >
+                        {responding[r.id] ? "…" : "❌ رفض"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ======================== SETTINGS ========================
 const SettingsPage = () => {
   const [notif, setNotif] = useState(true);
   const [autoCollect, setAutoCollect] = useState(true);
   const [threshold, setThreshold] = useState(85);
+  const [seedStatus, setSeedStatus] = useState(null);    // null | "running" | "done" | "error"
+  const [exportStatus, setExportStatus] = useState(null); // null | "running" | "done" | "error"
 
   const Toggle = ({ value, onChange }) => (
     <div onClick={() => onChange(!value)} style={{ width: 48, height: 26, borderRadius: 13, background: value ? C.accent : C.border, cursor: "pointer", position: "relative", transition: "background 0.3s" }}>
@@ -2718,6 +2969,85 @@ const SettingsPage = () => {
             </div>
           ))}
         </div>
+      </Card>
+
+      <Card title="تهيئة قاعدة البيانات" icon="🗄️">
+        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
+          يُنشئ هذا الإجراء مستندًا تجريبيًا لكل مجموعة غير موجودة في Firestore
+          (districts, sensors, alerts, fire_alerts, requests, citizen_reports).
+          المجموعات الموجودة مسبقًا لن تُمس.
+        </p>
+        {seedStatus === "done" && (
+          <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.accent }}>
+            ✅ تم إنشاء جميع المجموعات بنجاح — تحقق من Firebase Console.
+          </div>
+        )}
+        {seedStatus === "error" && (
+          <div style={{ background: C.danger + "15", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.danger }}>
+            ❌ حدث خطأ أثناء التهيئة — تحقق من Console.
+          </div>
+        )}
+        <button
+          disabled={seedStatus === "running"}
+          onClick={async () => {
+            setSeedStatus("running");
+            try {
+              await seedAllCollections();
+              setSeedStatus("done");
+            } catch (e) {
+              console.error("[seed]", e);
+              setSeedStatus("error");
+            }
+          }}
+          style={{
+            padding: "11px 24px", borderRadius: 10, border: "none",
+            background: seedStatus === "running" ? C.border : C.g1,
+            color: seedStatus === "running" ? C.dim : "#fff",
+            fontWeight: 700, cursor: seedStatus === "running" ? "not-allowed" : "pointer",
+            fontSize: 13, fontFamily: ARABIC_FONT,
+          }}
+        >
+          {seedStatus === "running" ? "جاري التهيئة…" : "🚀 تهيئة Collections الناقصة"}
+        </button>
+      </Card>
+
+      <Card title="تصدير قاعدة البيانات" icon="📊">
+        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
+          يُصدِّر جميع البيانات من Firestore (10 مجموعات) إلى ملف Excel واحد.
+          كل مجموعة في Sheet منفصل — جاهز للتحليل في Power BI أو Excel.
+        </p>
+        {exportStatus === "done" && (
+          <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.accent }}>
+            ✅ تم تحميل الملف بنجاح — تحقق من مجلد التنزيلات.
+          </div>
+        )}
+        {exportStatus === "error" && (
+          <div style={{ background: C.danger + "15", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.danger }}>
+            ❌ حدث خطأ أثناء التصدير — تحقق من Console.
+          </div>
+        )}
+        <button
+          disabled={exportStatus === "running"}
+          onClick={async () => {
+            setExportStatus("running");
+            try {
+              await exportAllDataToExcel("full_database.xlsx");
+              setExportStatus("done");
+            } catch (e) {
+              console.error("[export]", e);
+              setExportStatus("error");
+            }
+          }}
+          style={{
+            padding: "11px 24px", borderRadius: 10, border: "none",
+            background: exportStatus === "running" ? C.border : "linear-gradient(135deg, #10b981, #059669)",
+            color: exportStatus === "running" ? C.dim : "#fff",
+            fontWeight: 700, cursor: exportStatus === "running" ? "not-allowed" : "pointer",
+            fontSize: 13, fontFamily: ARABIC_FONT,
+          }}
+        >
+          {exportStatus === "running" ? "جاري التصدير…" : "⬇️ تحميل قاعدة البيانات Excel"}
+        </button>
       </Card>
     </div>
   );
@@ -3724,50 +4054,86 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
 };
 
 // ======================== CITIZEN PORTAL ========================
-const CITIZEN_BINS = [
-  { id: "BIN-001", address: "شارع الملك عبدالعزيز، حي الخليج", type: "عضوية", status: "نشطة", fillLevel: 45, lastPickup: "منذ يومين", nextPickup: "غداً 7:00 ص", installed: "2024/03/15" },
-  { id: "BIN-002", address: "شارع الأمير نايف، حي الخليج", type: "بلاستيك", status: "نشطة", fillLevel: 72, lastPickup: "منذ 3 أيام", nextPickup: "اليوم 4:00 م", installed: "2024/05/20" },
-];
+// CITIZEN_BINS و CITIZEN_REPORTS أُزيلت — البيانات تأتي من Firestore الآن
 
-const CITIZEN_REPORTS = [
-  { id: "RPT-1042", date: "2026/04/06", type: "حاوية ممتلئة", status: "تم الحل", district: "حي الخليج", response: "تم التفريغ خلال 3 ساعات" },
-  { id: "RPT-1038", date: "2026/04/02", type: "رائحة كريهة", status: "قيد المعالجة", district: "حي الخليج", response: "تم إرسال فريق التنظيف" },
-  { id: "RPT-1035", date: "2026/03/28", type: "حاوية تالفة", status: "تم الحل", district: "حي الخليج", response: "تم استبدال الحاوية" },
-];
+// ── Isolated date display for CitizenPortal ──────────────────────────
+const CitizenDateDisplay = () => {
+  const [d, setD] = useState(new Date());
+  useEffect(() => { const i = setInterval(() => setD(new Date()), 60000); return () => clearInterval(i); }, []);
+  return <span>{d.toLocaleDateString("ar-SA")}</span>;
+};
 
 const CitizenPortal = ({ user, onLogout, stations }) => {
-  const [tab, setTab] = useState("home");
-  const [showRequestForm, setShowRequestForm] = useState(false);
-  const [showReportForm, setShowReportForm] = useState(false);
-  const [requestSubmitted, setRequestSubmitted] = useState(false);
-  const [reportSubmitted, setReportSubmitted] = useState(false);
-  const [reportType, setReportType] = useState("");
-  const [reportDesc, setReportDesc] = useState("");
-  const [reqAddress, setReqAddress] = useState("");
+  const [tab, setTab]               = useState("home");
   const [showPassModal, setShowPassModal] = useState(false);
+
+  // ─── طلب حاوية ────────────────────────────────────────────────────
+  const [reqAddress, setReqAddress] = useState("");
   const [reqBinType, setReqBinType] = useState("عضوية");
-  const [time, setTime] = useState(new Date());
+  const [reqNotes, setReqNotes]     = useState("");
+  const [reqLoading, setReqLoading] = useState(false);
+  const [reqDone, setReqDone]       = useState(null); // null | { id }
 
-  useEffect(() => { const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
+  // ─── بلاغ مشكلة ───────────────────────────────────────────────────
+  const [reportType, setReportType]   = useState("");
+  const [reportDesc, setReportDesc]   = useState("");
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportDone, setReportDone]   = useState(null); // null | { id }
 
-  const myStation = stations.find(s => s.district === user.district) || stations[0];
+  // ─── بيانات Firestore الحية ────────────────────────────────────────
+  const { data: myRequests, loading: reqsLoading } =
+    useCollectionWhere(COLLECTIONS.REQUESTS, "userId", user.uid);
+  const { data: myReports, loading: repsLoading } =
+    useCollectionWhere(COLLECTIONS.CITIZEN_REPORTS, "userId", user.uid);
 
-  const stationHistory = useMemo(() =>
-    Array.from({ length: 7 }, (_, i) => ({
-      day: ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"][i],
-      الامتلاء: Math.round(20 + Math.random() * 60),
-      الكمية: Math.round(80 + Math.random() * 150),
-    })), []);
-
-  const monthlyCollection = useMemo(() =>
-    Array.from({ length: 6 }, (_, i) => ({
-      month: ["نوفمبر", "ديسمبر", "يناير", "فبراير", "مارس", "أبريل"][i],
-      عضوية: Math.round(40 + Math.random() * 80),
-      بلاستيك: Math.round(20 + Math.random() * 40),
-      ورق: Math.round(10 + Math.random() * 30),
-    })), []);
+  const myStation = stations.find(s => s.district === user.district) || stations[0] || null;
+  const myContainers = myStation?.containers || [];
 
   const inputStyle = { width: "100%", padding: "12px 16px", borderRadius: 12, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT, outline: "none", boxSizing: "border-box" };
+
+  const handleSendRequest = async () => {
+    if (!reqAddress.trim()) return;
+    setReqLoading(true);
+    try {
+      await addRequest({
+        userId:   user.uid,
+        userName: user.name,
+        district: user.district,
+        address:  reqAddress.trim(),
+        binType:  reqBinType,
+        notes:    reqNotes.trim(),
+      });
+      setReqDone("success");
+      setReqAddress(""); setReqNotes("");
+    } catch (e) {
+      console.error("[addRequest]", e);
+      setReqDone({ error: e?.code || e?.message || "unknown" });
+    } finally {
+      setReqLoading(false);
+    }
+  };
+
+  const handleSendReport = async () => {
+    if (!reportType || !reportDesc.trim()) return;
+    setReportLoading(true);
+    try {
+      await addCitizenReport({
+        userId:      user.uid,
+        userName:    user.name,
+        district:    user.district,
+        type:        reportType,
+        description: reportDesc.trim(),
+        location:    `${user.district} - بريدة`,
+      });
+      setReportDone("success");
+      setReportType(""); setReportDesc("");
+    } catch (e) {
+      console.error("[addCitizenReport]", e);
+      setReportDone({ error: e?.code || e?.message || "unknown" });
+    } finally {
+      setReportLoading(false);
+    }
+  };
 
   return (
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -3780,7 +4146,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
           <div style={{ width: 42, height: 42, borderRadius: 12, background: C.g1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>♻️</div>
           <div>
             <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>بوابة المواطن</div>
-            <div style={{ fontSize: 10, color: C.accent }}>نظام إدارة النفايات الذكي - بريدة • {time.toLocaleDateString("ar-SA")}</div>
+            <div style={{ fontSize: 10, color: C.accent }}>نظام إدارة النفايات الذكي - بريدة • <CitizenDateDisplay /></div>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -3795,16 +4161,16 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
       </header>
 
       {/* Tabs */}
-      <div style={{ padding: "12px 24px 0", display: "flex", gap: 6 }}>
+      <div style={{ padding: "12px 24px 0", display: "flex", gap: 6, flexWrap: "wrap" }}>
         {[
-          { key: "home", label: "🏠 الرئيسية" },
-          { key: "bins", label: "🗑️ حاوياتي" },
+          { key: "home",    label: "🏠 الرئيسية" },
+          { key: "bins",    label: "🗑️ حاوياتي" },
           { key: "station", label: "🏭 محطة الحي" },
           { key: "request", label: "📝 طلب حاوية" },
-          { key: "report", label: "⚠️ إبلاغ عن مشكلة" },
-          { key: "history", label: "📋 سجل البلاغات" },
+          { key: "report",  label: "⚠️ إبلاغ عن مشكلة" },
+          { key: "history", label: "📋 سجل الطلبات والبلاغات" },
         ].map(t => (
-          <button key={t.key} onClick={() => { setTab(t.key); setShowRequestForm(false); setShowReportForm(false); setRequestSubmitted(false); setReportSubmitted(false); }} style={{
+          <button key={t.key} onClick={() => setTab(t.key)} style={{
             padding: "9px 16px", borderRadius: 10, border: `1px solid ${tab === t.key ? C.accent : C.border}`,
             background: tab === t.key ? C.accent + "15" : "transparent", color: tab === t.key ? C.accent : C.muted,
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
@@ -3825,19 +4191,19 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
-              <StatCard title="حاوياتي" value={CITIZEN_BINS.length} icon="🗑️" gradient={C.g1} />
-              <StatCard title="بلاغاتي" value={CITIZEN_REPORTS.length} icon="📋" gradient={C.g2} />
-              <StatCard title="محطة الحي" value={myStation.fillLevel} unit="% امتلاء" icon="🏭" gradient={C.g3} />
-              <StatCard title="التفريغ القادم" value="غداً" icon="🚛" gradient={C.g4} />
+              <StatCard title="حاوياتي" value={reqsLoading ? "…" : myRequests.filter(r => r.status === "مقبول").length} icon="🗑️" gradient={C.g1} />
+              <StatCard title="بلاغاتي" value={repsLoading ? "…" : myReports.length} icon="📋" gradient={C.g2} />
+              <StatCard title="طلباتي" value={reqsLoading ? "…" : myRequests.length} icon="📝" gradient={C.g3} />
+              <StatCard title="امتلاء المحطة" value={myStation ? myStation.fillLevel : "—"} unit={myStation ? "%" : ""} icon="🏭" gradient={C.g4} />
             </div>
 
             {/* Quick Actions */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
               {[
-                { label: "طلب حاوية جديدة", desc: "اطلب حاوية لمنزلك أو مبناك", icon: "📝", color: C.accent, action: () => setTab("request") },
-                { label: "إبلاغ عن مشكلة", desc: "بلّغ عن حاوية تالفة أو ممتلئة", icon: "⚠️", color: C.warning, action: () => setTab("report") },
-                { label: "متابعة محطة الحي", desc: "شاهد حالة محطة الشفط في حيك", icon: "📊", color: C.info, action: () => setTab("station") },
-                { label: "عرض حاوياتي", desc: "تابع حالة حاوياتك ومواعيد التفريغ", icon: "🗑️", color: "#8b5cf6", action: () => setTab("bins") },
+                { label: "طلب حاوية جديدة",    desc: "اطلب حاوية لمنزلك أو مبناك",          icon: "📝", color: C.accent,   action: () => { setTab("request"); setReqDone(null); } },
+                { label: "إبلاغ عن مشكلة",     desc: "بلّغ عن حاوية تالفة أو ممتلئة",       icon: "⚠️", color: C.warning,  action: () => { setTab("report"); setReportDone(null); } },
+                { label: "متابعة محطة الحي",    desc: "شاهد حالة محطة الشفط في حيك",         icon: "📊", color: C.info,    action: () => setTab("station") },
+                { label: "عرض حاويات الحي",    desc: "تابع حالة الحاويات في محطة حيك",       icon: "🗑️", color: "#8b5cf6", action: () => setTab("bins") },
               ].map((item, i) => (
                 <div key={i} onClick={item.action} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 14, padding: 18, cursor: "pointer", transition: "all 0.2s" }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = item.color + "70"; e.currentTarget.style.transform = "translateY(-2px)"; }}
@@ -3851,125 +4217,147 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
           </div>
         )}
 
-        {/* MY BINS */}
-        {tab === "bins" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {CITIZEN_BINS.map((bin, i) => (
-              <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                  <div>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>🗑️ {bin.id}</div>
-                    <div style={{ fontSize: 12, color: C.muted }}>{bin.address}</div>
+        {/* MY BINS — approved requests from Firestore */}
+        {tab === "bins" && (() => {
+          const approvedBins = myRequests.filter(r => r.status === "مقبول");
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {reqsLoading ? (
+                <div style={{ color: C.muted, fontSize: 13, padding: 16 }}>جاري التحميل…</div>
+              ) : approvedBins.length === 0 ? (
+                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 32, textAlign: "center" }}>
+                  <div style={{ fontSize: 48, marginBottom: 12 }}>🗑️</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>لا توجد حاويات مسجلة بعد</div>
+                  <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8 }}>
+                    يمكنك طلب حاوية جديدة وستظهر هنا بعد موافقة الموظف.
                   </div>
-                  <span style={{ padding: "4px 12px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: bin.status === "نشطة" ? C.accent + "20" : C.warning + "20", color: bin.status === "نشطة" ? C.accent : C.warning }}>{bin.status}</span>
+                  <button onClick={() => { setTab("request"); setReqDone(null); }} style={{
+                    marginTop: 14, padding: "9px 22px", borderRadius: 10, border: "none",
+                    background: C.g1, color: "#fff", fontWeight: 700, cursor: "pointer",
+                    fontSize: 12, fontFamily: ARABIC_FONT,
+                  }}>📝 طلب حاوية الآن</button>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
-                  {[
-                    { label: "نوع النفايات", val: bin.type, icon: "♻️" },
-                    { label: "مستوى الامتلاء", val: `${bin.fillLevel}%`, icon: "📊" },
-                    { label: "آخر تفريغ", val: bin.lastPickup, icon: "🕐" },
-                    { label: "التفريغ القادم", val: bin.nextPickup, icon: "🚛" },
-                    { label: "تاريخ التركيب", val: bin.installed, icon: "📅" },
-                  ].map((item, j) => (
-                    <div key={j} style={{ background: C.bg, borderRadius: 10, padding: "10px 12px", display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 18 }}>{item.icon}</span>
-                      <div>
-                        <div style={{ fontSize: 10, color: C.dim }}>{item.label}</div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{item.val}</div>
+              ) : (
+                approvedBins.map((bin) => {
+                  const typeIcon = bin.binType === "عضوية" ? "🟢" : bin.binType === "بلاستيك" ? "🔵" : bin.binType === "ورق" ? "📄" : "🗑️";
+                  const approvedAt = bin.updatedAt || bin.createdAt;
+                  return (
+                    <div key={bin.id} style={{ background: C.card, border: `1px solid ${C.accent}30`, borderRadius: 14, padding: 20 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                        <div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{typeIcon} حاوية {bin.binType}</div>
+                          <div style={{ fontSize: 12, color: C.muted }}>📍 {bin.address}</div>
+                          {bin.notes && <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>📝 {bin.notes}</div>}
+                        </div>
+                        <span style={{ padding: "4px 12px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: C.accent + "20", color: C.accent }}>✅ نشطة</span>
                       </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+                        {[
+                          { label: "نوع الحاوية",   val: bin.binType,                                             icon: "♻️" },
+                          { label: "الحي",          val: bin.district,                                            icon: "📍" },
+                          { label: "تاريخ الموافقة", val: approvedAt ? new Date(approvedAt).toLocaleDateString("ar-SA") : "—", icon: "📅" },
+                          { label: "رقم الطلب",     val: bin.id.slice(0, 8),                                      icon: "🔖" },
+                        ].map((item, j) => (
+                          <div key={j} style={{ background: C.bg, borderRadius: 10, padding: "10px 12px", display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontSize: 18 }}>{item.icon}</span>
+                            <div>
+                              <div style={{ fontSize: 10, color: C.dim }}>{item.label}</div>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{item.val}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {bin.response && (
+                        <div style={{ marginTop: 12, fontSize: 12, color: C.accent, background: C.accent + "10", padding: "8px 12px", borderRadius: 8 }}>
+                          💬 ملاحظة الموظف: {bin.response}
+                        </div>
+                      )}
                     </div>
-                  ))}
-                </div>
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.dim, marginBottom: 4 }}>
-                    <span>الامتلاء</span><span>{bin.fillLevel}%</span>
-                  </div>
-                  <div style={{ width: "100%", height: 8, background: C.bg, borderRadius: 4, overflow: "hidden" }}>
-                    <div style={{ width: `${bin.fillLevel}%`, height: "100%", background: bin.fillLevel > 80 ? C.danger : bin.fillLevel > 50 ? C.warning : C.accent, borderRadius: 4, transition: "width 1s" }} />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+                  );
+                })
+              )}
+            </div>
+          );
+        })()}
 
         {/* STATION */}
         {tab === "station" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Card>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <div>
-                  <h2 style={{ fontSize: 20, fontWeight: 800, color: C.text, margin: 0 }}>{myStation.name}</h2>
-                  <span style={{ fontSize: 12, color: C.muted }}>{myStation.id} | {myStation.district}</span>
-                </div>
-                <StatusBadge status={myStation.status} />
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14, marginBottom: 16 }}>
-                {[
-                  { label: "الامتلاء", val: myStation.fillLevel, color: myStation.fillLevel > 85 ? C.danger : myStation.fillLevel > 60 ? C.warning : C.accent },
-                  { label: "صحة المحرك", val: myStation.motorHealth, color: myStation.motorHealth > 80 ? C.accent : C.warning },
-                  { label: "معدل الشفط", val: myStation.suctionRate, color: C.info },
-                ].map((item, i) => (
-                  <div key={i} style={{ background: C.bg, borderRadius: 12, padding: 14, textAlign: "center" }}>
-                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{item.label}</div>
-                    <div style={{ display: "flex", justifyContent: "center" }}><CircularGauge value={item.val} color={item.color} size={80} /></div>
+          myStation ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <Card>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <div>
+                    <h2 style={{ fontSize: 20, fontWeight: 800, color: C.text, margin: 0 }}>{myStation.name}</h2>
+                    <span style={{ fontSize: 12, color: C.muted }}>{myStation.district} • {myStation.wasteType || "مختلط"}</span>
                   </div>
-                ))}
-              </div>
-            </Card>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-              <Card title="سجل الامتلاء الأسبوعي" icon="📈">
-                <ResponsiveContainer width="100%" height={220}>
-                  <AreaChart data={stationHistory} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                    <defs>
-                      <linearGradient id="gCitFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={C.accent} stopOpacity={0.3} />
-                        <stop offset="95%" stopColor={C.accent} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                    <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Area type="monotone" dataKey="الامتلاء" stroke={C.accent} fill="url(#gCitFill)" strokeWidth={2} name="الامتلاء %" />
-                  </AreaChart>
-                </ResponsiveContainer>
+                  <StatusBadge status={getStatus(myStation.fillLevel)} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14, marginBottom: 16 }}>
+                  {[
+                    { label: "مستوى الامتلاء", val: myStation.fillLevel || 0, color: (myStation.fillLevel || 0) >= 85 ? C.danger : (myStation.fillLevel || 0) >= 60 ? C.warning : C.accent },
+                    { label: "الضغط", val: myStation.pressure || 0, color: C.info },
+                    { label: "النفايات اليومية (كجم)", val: myStation.dailyWaste || 0, color: C.accent, unit: "" },
+                  ].map((item, i) => (
+                    <div key={i} style={{ background: C.bg, borderRadius: 12, padding: 14, textAlign: "center" }}>
+                      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{item.label}</div>
+                      {i < 2
+                        ? <div style={{ display: "flex", justifyContent: "center" }}><CircularGauge value={item.val} color={item.color} size={80} /></div>
+                        : <div style={{ fontSize: 26, fontWeight: 800, color: item.color }}>{item.val}</div>
+                      }
+                    </div>
+                  ))}
+                </div>
               </Card>
 
-              <Card title="كميات النفايات الشهرية (كجم)" icon="📊">
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={monthlyCollection} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                    <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 10 }} />
-                    <Bar dataKey="عضوية" stackId="a" fill={C.accent} radius={[0, 0, 0, 0]} />
-                    <Bar dataKey="بلاستيك" stackId="a" fill={C.info} />
-                    <Bar dataKey="ورق" stackId="a" fill={C.warning} radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </Card>
+              {/* Containers summary */}
+              {myContainers.length > 0 && (
+                <Card title={`حاويات المحطة (${myContainers.length})`} icon="🗑️">
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {myContainers.map((c, i) => {
+                      const fl = Number(c.fillLevel) || 0;
+                      const sc = getStatus(fl);
+                      const cc = sc === "حرج" ? C.danger : sc === "تحذير" ? C.warning : C.accent;
+                      return (
+                        <div key={c.id || i} style={{ display: "flex", alignItems: "center", gap: 12, background: C.bg, borderRadius: 10, padding: "10px 14px" }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: C.text, flex: 1 }}>{c.name || `حاوية ${i + 1}`}</span>
+                          <div style={{ flex: 2, height: 8, background: C.border, borderRadius: 4, overflow: "hidden" }}>
+                            <div style={{ width: `${fl}%`, height: "100%", background: cc, borderRadius: 4 }} />
+                          </div>
+                          <span style={{ fontSize: 12, color: cc, fontWeight: 700, minWidth: 36, textAlign: "left" }}>{fl}%</span>
+                          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: cc + "20", color: cc }}>{sc}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              )}
             </div>
-          </div>
+          ) : (
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 32, textAlign: "center", color: C.muted, fontSize: 13 }}>
+              لا توجد محطة مرتبطة بحيك ({user.district}).
+            </div>
+          )
         )}
 
         {/* REQUEST BIN */}
         {tab === "request" && (
           <div style={{ maxWidth: 550 }}>
-            {requestSubmitted ? (
+            {reqDone === "success" ? (
               <div style={{ background: C.card, border: `1px solid ${C.accent}40`, borderRadius: 16, padding: 32, textAlign: "center" }}>
                 <div style={{ fontSize: 56, marginBottom: 12 }}>✅</div>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.accent, marginBottom: 8 }}>تم إرسال الطلب بنجاح!</div>
                 <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.8, marginBottom: 16 }}>
-                  رقم الطلب: <strong style={{ color: C.text }}>REQ-{Math.floor(1000 + Math.random() * 9000)}</strong><br />
-                  سيتم مراجعة طلبك والرد عليك خلال 3-5 أيام عمل
+                  سيتم مراجعة طلبك والرد عليك خلال 3-5 أيام عمل. يمكنك متابعة الطلب في تبويب «سجل الطلبات والبلاغات».
                 </div>
-                <button onClick={() => { setRequestSubmitted(false); setReqAddress(""); }} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 13 }}>تقديم طلب آخر</button>
+                <button onClick={() => setReqDone(null)} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 13 }}>تقديم طلب آخر</button>
               </div>
             ) : (
               <Card title="طلب حاوية جديدة" icon="📝">
+                {reqDone?.error && (
+                  <div style={{ background: C.danger + "20", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: C.danger }}>
+                    ❌ خطأ: <strong>{reqDone.error}</strong>
+                  </div>
+                )}
                 <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.7, margin: "0 0 20px" }}>
                   يمكنك طلب حاوية نفايات جديدة لمنزلك أو مبناك. سيتم مراجعة الطلب من قبل الجهة المختصة.
                 </p>
@@ -3998,11 +4386,17 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
                       ))}
                     </div>
                   </div>
-                  <button onClick={() => { if (reqAddress.trim()) setRequestSubmitted(true); }} style={{
-                    padding: "14px", borderRadius: 12, border: "none", background: reqAddress.trim() ? C.g1 : C.border,
-                    color: reqAddress.trim() ? "#fff" : C.dim, fontWeight: 800, cursor: reqAddress.trim() ? "pointer" : "not-allowed",
+                  <div>
+                    <label style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "block" }}>ملاحظات إضافية</label>
+                    <textarea value={reqNotes} onChange={e => setReqNotes(e.target.value)} placeholder="أي تفاصيل إضافية..." style={{ ...inputStyle, minHeight: 80, resize: "vertical" }} />
+                  </div>
+                  <button onClick={handleSendRequest} disabled={reqLoading || !reqAddress.trim()} style={{
+                    padding: "14px", borderRadius: 12, border: "none",
+                    background: reqAddress.trim() && !reqLoading ? C.g1 : C.border,
+                    color: reqAddress.trim() && !reqLoading ? "#fff" : C.dim,
+                    fontWeight: 800, cursor: reqAddress.trim() && !reqLoading ? "pointer" : "not-allowed",
                     fontFamily: ARABIC_FONT, fontSize: 14, marginTop: 8,
-                  }}>إرسال الطلب</button>
+                  }}>{reqLoading ? "جاري الإرسال…" : "إرسال الطلب"}</button>
                 </div>
               </Card>
             )}
@@ -4012,18 +4406,22 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
         {/* REPORT PROBLEM */}
         {tab === "report" && (
           <div style={{ maxWidth: 550 }}>
-            {reportSubmitted ? (
+            {reportDone === "success" ? (
               <div style={{ background: C.card, border: `1px solid ${C.accent}40`, borderRadius: 16, padding: 32, textAlign: "center" }}>
                 <div style={{ fontSize: 56, marginBottom: 12 }}>📨</div>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.accent, marginBottom: 8 }}>تم إرسال البلاغ بنجاح!</div>
                 <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.8, marginBottom: 16 }}>
-                  رقم البلاغ: <strong style={{ color: C.text }}>RPT-{Math.floor(1000 + Math.random() * 9000)}</strong><br />
-                  سيتم التعامل مع البلاغ خلال 24 ساعة كحد أقصى
+                  سيتم التعامل مع البلاغ خلال 24 ساعة كحد أقصى. يمكنك متابعة حالته في تبويب «سجل الطلبات والبلاغات».
                 </div>
-                <button onClick={() => { setReportSubmitted(false); setReportType(""); setReportDesc(""); }} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 13 }}>تقديم بلاغ آخر</button>
+                <button onClick={() => setReportDone(null)} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 13 }}>تقديم بلاغ آخر</button>
               </div>
             ) : (
               <Card title="إبلاغ عن مشكلة" icon="⚠️">
+                {reportDone?.error && (
+                  <div style={{ background: C.danger + "20", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: C.danger }}>
+                    ❌ خطأ: <strong>{reportDone.error}</strong>
+                  </div>
+                )}
                 <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.7, margin: "0 0 20px" }}>
                   أبلغ عن أي مشكلة متعلقة بالحاويات أو محطة الشفط في حيك وسيتم التعامل معها بأسرع وقت.
                 </p>
@@ -4049,44 +4447,76 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
                     <label style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "block" }}>الموقع</label>
                     <input value={`${user.district} - بريدة`} readOnly style={{ ...inputStyle, opacity: 0.7 }} />
                   </div>
-                  <button onClick={() => { if (reportType && reportDesc.trim()) setReportSubmitted(true); }} style={{
+                  <button onClick={handleSendReport} disabled={reportLoading || !reportType || !reportDesc.trim()} style={{
                     padding: "14px", borderRadius: 12, border: "none",
-                    background: (reportType && reportDesc.trim()) ? "linear-gradient(135deg, #f59e0b, #d97706)" : C.border,
-                    color: (reportType && reportDesc.trim()) ? "#000" : C.dim,
-                    fontWeight: 800, cursor: (reportType && reportDesc.trim()) ? "pointer" : "not-allowed",
+                    background: (reportType && reportDesc.trim() && !reportLoading) ? "linear-gradient(135deg, #f59e0b, #d97706)" : C.border,
+                    color: (reportType && reportDesc.trim() && !reportLoading) ? "#000" : C.dim,
+                    fontWeight: 800, cursor: (reportType && reportDesc.trim() && !reportLoading) ? "pointer" : "not-allowed",
                     fontFamily: ARABIC_FONT, fontSize: 14, marginTop: 8,
-                  }}>إرسال البلاغ</button>
+                  }}>{reportLoading ? "جاري الإرسال…" : "إرسال البلاغ"}</button>
                 </div>
               </Card>
             )}
           </div>
         )}
 
-        {/* REPORT HISTORY */}
+        {/* HISTORY — requests + citizen_reports from Firestore */}
         {tab === "history" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>📋 سجل البلاغات السابقة</div>
-            {CITIZEN_REPORTS.map((r, i) => {
-              const statusColor = r.status === "تم الحل" ? C.accent : C.warning;
-              return (
-                <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 11, color: C.dim, background: C.bg, padding: "3px 8px", borderRadius: 6 }}>{r.id}</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.type}</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+            {/* Requests */}
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 10 }}>📝 طلبات الحاويات ({myRequests.length})</div>
+              {reqsLoading ? (
+                <div style={{ color: C.muted, fontSize: 13 }}>جاري التحميل…</div>
+              ) : myRequests.length === 0 ? (
+                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, color: C.muted, fontSize: 13, textAlign: "center" }}>لا توجد طلبات بعد.</div>
+              ) : myRequests.map((r) => {
+                const statusColor = r.status === "مقبول" ? C.accent : r.status === "مرفوض" ? C.danger : C.warning;
+                return (
+                  <div key={r.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>📦 {r.binType}</span>
+                        <span style={{ fontSize: 11, color: C.dim, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{r.id.slice(0, 8)}</span>
+                      </div>
+                      <span style={{ padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: statusColor + "20", color: statusColor }}>{r.status}</span>
                     </div>
-                    <span style={{ padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: statusColor + "20", color: statusColor }}>{r.status}</span>
+                    <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>📍 {r.address}</div>
+                    {r.notes && <div style={{ fontSize: 11, color: C.dim, marginBottom: 4 }}>📝 {r.notes}</div>}
+                    {r.response && <div style={{ fontSize: 12, color: C.muted, background: C.bg, padding: "8px 12px", borderRadius: 8, marginTop: 6 }}>💬 الرد: {r.response}</div>}
+                    <div style={{ fontSize: 10, color: C.dim, marginTop: 6 }}>🕐 {r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}</div>
                   </div>
-                  <div style={{ display: "flex", gap: 16, fontSize: 11, color: C.dim, marginBottom: 8 }}>
-                    <span>📅 {r.date}</span>
-                    <span>📍 {r.district}</span>
+                );
+              })}
+            </div>
+
+            {/* Citizen Reports */}
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 10 }}>📋 البلاغات ({myReports.length})</div>
+              {repsLoading ? (
+                <div style={{ color: C.muted, fontSize: 13 }}>جاري التحميل…</div>
+              ) : myReports.length === 0 ? (
+                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, color: C.muted, fontSize: 13, textAlign: "center" }}>لا توجد بلاغات بعد.</div>
+              ) : myReports.map((r) => {
+                const statusColor = r.status === "تم الحل" ? C.accent : r.status === "مرفوض" ? C.danger : C.warning;
+                return (
+                  <div key={r.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>⚠️ {r.type}</span>
+                        <span style={{ fontSize: 11, color: C.dim, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{r.id.slice(0, 8)}</span>
+                      </div>
+                      <span style={{ padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: statusColor + "20", color: statusColor }}>{r.status}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>📍 {r.location || r.district}</div>
+                    {r.description && <div style={{ fontSize: 12, color: C.muted, background: C.bg, padding: "8px 12px", borderRadius: 8, marginTop: 6 }}>{r.description}</div>}
+                    {r.response && <div style={{ fontSize: 12, color: C.accent, background: C.accent + "10", padding: "8px 12px", borderRadius: 8, marginTop: 6 }}>💬 الرد: {r.response}</div>}
+                    <div style={{ fontSize: 10, color: C.dim, marginTop: 6 }}>🕐 {r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}</div>
                   </div>
-                  <div style={{ fontSize: 12, color: C.muted, background: C.bg, padding: "8px 12px", borderRadius: 8 }}>
-                    💬 الرد: {r.response}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
@@ -4221,7 +4651,7 @@ const UnifiedLoginPage = ({ onLogin }) => {
 
 // ======================== MAIN ========================
 function SmartWasteManagement() {
-  const { userData, userRole, logout } = useAuth();
+  const { user: authUser, userData, userRole, logout } = useAuth();
   const [page, setPage] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [time, setTime] = useState(new Date());
@@ -4258,6 +4688,7 @@ function SmartWasteManagement() {
 
   // Build user object for child components from Firebase data
   const loggedInUser = userData ? {
+    uid: authUser?.uid || "",
     name: userData.fullName,
     email: userData.email,
     role: userData.role,
@@ -4284,13 +4715,14 @@ function SmartWasteManagement() {
 
   // Employee portal (default operational dashboard)
   const navItems = [
-    { key: "dashboard", label: "لوحة التحكم", icon: "📊" },
-    { key: "stations",  label: "المحطات",      icon: "🏭" },
-    { key: "control",   label: "وحدة التحكم",  icon: "🚿" },
-    { key: "fire",      label: "إنذار الحرائق", icon: "🔥" },
-    { key: "predictions", label: "التنبؤات",   icon: "🔮" },
-    { key: "reports",   label: "التقارير",      icon: "📋" },
-    { key: "settings",  label: "الإعدادات",     icon: "⚙️" },
+    { key: "dashboard", label: "لوحة التحكم",       icon: "📊" },
+    { key: "stations",  label: "المحطات",             icon: "🏭" },
+    { key: "control",   label: "وحدة التحكم",         icon: "🚿" },
+    { key: "requests",  label: "الطلبات والبلاغات",   icon: "📬" },
+    { key: "fire",      label: "إنذار الحرائق",       icon: "🔥" },
+    { key: "predictions", label: "التنبؤات",          icon: "🔮" },
+    { key: "reports",   label: "التقارير",             icon: "📋" },
+    { key: "settings",  label: "الإعدادات",            icon: "⚙️" },
   ];
 
   return (
@@ -4371,13 +4803,14 @@ function SmartWasteManagement() {
           </div>
         </header>
         <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
-          {page === "dashboard" && <DashboardPage stations={stations} weeklyData={weeklyData} monthlyTrend={monthlyTrend} alerts={alerts} hourlyData={hourlyData} />}
-          {page === "stations" && <StationsPage stations={stations} />}
-          {page === "control"  && <SuctionControlPage stations={stations} user={loggedInUser} />}
-          {page === "fire" && <FireAlertPage stations={stations} />}
+          {page === "dashboard"  && <DashboardPage stations={stations} weeklyData={weeklyData} monthlyTrend={monthlyTrend} alerts={alerts} hourlyData={hourlyData} />}
+          {page === "stations"   && <StationsPage stations={stations} />}
+          {page === "control"    && <SuctionControlPage stations={stations} user={loggedInUser} />}
+          {page === "requests"   && <RequestsManagementPage />}
+          {page === "fire"       && <FireAlertPage stations={stations} />}
           {page === "predictions" && <PredictionsPage stations={stations} />}
-          {page === "reports" && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} />}
-          {page === "settings" && <SettingsPage />}
+          {page === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} />}
+          {page === "settings"   && <SettingsPage />}
         </div>
       </main>
     </div>
