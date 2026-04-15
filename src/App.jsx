@@ -271,7 +271,7 @@ const AuthPage = () => {
   return (
     <div dir="rtl" style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0a0e1a 0%,#1a1040 50%,#0a0e1a 100%)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F, padding:20 }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-      <div style={{ width: mode==="register"?520:440, padding:"36px 40px", background:"#111827", borderRadius:24, border:"1px solid #1e293b", position:"relative", overflow:"hidden", transition:"width 0.3s" }}>
+      <div style={{ width:"100%", maxWidth: mode==="register"?520:440, padding:"clamp(20px,5vw,40px)", background:"#111827", borderRadius:24, border:"1px solid #1e293b", position:"relative", overflow:"hidden" }}>
         <div style={{ position:"absolute", top:-60, left:"50%", transform:"translateX(-50%)", width:200, height:200, background:"radial-gradient(circle,#10b98120,transparent)", borderRadius:"50%" }} />
 
         {/* Header */}
@@ -334,7 +334,7 @@ const AuthPage = () => {
                 ))}
               </div>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))",gap:12}}>
               <div style={{gridColumn:"1/-1"}}><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>الاسم الكامل *</label><input type="text" value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="الاسم الثلاثي" style={inputStyle} /></div>
               <div style={{gridColumn:"1/-1"}}><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني *</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} /></div>
               <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>كلمة المرور *</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="6 أحرف على الأقل" style={inputStyle} /></div>
@@ -404,7 +404,7 @@ const AccountSettingsModal = ({ onClose }) => {
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, direction:"rtl", fontFamily:F }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ width:500, maxHeight:"90vh", overflow:"auto", padding:"0", background:"#111827", borderRadius:20, border:"1px solid #1e293b" }}>
+      <div onClick={e => e.stopPropagation()} style={{ width:"100%", maxWidth:500, maxHeight:"90vh", overflow:"auto", padding:"0", background:"#111827", borderRadius:20, border:"1px solid #1e293b" }}>
         {/* Header */}
         <div style={{ padding:"24px 28px 0", textAlign:"center" }}>
           <div style={{ width:60, height:60, borderRadius:16, background:`${r.color}15`, border:`2px solid ${r.color}30`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:30, margin:"0 auto 12px" }}>{r.icon}</div>
@@ -443,7 +443,7 @@ const AccountSettingsModal = ({ onClose }) => {
                 <span style={{ fontSize:10, color:"#64748b", marginTop:4, display:"block" }}>لا يمكن تغيير البريد الإلكتروني</span>
               </div>
 
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:12 }}>
                 <div>
                   <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>رقم الجوال</label>
                   <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="05XXXXXXXX" style={{ ...inputSt, direction:"ltr", textAlign:"right" }} />
@@ -457,7 +457,7 @@ const AccountSettingsModal = ({ onClose }) => {
                 </div>
               </div>
 
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:12 }}>
                 <div style={{ background:"#0a0e1a", borderRadius:10, padding:12 }}>
                   <div style={{ fontSize:10, color:"#64748b" }}>نوع الحساب</div>
                   <div style={{ fontSize:14, fontWeight:700, color:r.color, marginTop:4 }}>{r.icon} {r.label}</div>
@@ -717,7 +717,7 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
         <StatCard title="كفاءة التشغيل" value={avgEff} unit="%" icon="⚡" gradient={C.g4} trend={3.1} />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
         <Card title="توزيع النفايات الأسبوعي (كجم)" icon="📊">
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={weeklyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
@@ -753,7 +753,7 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
         </Card>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
         <Card title="الاتجاه الشهري - الجمع والكفاءة" icon="📈">
           <ResponsiveContainer width="100%" height={260}>
             <ComposedChart data={monthlyTrend} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
@@ -794,7 +794,7 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
         </Card>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
         <Card title="أداء المحطات - بريدة" icon="🎯">
           <ResponsiveContainer width="100%" height={300}>
             <RadarChart cx="50%" cy="50%" outerRadius="70%" data={stationPerformance}>
@@ -830,7 +830,7 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
         </Card>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
         {[
           { label: "محطات طبيعية", count: stations.filter((s) => getStatus(s.fillLevel) === "طبيعي").length, color: C.accent, icon: "✅" },
           { label: "محطات تحت التحذير", count: stations.filter((s) => getStatus(s.fillLevel) === "تحذير").length, color: C.warning, icon: "⚠️" },
@@ -1017,7 +1017,7 @@ const StationsPage = ({ stations }) => {
           <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:20, padding:28, width:500, maxWidth:"95vw", direction:"rtl" }} onClick={e => e.stopPropagation()}>
             <div style={{ fontSize:18, fontWeight:800, color:C.text, marginBottom:20, fontFamily:F }}>🏭 إضافة محطة جديدة</div>
             {stationError && <div style={{ fontSize:12, color:C.danger, background:C.danger+"15", padding:"8px 12px", borderRadius:8, marginBottom:14, border:`1px solid ${C.danger}30` }}>⚠️ {stationError}</div>}
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:12 }}>
               <div style={{ gridColumn:"1/-1" }}>
                 <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>اسم المحطة *</label>
                 <input value={stationForm.name} onChange={e => setStationForm(p=>({...p,name:e.target.value}))} placeholder="مثال: محطة حي الخليج" style={inp} />
@@ -1137,7 +1137,7 @@ const StationsPage = ({ stations }) => {
             return (
               <Card title="حاويات المنازل" icon="📦">
                 {/* ── مؤشرات الملخص ─────────────────────── */}
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, marginBottom:18 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))", gap:10, marginBottom:18 }}>
                   {[
                     { label:"إجمالي الحاويات", val:ctrs.length,   color:C.info,    icon:"📦" },
                     { label:"حرج",             val:cCrit.length,  color:C.danger,  icon:"🔴" },
@@ -1237,7 +1237,7 @@ const StationsPage = ({ stations }) => {
           })()}
 
           {/* Charts */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:16 }}>
             <Card title="سجل الامتلاء والضغط" icon="📈">
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={fakeHistory}>
@@ -1297,7 +1297,7 @@ const StationsPage = ({ stations }) => {
                   </div>
 
                   {/* Stats row */}
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:12 }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:6, marginBottom:12 }}>
                     {[
                       { l:"الامتلاء",  v:`${s.fillLevel}%`,         vc:stColor },
                       { l:"الضغط",     v:`${s.pressure||0} بار`,    vc:C.text  },
@@ -1416,7 +1416,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
       )}
 
       {tab === "waste" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
           <Card title="توزيع النفايات حسب النوع" icon="🗑️">
             <ResponsiveContainer width="100%" height={280}>
               <PieChart>
@@ -1448,7 +1448,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
 
       {tab === "cost" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
             <StatCard title="إجمالي التكلفة السنوية" value={monthlyTrend.reduce((a, m) => a + m.التكلفة, 0).toLocaleString()} unit="ر.س" icon="💰" gradient={C.g3} />
             <StatCard title="متوسط التكلفة الشهرية" value={Math.round(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12).toLocaleString()} unit="ر.س" icon="📅" gradient={C.g2} trend={-8.5} />
             <StatCard title="تكلفة الكيلوغرام" value={(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12 / (totalWaste * 4.3)).toFixed(2)} unit="ر.س" icon="⚖️" gradient={C.g1} />
@@ -1695,7 +1695,7 @@ const PredictionsPage = ({ stations }) => {
           </Card>
 
           {/* Upcoming Events + Impact by Type */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
             <Card title="الأحداث القادمة" icon="⏰">
               <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
                 {upcomingEvents.map((e, i) => (
@@ -1892,7 +1892,7 @@ const PredictionsPage = ({ stations }) => {
             </ResponsiveContainer>
           </Card>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
             <Card title="توقعات تأثير النفايات حسب النوع" icon="🗑️">
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={wasteTypeImpact} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
@@ -1959,7 +1959,7 @@ const PredictionsPage = ({ stations }) => {
             </ResponsiveContainer>
           </Card>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
             <Card title="المحطات الأكثر خطورة" icon="🚨">
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {stationRisk.slice(0, 6).map((s, i) => {
@@ -2190,7 +2190,7 @@ const FireAlertPage = ({ stations }) => {
           </div>
 
           {/* Temperature Timeline + Risk Pie */}
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
             <Card title="منحنى الحرارة الداخلية (24 ساعة)" icon="🌡️">
               <ResponsiveContainer width="100%" height={280}>
                 <AreaChart data={tempHistory} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
@@ -2249,7 +2249,7 @@ const FireAlertPage = ({ stations }) => {
                       <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{s.district}</span>
                       {getRiskBadge(s.riskLevel)}
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 11 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 6, fontSize: 11 }}>
                       <div style={{ color: C.dim }}>🌡️ داخلي: <span style={{ color: s.internalTemp > 55 ? "#ef4444" : s.internalTemp > 40 ? "#f59e0b" : C.text, fontWeight: 600 }}>{s.internalTemp}°C</span></div>
                       <div style={{ color: C.dim }}>⛽ غاز: <span style={{ color: s.gasLevel > 60 ? "#ef4444" : C.text, fontWeight: 600 }}>{s.gasLevel}%</span></div>
                       <div style={{ color: C.dim }}>💧 رطوبة: <span style={{ color: C.text, fontWeight: 600 }}>{s.humidity}%</span></div>
@@ -2281,7 +2281,7 @@ const FireAlertPage = ({ stations }) => {
       {/* ===== ANALYSIS ===== */}
       {view === "analysis" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
             <Card title="مؤشر خطورة الحريق لكل محطة" icon="📊">
               <ResponsiveContainer width="100%" height={350}>
                 <BarChart data={stationRiskChart} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
@@ -2390,7 +2390,7 @@ const FireAlertPage = ({ stations }) => {
                   ))}
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginBottom: 20 }}>
                   {[
                     { label: "كاشف الدخان", active: selectedStation.smokeDetected, activeText: "تم كشف دخان!", inactiveText: "لا يوجد دخان", icon: "💨" },
                     { label: "كاشف الشرارة", active: selectedStation.sparkDetected, activeText: "تم كشف شرارة!", inactiveText: "لا توجد شرارة", icon: "⚡" },
@@ -2449,7 +2449,7 @@ const FireAlertPage = ({ stations }) => {
                     <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
                       <CircularGauge value={s.riskScore} color={rColor} size={80} />
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 11 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 4, fontSize: 11 }}>
                       <div style={{ color: C.dim }}>🌡️ {s.internalTemp}°C</div>
                       <div style={{ color: C.dim }}>⛽ {s.gasLevel}%</div>
                       <div style={{ color: C.dim }}>💧 {s.humidity}%</div>
@@ -2471,7 +2471,7 @@ const FireAlertPage = ({ stations }) => {
               حرّك شريط الحرارة لمحاكاة ارتفاع درجة حرارة الحاوية الداخلية ومشاهدة كيف يتغير مستوى الخطورة والإجراءات المطلوبة في الوقت الفعلي.
             </p>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 20 }}>
               {/* Control Panel */}
               <div style={{ background: C.bg, borderRadius: 14, padding: 20 }}>
                 <div style={{ textAlign: "center", marginBottom: 20 }}>
@@ -3155,7 +3155,7 @@ const SuctionControlPage = ({ stations, user }) => {
     <div style={{ display:"flex", flexDirection:"column", gap:18, direction:"rtl", fontFamily:F }}>
 
       {/* ─── Stats bar ───────────────────────────────────── */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))", gap:12 }}>
         {[
           { label:"أوامر نشطة",   val:jobs.filter(j=>j.status==="pending"||j.status==="active").length,  color:C.info,   icon:"⚡" },
           { label:"مجدولة",       val:jobs.filter(j=>j.status==="scheduled").length,                     color:C.purple, icon:"🕐" },
@@ -3170,7 +3170,7 @@ const SuctionControlPage = ({ stations, user }) => {
         ))}
       </div>
 
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:16 }}>
 
         {/* ─── Issue Command ───────────────────────────── */}
         <Card title="إصدار أمر شفط" icon="🚿">
@@ -3261,7 +3261,7 @@ const SuctionControlPage = ({ stations, user }) => {
 
           {/* حقول الوقت */}
           {mode==="scheduled" && (
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:10, marginBottom:12 }}>
               <div>
                 <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>التاريخ</label>
                 <input type="date" value={schedDate} onChange={e=>setSchedDate(e.target.value)} style={inp} min={new Date().toISOString().slice(0,10)} />
@@ -3387,7 +3387,7 @@ const ExecLoginPage = ({ onLogin }) => {
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0a0e1a 0%, #1a1040 50%, #0a0e1a 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: ARABIC_FONT, direction: "rtl" }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-      <div style={{ width: 420, padding: 40, background: "#111827", borderRadius: 24, border: "1px solid #1e293b", position: "relative", overflow: "hidden" }}>
+      <div style={{ width:"100%", maxWidth: 420, padding: "clamp(20px,5vw,40px)", background: "#111827", borderRadius: 24, border: "1px solid #1e293b", position: "relative", overflow: "hidden" }}>
         {/* Decorative glow */}
         <div style={{ position: "absolute", top: -60, left: "50%", transform: "translateX(-50%)", width: 200, height: 200, background: "radial-gradient(circle, #f59e0b20, transparent)", borderRadius: "50%" }} />
         <div style={{ position: "absolute", bottom: -40, right: -40, width: 150, height: 150, background: "radial-gradient(circle, #8b5cf620, transparent)", borderRadius: "50%" }} />
@@ -3562,7 +3562,7 @@ const SessionTimeout = ({ onLogout, timeoutMin = 30, countdownSec = 10 }) => {
   if (!warning) return null;
   return (
     <div style={{ position:"fixed", inset:0, background:"#000c", zIndex:9999, display:"flex", alignItems:"center", justifyContent:"center" }}>
-      <div style={{ background:C.card, border:`2px solid ${C.warning}`, borderRadius:20, padding:"36px 40px", width:400, maxWidth:"95vw", textAlign:"center", direction:"rtl", fontFamily:F }}>
+      <div style={{ background:C.card, border:`2px solid ${C.warning}`, borderRadius:20, padding:"36px 40px", width:"95vw", maxWidth:400, textAlign:"center", direction:"rtl", fontFamily:F }}>
         <div style={{ fontSize:48, marginBottom:12 }}>⏰</div>
         <div style={{ fontSize:18, fontWeight:800, color:C.warning, marginBottom:8 }}>انتهت مدة الجلسة قريباً</div>
         <div style={{ fontSize:13, color:C.muted, marginBottom:20, lineHeight:1.7 }}>
@@ -3593,6 +3593,12 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
   const [tab, setTab] = useState("overview");
   const [selectedScenario, setSelectedScenario] = useState(null);
   const [showPassModal, setShowPassModal] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  useEffect(() => {
+    const fn = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", fn);
+    return () => window.removeEventListener("resize", fn);
+  }, []);
 
   const quarterlyData = useMemo(() => generateQuarterlyData(), []);
   const districtPerf = useMemo(() => generateDistrictPerformance(), []);
@@ -3635,30 +3641,31 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
       {/* Executive Header */}
-      <header style={{ padding: "12px 28px", background: "linear-gradient(90deg, #111827, #1a1040)", borderBottom: "1px solid #f59e0b30", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 42, height: 42, borderRadius: 12, background: "linear-gradient(135deg, #f59e0b, #d97706)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🏛️</div>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 900, color: "#f59e0b" }}>بوابة متخذي القرار</div>
-            <div style={{ fontSize: 10, color: "#94a3b8" }}>نظام إدارة النفايات الذكي - بريدة • <ExecHeaderClock /></div>
-          </div>
+      <header style={{ padding: isMobile ? "10px 14px" : "12px 28px", background: "linear-gradient(90deg, #111827, #1a1040)", borderBottom: "1px solid #f59e0b30", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "nowrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <div style={{ width: 38, height: 38, borderRadius: 10, background: "linear-gradient(135deg, #f59e0b, #d97706)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>🏛️</div>
+          {!isMobile && <div>
+            <div style={{ fontSize: 15, fontWeight: 900, color: "#f59e0b" }}>بوابة متخذي القرار</div>
+            <div style={{ fontSize: 10, color: "#94a3b8" }}>نظام إدارة النفايات - بريدة • <ExecHeaderClock /></div>
+          </div>}
+          {isMobile && <div style={{ fontSize: 14, fontWeight: 800, color: "#f59e0b", whiteSpace: "nowrap" }}>بوابة القرار</div>}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ textAlign: "left" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{user.name}</div>
-            <div style={{ fontSize: 10, color: "#f59e0b" }}>{user.role}</div>
-          </div>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: "#f59e0b20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>{user.avatar}</div>
-          <button onClick={() => window.__showAdminPanel && window.__showAdminPanel()} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #8b5cf640", background: "#8b5cf615", color: "#8b5cf6", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>👑 إدارة المستخدمين</button>
-          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: "#10b981", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>⚙️ إعدادات الحساب</button>
-          <button onClick={onLogout} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #ef444440", background: "#ef444415", color: "#ef4444", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>تسجيل خروج</button>
+        <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 10, flexShrink: 0 }}>
+          {!isMobile && <div style={{ textAlign: "left" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{user.name}</div>
+            <div style={{ fontSize: 10, color: "#f59e0b" }}>{user.roleTitle}</div>
+          </div>}
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f59e0b20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{user.avatar}</div>
+          {!isMobile && <button onClick={() => window.__showAdminPanel && window.__showAdminPanel()} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #8b5cf640", background: "#8b5cf615", color: "#8b5cf6", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>👑 إدارة المستخدمين</button>}
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: "#10b981", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>⚙️{!isMobile && " إعدادات"}</button>
+          <button onClick={onLogout} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ef444440", background: "#ef444415", color: "#ef4444", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>🚪{!isMobile && " خروج"}</button>
         </div>
       </header>
       {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
       <SessionTimeout onLogout={onLogout} timeoutMin={30} countdownSec={10} />
 
       {/* Tabs */}
-      <div style={{ padding: "12px 28px 0", display: "flex", gap: 6, flexWrap: "wrap" }}>
+      <div style={{ padding: isMobile ? "10px 12px 0" : "12px 28px 0", display: "flex", gap: 6, flexWrap: "wrap", overflowX: "auto" }}>
         {[
           { key: "overview", label: "📊 نظرة تنفيذية" },
           { key: "financial", label: "💰 التحليل المالي" },
@@ -3687,7 +3694,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
               <StatCard title="كفاءة التشغيل" value={avgEfficiency} unit="%" icon="⚡" gradient="linear-gradient(135deg, #3b82f6, #1d4ed8)" trend={5.2} />
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
               <Card title="الأداء الربعي (ر.س)" icon="📊">
                 <ResponsiveContainer width="100%" height={280}>
                   <ComposedChart data={quarterlyData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
@@ -3748,7 +3755,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
         {/* ===== FINANCIAL ANALYSIS ===== */}
         {tab === "financial" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
               <Card title="العائد على الاستثمار الشهري (ر.س)" icon="📈">
                 <ResponsiveContainer width="100%" height={300}>
                   <AreaChart data={roiData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
@@ -3816,7 +3823,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
               </ResponsiveContainer>
             </Card>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
               <Card title="الأداء مقابل الرضا" icon="🎯">
                 <ResponsiveContainer width="100%" height={280}>
                   <RadarChart cx="50%" cy="50%" outerRadius="70%" data={districtPerf.slice(0, 8)}>
@@ -3940,7 +3947,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                     ))}
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
                     <div style={{ background: "#10b98110", border: "1px solid #10b98130", borderRadius: 12, padding: 16 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#10b981", marginBottom: 10 }}>✅ المميزات</div>
                       {selectedScenario.pros.map((p, i) => (
@@ -3974,7 +3981,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                       <span style={{ fontSize: 11, color: s.recommendation.includes("بشدة") ? "#10b981" : "#f59e0b", fontWeight: 600 }}>{s.recommendation}</span>
                     </div>
                     <div style={{ fontSize: 16, fontWeight: 800, color: C.text, marginBottom: 8 }}>{s.name}</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 11 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 8, fontSize: 11 }}>
                       <div style={{ color: "#64748b" }}>💰 استثمار: <span style={{ color: C.text }}>{(s.investment / 1000000).toFixed(1)}M</span></div>
                       <div style={{ color: "#64748b" }}>📈 ROI: <span style={{ color: "#f59e0b", fontWeight: 700 }}>{s.roi}%</span></div>
                       <div style={{ color: "#64748b" }}>⏱️ استرداد: <span style={{ color: C.text }}>{s.payback}</span></div>
@@ -4560,9 +4567,9 @@ const UnifiedLoginPage = ({ onLogin }) => {
   const filteredHints = selectedRole ? ALL_USERS.filter(u => u.role === selectedRole) : ALL_USERS;
 
   return (
-    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0a0e1a 0%, #0f172a 50%, #0a0e1a 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: ARABIC_FONT, direction: "rtl" }}>
+    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0a0e1a 0%, #0f172a 50%, #0a0e1a 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: ARABIC_FONT, direction: "rtl", padding: "16px" }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-      <div style={{ width: 480, padding: 36, background: "#111827", borderRadius: 24, border: "1px solid #1e293b", position: "relative", overflow: "hidden" }}>
+      <div style={{ width: "100%", maxWidth: 480, padding: "clamp(20px, 5vw, 36px)", background: "#111827", borderRadius: 24, border: "1px solid #1e293b", position: "relative", overflow: "hidden" }}>
         {/* Decorative */}
         <div style={{ position: "absolute", top: -80, left: "50%", transform: "translateX(-50%)", width: 250, height: 250, background: "radial-gradient(circle, #10b98115, transparent)", borderRadius: "50%" }} />
 
@@ -4901,7 +4908,7 @@ const PendingApprovalScreen = () => {
   return (
     <div dir="rtl" style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0a0e1a,#1a1040,#0a0e1a)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-      <div style={{ width:460, padding:"40px", background:"#111827", borderRadius:24, border:"1px solid #f59e0b30", textAlign:"center" }}>
+      <div style={{ width:"100%", maxWidth:460, padding:"clamp(20px,5vw,40px)", background:"#111827", borderRadius:24, border:"1px solid #f59e0b30", textAlign:"center" }}>
         <div style={{ width:80, height:80, borderRadius:20, background:"#f59e0b15", display:"flex", alignItems:"center", justifyContent:"center", fontSize:42, margin:"0 auto 20px", border:"2px solid #f59e0b30" }}>⏳</div>
         <h2 style={{ fontSize:22, fontWeight:900, color:"#f1f5f9", margin:"0 0 10px" }}>بانتظار الموافقة</h2>
         <p style={{ fontSize:14, color:"#94a3b8", lineHeight:1.8, margin:"0 0 20px" }}>
@@ -5168,7 +5175,7 @@ function AppRouter() {
       return (
         <div dir="rtl" style={{ minHeight:"100vh", background:"#0a0e1a", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Noto Kufi Arabic',sans-serif" }}>
           <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-          <div style={{ width:400, padding:40, background:"#111827", borderRadius:24, textAlign:"center", border:"1px solid #ef444430" }}>
+          <div style={{ width:"100%", maxWidth:400, padding:"clamp(20px,5vw,40px)", background:"#111827", borderRadius:24, textAlign:"center", border:"1px solid #ef444430" }}>
             <div style={{ fontSize:48, marginBottom:16 }}>⛔</div>
             <h2 style={{ fontSize:20, fontWeight:900, color:"#ef4444", margin:"0 0 10px" }}>الحساب {userData?.status === "rejected" ? "مرفوض" : "معطّل"}</h2>
             <p style={{ fontSize:13, color:"#94a3b8", lineHeight:1.7 }}>تواصل مع إدارة النظام لمزيد من المعلومات</p>
