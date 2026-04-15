@@ -4653,9 +4653,21 @@ const UnifiedLoginPage = ({ onLogin }) => {
 function SmartWasteManagement() {
   const { user: authUser, userData, userRole, logout } = useAuth();
   const [page, setPage] = useState("dashboard");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 768);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [time, setTime] = useState(new Date());
   const [showPassModal, setShowPassModal] = useState(false);
+
+  useEffect(() => {
+    const onResize = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (!mobile) setSidebarOpen(true);
+      else setSidebarOpen(false);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // 📦 البيانات من Firebase
   const [stations, setStations] = useState([]);
@@ -4730,79 +4742,141 @@ function SmartWasteManagement() {
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
       <SessionTimeout onLogout={handleLogout} timeoutMin={30} countdownSec={10} />
 
-      <aside style={{ width: sidebarOpen ? 240 : 64, background: C.card, borderLeft: `1px solid ${C.border}`, display: "flex", flexDirection: "column", transition: "width 0.3s ease", overflow: "hidden", flexShrink: 0 }}>
-        <div style={{ padding: sidebarOpen ? "20px 18px" : "20px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12, minHeight: 70 }}>
+      {/* ── Mobile backdrop ─────────────────────────────── */}
+      {isMobile && sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          style={{ position: "fixed", inset: 0, background: "#000a", zIndex: 40 }}
+        />
+      )}
+
+      {/* ── Sidebar ─────────────────────────────────────── */}
+      <aside style={{
+        width: 240,
+        background: C.card,
+        borderLeft: `1px solid ${C.border}`,
+        display: "flex",
+        flexDirection: "column",
+        flexShrink: 0,
+        transition: "transform 0.3s ease",
+        // Desktop: shrink to 64px when closed; Mobile: slide off-screen (fixed overlay)
+        ...(isMobile ? {
+          position: "fixed", top: 0, right: 0, bottom: 0, zIndex: 50,
+          transform: sidebarOpen ? "translateX(0)" : "translateX(100%)",
+          boxShadow: sidebarOpen ? "-8px 0 32px #0008" : "none",
+        } : {
+          width: sidebarOpen ? 240 : 64,
+          position: "relative",
+          transform: "none",
+          overflow: "hidden",
+        }),
+      }}>
+        <div style={{ padding: "20px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12, minHeight: 70 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: C.g1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>♻️</div>
-          {sidebarOpen && <div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: C.text, whiteSpace: "nowrap" }}>إدارة النفايات - بريدة</div>
+          {(sidebarOpen || isMobile) && <div style={{ overflow: "hidden" }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: C.text, whiteSpace: "nowrap" }}>إدارة النفايات - بريدة</div>
             <div style={{ fontSize: 10, color: C.accent, fontWeight: 600 }}>Smart Waste MIS</div>
           </div>}
+          {isMobile && (
+            <button onClick={() => setSidebarOpen(false)} style={{ marginRight: "auto", background: "none", border: "none", color: C.muted, fontSize: 22, cursor: "pointer", padding: 4 }}>✕</button>
+          )}
         </div>
-        <nav style={{ flex: 1, padding: "12px 8px", display: "flex", flexDirection: "column", gap: 4 }}>
+
+        <nav style={{ flex: 1, padding: "12px 8px", display: "flex", flexDirection: "column", gap: 4, overflowY: "auto" }}>
           {navItems.map((item) => (
-            <button key={item.key} onClick={() => setPage(item.key)} style={{
-              display: "flex", alignItems: "center", gap: 12, padding: sidebarOpen ? "12px 14px" : "12px 0",
-              justifyContent: sidebarOpen ? "flex-start" : "center", borderRadius: 10, border: "none",
-              background: page === item.key ? C.accent + "18" : "transparent", color: page === item.key ? C.accent : C.muted,
-              cursor: "pointer", fontSize: 14, fontWeight: page === item.key ? 700 : 500, fontFamily: ARABIC_FONT, whiteSpace: "nowrap",
+            <button key={item.key} onClick={() => { setPage(item.key); if (isMobile) setSidebarOpen(false); }} style={{
+              display: "flex", alignItems: "center", gap: 12,
+              padding: (sidebarOpen || isMobile) ? "12px 14px" : "12px 0",
+              justifyContent: (sidebarOpen || isMobile) ? "flex-start" : "center",
+              borderRadius: 10, border: "none",
+              background: page === item.key ? C.accent + "18" : "transparent",
+              color: page === item.key ? C.accent : C.muted,
+              cursor: "pointer", fontSize: 14, fontWeight: page === item.key ? 700 : 500,
+              fontFamily: ARABIC_FONT, whiteSpace: "nowrap", width: "100%",
             }}>
               <span style={{ fontSize: 20, flexShrink: 0 }}>{item.icon}</span>
-              {sidebarOpen && item.label}
+              {(sidebarOpen || isMobile) && item.label}
             </button>
           ))}
         </nav>
 
         {/* User info + logout */}
         <div style={{ padding: "12px 8px", borderTop: `1px solid ${C.border}` }}>
-          {sidebarOpen && (
+          {(sidebarOpen || isMobile) && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", marginBottom: 8 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>{loggedInUser.avatar}</div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{loggedInUser.name}</div>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{loggedInUser.avatar}</div>
+              <div style={{ overflow: "hidden" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{loggedInUser.name}</div>
                 <div style={{ fontSize: 10, color: C.accent }}>{loggedInUser.roleTitle}</div>
               </div>
             </div>
           )}
-          <button onClick={() => setShowPassModal(true)} style={{
-            display: "flex", alignItems: "center", gap: 10, width: "100%", padding: sidebarOpen ? "10px 14px" : "10px 0",
-            justifyContent: sidebarOpen ? "flex-start" : "center", borderRadius: 10, marginBottom: 6,
+          <button onClick={() => { setShowPassModal(true); if (isMobile) setSidebarOpen(false); }} style={{
+            display: "flex", alignItems: "center", gap: 10, width: "100%",
+            padding: (sidebarOpen || isMobile) ? "10px 14px" : "10px 0",
+            justifyContent: (sidebarOpen || isMobile) ? "flex-start" : "center",
+            borderRadius: 10, marginBottom: 6,
             border: `1px solid #10b98130`, background: `#10b98110`, color: "#10b981",
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
           }}>
             <span style={{ fontSize: 16 }}>⚙️</span>
-            {sidebarOpen && "إعدادات الحساب"}
+            {(sidebarOpen || isMobile) && "إعدادات الحساب"}
           </button>
           <button onClick={handleLogout} style={{
-            display: "flex", alignItems: "center", gap: 10, width: "100%", padding: sidebarOpen ? "10px 14px" : "10px 0",
-            justifyContent: sidebarOpen ? "flex-start" : "center", borderRadius: 10,
+            display: "flex", alignItems: "center", gap: 10, width: "100%",
+            padding: (sidebarOpen || isMobile) ? "10px 14px" : "10px 0",
+            justifyContent: (sidebarOpen || isMobile) ? "flex-start" : "center",
+            borderRadius: 10,
             border: `1px solid ${C.danger}30`, background: `${C.danger}10`, color: C.danger,
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
           }}>
             <span style={{ fontSize: 16 }}>🚪</span>
-            {sidebarOpen && "تسجيل خروج"}
+            {(sidebarOpen || isMobile) && "تسجيل خروج"}
           </button>
         </div>
       </aside>
 
       {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
 
-      <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <header style={{ padding: "14px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", background: C.card, flexShrink: 0 }}>
-          <div>
-            <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: C.text }}>{navItems.find((n) => n.key === page)?.label}</h1>
-            <span style={{ fontSize: 12, color: C.dim }}>مدينة بريدة • {time.toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} • {time.toLocaleTimeString("ar-SA")}</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ position: "relative", width: 40, height: 40, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-              🔔
-              <span style={{ position: "absolute", top: -2, right: -2, width: 16, height: 16, borderRadius: "50%", background: C.danger, fontSize: 9, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>
-                {alerts.filter((a) => a.type === "حرج").length}
-              </span>
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+        {/* ── Header ──────────────────────────────────────── */}
+        <header style={{
+          padding: isMobile ? "10px 14px" : "14px 24px",
+          borderBottom: `1px solid ${C.border}`,
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          background: C.card, flexShrink: 0, gap: 10,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            {/* Hamburger (mobile) or collapse toggle (desktop) */}
+            <button
+              onClick={() => setSidebarOpen(v => !v)}
+              style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, fontSize: 18, cursor: "pointer", padding: "4px 8px", flexShrink: 0 }}
+            >☰</button>
+            <div style={{ minWidth: 0 }}>
+              <h1 style={{ fontSize: isMobile ? 15 : 20, fontWeight: 800, margin: 0, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {navItems.find((n) => n.key === page)?.label}
+              </h1>
+              {!isMobile && (
+                <span style={{ fontSize: 11, color: C.dim }}>
+                  مدينة بريدة • {time.toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} • {time.toLocaleTimeString("ar-SA")}
+                </span>
+              )}
             </div>
-            <div style={{ width: 40, height: 40, borderRadius: 10, background: C.g1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{loggedInUser.avatar}</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 8 : 14, flexShrink: 0 }}>
+            <div style={{ position: "relative", width: 36, height: 36, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 18 }}>
+              🔔
+              {alerts.filter((a) => a.type === "حرج").length > 0 && (
+                <span style={{ position: "absolute", top: -2, right: -2, width: 16, height: 16, borderRadius: "50%", background: C.danger, fontSize: 9, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>
+                  {alerts.filter((a) => a.type === "حرج").length}
+                </span>
+              )}
+            </div>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: C.g1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{loggedInUser.avatar}</div>
           </div>
         </header>
-        <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
+
+        <div style={{ flex: 1, overflow: "auto", padding: isMobile ? 12 : 24 }}>
           {page === "dashboard"  && <DashboardPage stations={stations} weeklyData={weeklyData} monthlyTrend={monthlyTrend} alerts={alerts} hourlyData={hourlyData} />}
           {page === "stations"   && <StationsPage stations={stations} />}
           {page === "control"    && <SuctionControlPage stations={stations} user={loggedInUser} />}
