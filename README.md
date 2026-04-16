@@ -1,16 +1,18 @@
 # ♻️ Smart Waste MIS — نظام إدارة النفايات الذكي
 
 <div align="center">
+🚀 **[تجربة النظام مباشرة](https://smart-waste-app-psi.vercel.app)**
 
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)
 ![Vite](https://img.shields.io/badge/Vite-5-646CFF?style=flat-square&logo=vite)
 ![Firebase](https://img.shields.io/badge/Firebase-Firestore-FFCA28?style=flat-square&logo=firebase)
 ![Vercel](https://img.shields.io/badge/Deployed-Vercel-000000?style=flat-square&logo=vercel)
 
+<br/>
+
 لوحة تحكم ذكية لإدارة محطات شفط النفايات في مدينة بريدة — منطقة القصيم
 
 </div>
-
 ---
 
 ## 📋 وصف المشروع
