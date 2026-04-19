@@ -11,7 +11,7 @@
 //
 // ============================================================
 
-import { useState, useEffect, useMemo, useRef, createContext, useContext } from "react";
+import React, { useState, useEffect, useMemo, useRef, createContext, useContext } from "react";
 
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -57,6 +57,8 @@ import {
   updateCitizenReport,
   deleteRequest,
   deleteCitizenReport,
+  syncDistrictsPerfFromStations,
+  recordDailyStationHistory,
   COLLECTIONS,
 } from "./firestoreService";
 import { seedAllCollections } from "./seedFirestore";
@@ -868,6 +870,7 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
   const [editingContainer, setEditingContainer] = useState(null);
   const [containerForm, setContainerForm] = useState({ name: "", fillLevel: "" });
   const [containerLoading, setContainerLoading] = useState(false);
+  const [containerError, setContainerError] = useState("");
   const [deletingContainerId, setDeletingContainerId] = useState(null);
 
   // Keep selected station live from onSnapshot feed
@@ -899,18 +902,25 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
   // ─── Handlers: Station ────────────────────────────────────
   const handleAddStation = async () => {
     const { name, district, fillLevel, pressure, wasteType, dailyWaste } = stationForm;
-    if (!name || !district || fillLevel === "" || pressure === "" || !dailyWaste) {
-      setStationError("يرجى تعبئة جميع الحقول"); return;
-    }
+    const fl = Number(fillLevel);
+    const pr = Number(pressure);
+    const dw = Number(dailyWaste);
+    if (!name.trim())    { setStationError("يرجى إدخال اسم المحطة"); return; }
+    if (!district.trim()){ setStationError("يرجى إدخال اسم الحي"); return; }
+    if (fillLevel === "" || isNaN(fl) || fl < 0 || fl > 100) { setStationError("مستوى الامتلاء يجب أن يكون بين 0 و 100"); return; }
+    if (pressure === "" || isNaN(pr) || pr < 0 || pr > 20)   { setStationError("الضغط يجب أن يكون بين 0 و 20 بار"); return; }
+    if (dailyWaste === "" || isNaN(dw) || dw <= 0)            { setStationError("الكمية اليومية يجب أن تكون أكبر من صفر"); return; }
     setStationLoading(true); setStationError("");
     try {
       await addDoc(collection(db, "stations"), {
-        name, district,
+        name: name.trim(),
+        district: district.trim(),
         fillLevel: Number(fillLevel),
         pressure: Number(pressure),
         wasteType,
         dailyWaste: Number(dailyWaste),
         containers: [],
+        createdAt: new Date().toISOString(),
       });
       setShowAddStation(false);
       setStationForm(emptyStation);
@@ -923,7 +933,11 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
 
   // ─── Handlers: Containers ─────────────────────────────────
   const handleSaveContainer = async () => {
-    if (!containerForm.name || containerForm.fillLevel === "" || !currentSelected) return;
+    const fl = Number(containerForm.fillLevel);
+    if (!containerForm.name.trim()) { setContainerError("يرجى إدخال اسم الحاوية"); return; }
+    if (containerForm.fillLevel === "" || isNaN(fl) || fl < 0 || fl > 100) { setContainerError("مستوى الامتلاء يجب أن يكون بين 0 و 100"); return; }
+    if (!currentSelected) return;
+    setContainerError("");
     setContainerLoading(true);
     try {
       const containers = [...(currentSelected.containers || [])];
@@ -937,8 +951,9 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
       setShowContainerModal(false);
       setEditingContainer(null);
       setContainerForm({ name: "", fillLevel: "" });
+      setContainerError("");
     } catch (e) {
-      console.error("خطأ في حفظ الحاوية:", e);
+      setContainerError("حدث خطأ: " + e.message);
     } finally {
       setContainerLoading(false);
     }
@@ -958,12 +973,14 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
   const openAddContainer = () => {
     setEditingContainer(null);
     setContainerForm({ name: "", fillLevel: "" });
+    setContainerError("");
     setShowContainerModal(true);
   };
 
   const openEditContainer = (c) => {
     setEditingContainer(c);
     setContainerForm({ name: c.name, fillLevel: String(c.fillLevel) });
+    setContainerError("");
     setShowContainerModal(true);
   };
 
@@ -1082,11 +1099,16 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
                 <input type="number" min="0" max="100" value={containerForm.fillLevel} onChange={e => setContainerForm(p=>({...p,fillLevel:e.target.value}))} placeholder="0–100" style={inp} />
               </div>
             </div>
-            <div style={{ display:"flex", gap:10, marginTop:20 }}>
+            {containerError && (
+              <div style={{ marginTop:10, padding:"8px 12px", borderRadius:8, background:C.danger+"20", border:`1px solid ${C.danger}40`, color:C.danger, fontSize:12, fontFamily:F }}>
+                ⚠️ {containerError}
+              </div>
+            )}
+            <div style={{ display:"flex", gap:10, marginTop:14 }}>
               <button onClick={handleSaveContainer} disabled={containerLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:containerLoading?"#334155":"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontWeight:700, cursor:containerLoading?"not-allowed":"pointer", fontFamily:F, fontSize:13 }}>
                 {containerLoading ? "جاري الحفظ..." : "💾 حفظ"}
               </button>
-              <button onClick={() => { setShowContainerModal(false); setEditingContainer(null); }} style={{ padding:"12px 20px", borderRadius:10, border:`1px solid ${C.border}`, background:"transparent", color:C.muted, cursor:"pointer", fontFamily:F, fontSize:13 }}>إلغاء</button>
+              <button onClick={() => { setShowContainerModal(false); setEditingContainer(null); setContainerError(""); }} style={{ padding:"12px 20px", borderRadius:10, border:`1px solid ${C.border}`, background:"transparent", color:C.muted, cursor:"pointer", fontFamily:F, fontSize:13 }}>إلغاء</button>
             </div>
           </div>
         </div>
@@ -2152,8 +2174,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
   const warnings = fireData.filter(s => s.riskLevel === "تحذير");
   const safe = fireData.filter(s => s.riskLevel === "آمن");
 
-  const avgTemp = Math.round(fireData.reduce((a, s) => a + s.internalTemp, 0) / fireData.length);
-  const avgGas = Math.round(fireData.reduce((a, s) => a + s.gasLevel, 0) / fireData.length);
+  const avgTemp = fireData.length ? Math.round(fireData.reduce((a, s) => a + s.internalTemp, 0) / fireData.length) : 0;
+  const avgGas  = fireData.length ? Math.round(fireData.reduce((a, s) => a + s.gasLevel,     0) / fireData.length) : 0;
   const smokeCount = fireData.filter(s => s.smokeDetected).length;
 
   const riskDistribution = [
@@ -2198,6 +2220,16 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
   }, [simTemp]);
 
   const simLevel = simRiskScore > 75 ? "خطر عالي" : simRiskScore > 50 ? "خطر متوسط" : simRiskScore > 30 ? "تحذير" : "آمن";
+
+  if (stations.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "80px 0", color: C.dim }}>
+        <div style={{ fontSize: 48, marginBottom: 12 }}>🔥</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: C.muted, marginBottom: 6 }}>جاري تحميل بيانات المحطات...</div>
+        <div style={{ fontSize: 13 }}>سيظهر نظام مراقبة الحريق بعد تحميل بيانات المحطات</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -4775,6 +4807,10 @@ function SmartWasteManagement() {
         const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         setStations(data);
         setLoadingStations(false);
+        // Keep districts_perf analytics in sync with real station data
+        syncDistrictsPerfFromStations(data).catch(() => {});
+        // Record one daily snapshot for the station history charts
+        recordDailyStationHistory(data).catch(() => {});
       },
       (error) => {
         console.error("خطأ في الاستماع لبيانات المحطات:", error);
@@ -5277,10 +5313,59 @@ function AppRouter() {
   return <SmartWasteManagement />;
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Error Boundary — يمنع الشاشة البيضاء عند أي خطأ غير متوقع
+// ══════════════════════════════════════════════════════════════════════
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, info) {
+    console.error("[ErrorBoundary]", error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div dir="rtl" style={{
+          minHeight: "100vh", background: "#0a0e1a", display: "flex",
+          flexDirection: "column", alignItems: "center", justifyContent: "center",
+          fontFamily: "'Noto Kufi Arabic', sans-serif", color: "#f1f5f9", padding: 24, textAlign: "center",
+        }}>
+          <div style={{ fontSize: 56, marginBottom: 16 }}>⚠️</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "#ef4444", marginBottom: 8 }}>
+            حدث خطأ غير متوقع
+          </div>
+          <div style={{ fontSize: 14, color: "#94a3b8", marginBottom: 28, maxWidth: 400 }}>
+            {this.state.error?.message || "خطأ غير معروف"}
+          </div>
+          <button
+            onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
+            style={{
+              padding: "12px 28px", borderRadius: 12, border: "none",
+              background: "linear-gradient(135deg,#10b981,#059669)",
+              color: "#000", fontWeight: 700, fontSize: 14, cursor: "pointer",
+              fontFamily: "'Noto Kufi Arabic', sans-serif",
+            }}
+          >
+            🔄 إعادة تحميل التطبيق
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
-    <AuthProvider>
-      <AppRouter />
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <AppRouter />
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

@@ -12,7 +12,7 @@
  * ─────────────────────────────────────────────────────────────────────
  */
 
-import { collection, addDoc, getDocs, query, limit, doc, setDoc } from "firebase/firestore";
+import { collection, addDoc, getDocs, query, limit, doc, setDoc, getDoc } from "firebase/firestore";
 import { db } from "./firebase";
 
 const ts = () => new Date().toISOString();
@@ -35,9 +35,15 @@ async function seedOnce(colName, data) {
   return true;
 }
 
-/** Always write/overwrite an analytics document by fixed ID */
+/** Write an analytics document ONLY if it doesn't exist yet — protects real data */
 async function setAnalyticsDoc(docId, data) {
-  await setDoc(doc(db, "analytics", docId), { ...data, updatedAt: ts() });
+  const ref  = doc(db, "analytics", docId);
+  const snap = await getDoc(ref);
+  if (snap.exists()) {
+    console.log(`[seed] analytics/${docId} — already exists, skipping.`);
+    return;
+  }
+  await setDoc(ref, { ...data, updatedAt: ts() });
   console.log(`[seed] analytics/${docId} — set ✓`);
 }
 
@@ -349,7 +355,7 @@ export async function seedAllCollections() {
       "يناير":   2550,
       "فبراير":  3380,
       "مارس":    3620,
-      "أبريل":   null,   // شهر حالي — لم يكتمل بعد
+      "أبريل":   3180,   // قراءة جزئية (19 من 30 يوم)
       "مايو":    null,
       "يونيو":   null,
       "يوليو":   null,

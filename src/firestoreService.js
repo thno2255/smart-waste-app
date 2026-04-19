@@ -14,7 +14,7 @@ import { useState, useEffect } from "react";
 import {
   collection, addDoc, updateDoc, deleteDoc,
   doc, onSnapshot, query, where, orderBy,
-  getDoc,
+  getDoc, getDocs, setDoc,
 } from "firebase/firestore";
 import { db } from "./firebase";
 
@@ -377,13 +377,20 @@ export const deleteCitizenReport = (id) =>
 // ══════════════════════════════════════════════════════════════════════
 /**
  * Syncs alerts collection from stations data.
- * Adds new unresolved alerts for critical/warning stations.
- * Does NOT duplicate — caller should check existing alerts first.
+ * Adds a new alert ONLY if no unresolved alert already exists for that station.
+ * Prevents duplicate alerts from accumulating over time.
  */
 export const syncAlertsFromStations = async (stations = []) => {
+  // Fetch all currently unresolved alerts once
+  const snap = await getDocs(
+    query(collection(db, COLLECTIONS.ALERTS), where("resolved", "==", false))
+  );
+  // Build a Set of stationIds that already have an open alert
+  const openStationIds = new Set(snap.docs.map(d => d.data().stationId));
+
   for (const station of stations) {
     const st = getStatus(station.fillLevel);
-    if (st === "حرج" || st === "تحذير") {
+    if ((st === "حرج" || st === "تحذير") && !openStationIds.has(station.id)) {
       await addAlert({
         stationId:   station.id,
         stationName: station.name,
@@ -393,4 +400,83 @@ export const syncAlertsFromStations = async (stations = []) => {
       });
     }
   }
+};
+
+// ══════════════════════════════════════════════════════════════════════
+// 15. Auto-sync districts performance from real stations data
+// ══════════════════════════════════════════════════════════════════════
+/**
+ * Derives district performance metrics from live station data
+ * and writes them to analytics/districts_perf.
+ * Call this whenever stations change to keep the ExecDashboard chart live.
+ */
+export const syncDistrictsPerfFromStations = async (stations = []) => {
+  if (stations.length === 0) return;
+
+  // Group stations by district
+  const byDistrict = {};
+  for (const s of stations) {
+    const d = s.district || "غير محدد";
+    if (!byDistrict[d]) byDistrict[d] = [];
+    byDistrict[d].push(s);
+  }
+
+  const data = Object.entries(byDistrict).map(([name, stList]) => {
+    const avgFill   = Math.round(stList.reduce((a, s) => a + (s.fillLevel || 0), 0) / stList.length);
+    const avgWaste  = Math.round(stList.reduce((a, s) => a + (s.dailyWaste || 0), 0) / stList.length);
+    // Performance: higher when fill is low (stations are being serviced on time)
+    const الأداء   = Math.max(10, 100 - Math.round(avgFill * 0.6));
+    return {
+      name:      name.replace("حي ", ""),
+      الأداء,
+      الامتلاء:  avgFill,
+      الكمية:    avgWaste,
+      المحطات:   stList.length,
+    };
+  });
+
+  await setDoc(doc(db, "analytics", "districts_perf"), { data });
+};
+
+// ══════════════════════════════════════════════════════════════════════
+// 16. Record daily station history snapshot
+// ══════════════════════════════════════════════════════════════════════
+const ARABIC_DAYS = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+
+/**
+ * Appends today's readings for each station into analytics/station_history.
+ * Keeps a rolling 7-day window per district.
+ * Uses localStorage to ensure it only runs once per calendar day per browser.
+ */
+export const recordDailyStationHistory = async (stations = []) => {
+  if (stations.length === 0) return;
+
+  const todayKey = new Date().toISOString().slice(0, 10); // "2026-04-19"
+  const storageKey = `station_history_recorded_${todayKey}`;
+  if (localStorage.getItem(storageKey)) return; // already recorded today
+
+  const ref  = doc(db, "analytics", "station_history");
+  const snap = await getDoc(ref);
+  const existing = snap.exists() ? (snap.data().data || {}) : {};
+
+  const dayName = ARABIC_DAYS[new Date().getDay()];
+  const updated = { ...existing };
+
+  for (const s of stations) {
+    const district = s.district || "غير محدد";
+    const history  = Array.isArray(updated[district]) ? [...updated[district]] : [];
+    // Add today's reading
+    history.push({
+      day:      dayName,
+      الامتلاء: s.fillLevel   || 0,
+      الضغط:    s.pressure    || 0,
+      الكمية:   s.dailyWaste  || 0,
+    });
+    // Keep only the last 7 days
+    updated[district] = history.slice(-7);
+  }
+
+  await setDoc(ref, { data: updated, updatedAt: new Date().toISOString() });
+  localStorage.setItem(storageKey, "1");
+  console.log(`[history] station_history recorded for ${todayKey}`);
 };
