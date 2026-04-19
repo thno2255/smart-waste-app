@@ -14,6 +14,7 @@ import { useState, useEffect } from "react";
 import {
   collection, addDoc, updateDoc, deleteDoc,
   doc, onSnapshot, query, where, orderBy,
+  getDoc,
 } from "firebase/firestore";
 import { db } from "./firebase";
 
@@ -138,6 +139,34 @@ export function useCollectionWhere(col, field, value, sortField = "createdAt") {
   }, [col, field, value, sortField]);
 
   return { data, loading, error };
+}
+
+/**
+ * Real-time hook for a single document inside the "analytics" collection.
+ * Returns { data, loading } where data is the document fields (or null).
+ * @param {string} docId  e.g. "weekly" | "monthly" | "hourly" | "fire_temp" …
+ */
+export function useAnalyticsDoc(docId) {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!docId) return;
+    const unsub = onSnapshot(
+      doc(db, "analytics", docId),
+      (snap) => {
+        setData(snap.exists() ? snap.data() : null);
+        setLoading(false);
+      },
+      (err) => {
+        console.error(`[useAnalyticsDoc:${docId}]`, err);
+        setLoading(false);
+      }
+    );
+    return () => unsub();
+  }, [docId]);
+
+  return { data, loading };
 }
 
 // ══════════════════════════════════════════════════════════════════════

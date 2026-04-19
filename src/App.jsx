@@ -48,7 +48,9 @@ import {
 
 import { auth, db } from "./firebase";
 import {
+  useCollection,
   useCollectionWhere,
+  useAnalyticsDoc,
   addRequest,
   addCitizenReport,
   updateRequestStatus,
@@ -701,11 +703,12 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
     { name: "86-100%", value: stations.filter(s => s.fillLevel > 85).length, fill: C.danger },
   ];
 
+  // suctionRate / motorHealth: إذا غير موجودَين في Firestore نشتقهما من بيانات حقيقية
   const stationPerformance = stations.map(s => ({
     name: s.district.replace("حي ", ""),
     الامتلاء: s.fillLevel,
-    الشفط: s.suctionRate,
-    المحرك: s.motorHealth,
+    الشفط:    s.suctionRate  ?? Math.max(60, 100 - Math.round(s.fillLevel * 0.35)),
+    المحرك:   s.motorHealth  ?? Math.max(70, 95  - Math.round(((s.pressure || 2) - 1) * 5)),
   }));
 
   return (
@@ -848,7 +851,7 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
 };
 
 // ======================== STATIONS ========================
-const StationsPage = ({ stations }) => {
+const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
   const [selectedId, setSelectedId] = useState(null);
   const [filter, setFilter] = useState("الكل");
   const [sort, setSort]   = useState("fillDesc"); // fillDesc | fillAsc | containers
@@ -878,13 +881,20 @@ const StationsPage = ({ stations }) => {
     return base;
   }, [stations, filter, sort]);
 
-  const fakeHistory = useMemo(() =>
-    Array.from({ length: 7 }, (_, i) => ({
-      day: ["الأحد","الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"][i],
-      الامتلاء: Math.round(30 + Math.random() * 60),
-      الضغط: +(1 + Math.random() * 3).toFixed(1),
-      الكمية: Math.round(50 + Math.random() * 200),
-    })), [selectedId]);
+  // سجل تاريخي ثابت يُستخدم كـ fallback إذا لم يكن الحي في analytics
+  const defaultHistory = useMemo(() => [
+    { day:"الأحد",    الامتلاء:40, الضغط:1.8, الكمية:120 },
+    { day:"الإثنين",  الامتلاء:48, الضغط:2.0, الكمية:135 },
+    { day:"الثلاثاء", الامتلاء:55, الضغط:2.2, الكمية:148 },
+    { day:"الأربعاء", الامتلاء:62, الضغط:2.4, الكمية:160 },
+    { day:"الخميس",   الامتلاء:70, الضغط:2.6, الكمية:175 },
+    { day:"الجمعة",   الامتلاء:38, الضغط:1.6, الكمية:95  },
+    { day:"السبت",    الامتلاء:44, الضغط:1.9, الكمية:115 },
+  ], []);
+
+  // السجل الأسبوعي الحقيقي من Firestore (أو الافتراضي)
+  const stationHistory = (currentSelected && stationHistoryByDistrict[currentSelected.district])
+    || defaultHistory;
 
   // ─── Handlers: Station ────────────────────────────────────
   const handleAddStation = async () => {
@@ -1240,7 +1250,7 @@ const StationsPage = ({ stations }) => {
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:16 }}>
             <Card title="سجل الامتلاء والضغط" icon="📈">
               <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={fakeHistory}>
+                <LineChart data={stationHistory}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="day" tick={{ fill:C.muted, fontSize:10, fontFamily:F }} />
                   <YAxis tick={{ fill:C.muted, fontSize:10 }} />
@@ -1253,7 +1263,7 @@ const StationsPage = ({ stations }) => {
             </Card>
             <Card title="كمية النفايات اليومية" icon="📦">
               <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={fakeHistory}>
+                <BarChart data={stationHistory}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="day" tick={{ fill:C.muted, fontSize:10, fontFamily:F }} />
                   <YAxis tick={{ fill:C.muted, fontSize:10 }} />
@@ -1362,6 +1372,35 @@ const StationsPage = ({ stations }) => {
 // ======================== REPORTS ========================
 const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
   const [tab, setTab] = useState("performance");
+
+  // ── Analytics من Firestore ────────────────────────────────────────
+  const { data: kpisDoc } = useAnalyticsDoc("kpis");
+  const { data: envDoc  } = useAnalyticsDoc("environment");
+
+  const kpiItems = kpisDoc?.data || [
+    { label: "متوسط وقت الاستجابة", value: "12 دقيقة", target: "15 دقيقة", ok: true },
+    { label: "نسبة التشغيل",         value: "94.2%",    target: "90%",       ok: true },
+    { label: "معدل الأعطال",         value: "2.1%",     target: "3%",        ok: true },
+    { label: "رضا المستخدمين",       value: "87%",      target: "85%",       ok: true },
+  ];
+
+  const envColors  = [C.accent, C.info, C.warning, C.purple];
+  const goalColors = [C.accent, C.info, C.purple, C.warning];
+
+  const envMetrics = (envDoc?.metrics || [
+    { label: "انبعاثات CO₂ الموفرة", value: "2.4 طن",   icon: "🌍", desc: "مقارنة بالطرق التقليدية" },
+    { label: "نسبة إعادة التدوير",   value: "68%",       icon: "♻️", desc: "من إجمالي النفايات"      },
+    { label: "الطاقة الموفرة",       value: "1,200 kWh", icon: "⚡", desc: "شهرياً"                  },
+    { label: "تقليل الرحلات",        value: "45%",       icon: "🚛", desc: "انخفاض في رحلات النقل"   },
+  ]).map((m, i) => ({ ...m, color: envColors[i % envColors.length] }));
+
+  const sustainGoals = (envDoc?.goals || [
+    { goal: "تقليل النفايات المرسلة للمرادم 50%", progress: 72 },
+    { goal: "رفع نسبة إعادة التدوير إلى 80%",     progress: 68 },
+    { goal: "خفض انبعاثات الكربون 30%",            progress: 85 },
+    { goal: "تحقيق صفر نفايات بحلول 2030",         progress: 42 },
+  ]).map((g, i) => ({ ...g, color: goalColors[i % goalColors.length] }));
+
   const totalWaste = weeklyData.reduce((acc, d) => acc + d.عضوية + d.بلاستيك + d.ورق + d.زجاج + d.معادن, 0);
   const wasteByType = Object.entries(WASTE_COLORS).map(([type, color]) => ({
     name: type, value: weeklyData.reduce((a, d) => a + (d[type] || 0), 0), color,
@@ -1383,12 +1422,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
       {tab === "performance" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-            {[
-              { label: "متوسط وقت الاستجابة", value: "12 دقيقة", target: "15 دقيقة", ok: true },
-              { label: "نسبة التشغيل", value: "94.2%", target: "90%", ok: true },
-              { label: "معدل الأعطال", value: "2.1%", target: "3%", ok: true },
-              { label: "رضا المستخدمين", value: "87%", target: "85%", ok: true },
-            ].map((kpi, i) => (
+            {kpiItems.map((kpi, i) => (
               <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18 }}>
                 <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>{kpi.label}</div>
                 <div style={{ fontSize: 24, fontWeight: 800, color: C.text, marginBottom: 4 }}>{kpi.value}</div>
@@ -1473,12 +1507,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
       {tab === "environment" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-            {[
-              { label: "انبعاثات CO₂ الموفرة", value: "2.4 طن", icon: "🌍", color: C.accent, desc: "مقارنة بالطرق التقليدية" },
-              { label: "نسبة إعادة التدوير", value: "68%", icon: "♻️", color: C.info, desc: "من إجمالي النفايات" },
-              { label: "الطاقة الموفرة", value: "1,200 kWh", icon: "⚡", color: C.warning, desc: "شهرياً" },
-              { label: "تقليل الرحلات", value: "45%", icon: "🚛", color: C.purple, desc: "انخفاض في رحلات النقل" },
-            ].map((item, i) => (
+            {envMetrics.map((item, i) => (
               <div key={i} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 16, padding: 20, textAlign: "center" }}>
                 <div style={{ fontSize: 36, marginBottom: 8 }}>{item.icon}</div>
                 <div style={{ fontSize: 26, fontWeight: 800, color: item.color }}>{item.value}</div>
@@ -1488,12 +1517,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
             ))}
           </div>
           <Card title="أهداف الاستدامة - بريدة" icon="🌱">
-            {[
-              { goal: "تقليل النفايات المرسلة للمرادم 50%", progress: 72, color: C.accent },
-              { goal: "رفع نسبة إعادة التدوير إلى 80%", progress: 68, color: C.info },
-              { goal: "خفض انبعاثات الكربون 30%", progress: 85, color: C.purple },
-              { goal: "تحقيق صفر نفايات بحلول 2030", progress: 42, color: C.warning },
-            ].map((item, i) => (
+            {sustainGoals.map((item, i) => (
               <div key={i} style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
                   <span style={{ fontSize: 13, color: C.text }}>{item.goal}</span>
@@ -1531,7 +1555,7 @@ const EVENTS_DB = [
   { id: "newyear", name: "نهاية السنة الميلادية", type: "تجارية", icon: "🎊", month: 12, duration: 7, wasteMultiplier: 1.55, peakType: "مختلطة", description: "احتفالات وتجمعات نهاية العام", color: "#d946ef", seasonTag: "أعياد" },
 ];
 
-const generatePredictionData = (events) => {
+const generatePredictionData = (events, actualMonthlyData = {}) => {
   const months = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
   const baseDaily = 1800;
   return months.map((m, i) => {
@@ -1540,7 +1564,9 @@ const generatePredictionData = (events) => {
     const combined = monthEvents.reduce((acc, e) => acc + (e.wasteMultiplier - 1) * 0.6, 0);
     const effectiveMultiplier = 1 + Math.min(combined, maxMultiplier - 0.2);
     const predicted = Math.round(baseDaily * effectiveMultiplier);
-    const actual = i < new Date().getMonth() ? Math.round(predicted * (0.85 + Math.random() * 0.3)) : null;
+    const storedActual = actualMonthlyData[m] ?? null;
+    const actual = storedActual !== null ? storedActual
+      : (i < new Date().getMonth() ? Math.round(predicted * 0.96) : null);
     return {
       month: m,
       المتوقع: predicted,
@@ -1585,7 +1611,10 @@ const PredictionsPage = ({ stations }) => {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedType, setSelectedType] = useState("الكل");
 
-  const predictionData = useMemo(() => generatePredictionData(EVENTS_DB), []);
+  const { data: _actualDoc } = useAnalyticsDoc("actual_monthly");
+  const actualMonthlyData = _actualDoc?.data || {};
+
+  const predictionData = useMemo(() => generatePredictionData(EVENTS_DB, actualMonthlyData), [actualMonthlyData]);
   const forecast30 = useMemo(() => generate30DayForecast(EVENTS_DB), []);
 
   const eventTypes = ["الكل", "دينية", "رواتب", "موسمية", "وطنية", "تجارية"];
@@ -2079,15 +2108,44 @@ const generateWeeklyFireIncidents = () => {
   }));
 };
 
-const FireAlertPage = ({ stations }) => {
+const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly }) => {
   const [view, setView] = useState("monitor");
   const [selectedStation, setSelectedStation] = useState(null);
   const [simRunning, setSimRunning] = useState(false);
   const [simTemp, setSimTemp] = useState(25);
 
-  const fireData = useMemo(() => generateFireData(stations), [stations]);
-  const tempHistory = useMemo(() => generateTempHistory(), []);
-  const weeklyIncidents = useMemo(() => generateWeeklyFireIncidents(), []);
+  const fireData = useMemo(() => {
+    if (fireSensors.length > 0 && stations.length > 0) {
+      return stations.map(station => {
+        const sensor = fireSensors.find(s => s.district === station.district) || {};
+        const internalTemp = sensor.internalTemp ?? 35;
+        const gasLevel     = sensor.gasLevel     ?? 10;
+        const riskScore    = sensor.riskScore     ?? 15;
+        return {
+          id:               station.id,
+          stationId:        station.id,
+          district:         station.district,
+          wasteType:        station.wasteType,
+          fillLevel:        station.fillLevel,
+          internalTemp,
+          ambientTemp:      sensor.ambientTemp      ?? 42,
+          gasLevel,
+          humidity:         sensor.humidity         ?? 35,
+          smokeDetected:    sensor.smokeDetected     ?? false,
+          sparkDetected:    sensor.sparkDetected     ?? false,
+          riskScore:        Math.min(riskScore, 100),
+          riskLevel:        sensor.riskLevel         ?? "آمن",
+          fireExtinguisher: sensor.fireExtinguisher  ?? true,
+          autoSuppression:  sensor.autoSuppression   ?? true,
+          lastInspection:   sensor.lastInspection    ?? "10 أيام",
+        };
+      });
+    }
+    return generateFireData(stations);
+  }, [stations, fireSensors]);
+
+  const tempHistory     = fireTempHistory || generateTempHistory();
+  const weeklyIncidents = fireWeekly      || generateWeeklyFireIncidents();
 
   const highRisk = fireData.filter(s => s.riskLevel === "خطر عالي");
   const medRisk = fireData.filter(s => s.riskLevel === "خطر متوسط");
@@ -3600,11 +3658,17 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
     return () => window.removeEventListener("resize", fn);
   }, []);
 
-  const quarterlyData = useMemo(() => generateQuarterlyData(), []);
-  const districtPerf = useMemo(() => generateDistrictPerformance(), []);
-  const roiData = useMemo(() => generateROIData(), []);
+  // ── Analytics من Firestore (مع fallback للقيم الافتراضية) ────────
+  const { data: _qdoc  } = useAnalyticsDoc("quarterly");
+  const { data: _dpdoc } = useAnalyticsDoc("districts_perf");
+  const { data: _roidoc } = useAnalyticsDoc("roi");
+  const { data: _satdoc } = useAnalyticsDoc("satisfaction");
+
+  const quarterlyData = _qdoc?.data  || generateQuarterlyData();
+  const districtPerf  = _dpdoc?.data || generateDistrictPerformance();
+  const roiData       = _roidoc?.data || generateROIData();
   const benchmarkData = useMemo(() => generateBenchmarkData(), []);
-  const scenarios = useMemo(() => generateScenarios(), []);
+  const scenarios     = useMemo(() => generateScenarios(), []);
 
   const totalRevenue = quarterlyData.reduce((a, q) => a + q.الإيرادات, 0);
   const totalCost = quarterlyData.reduce((a, q) => a + q.التكاليف, 0);
@@ -3621,11 +3685,14 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
     { name: "أخرى", value: 5, color: "#64748b" },
   ];
 
-  const satisfactionTrend = Array.from({ length: 12 }, (_, i) => ({
-    month: ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"][i],
-    الرضا: Math.round(70 + Math.random() * 15 + i * 1.2),
-    الشكاوى: Math.round(30 - Math.random() * 10 - i * 1.5),
-  }));
+  const satisfactionTrend = _satdoc?.data || [
+    { month:"يناير",   الرضا:70, الشكاوى:28 }, { month:"فبراير",  الرضا:72, الشكاوى:26 },
+    { month:"مارس",    الرضا:73, الشكاوى:25 }, { month:"أبريل",   الرضا:75, الشكاوى:23 },
+    { month:"مايو",    الرضا:76, الشكاوى:21 }, { month:"يونيو",   الرضا:78, الشكاوى:20 },
+    { month:"يوليو",   الرضا:79, الشكاوى:18 }, { month:"أغسطس",  الرضا:80, الشكاوى:17 },
+    { month:"سبتمبر", الرضا:82, الشكاوى:15 }, { month:"أكتوبر", الرضا:83, الشكاوى:14 },
+    { month:"نوفمبر", الرضا:85, الشكاوى:12 }, { month:"ديسمبر", الرضا:87, الشكاوى:10 },
+  ];
 
   const strategicGoals = [
     { goal: "رفع كفاءة التشغيل إلى 95%", current: avgEfficiency, target: 95, color: C.accent },
@@ -4679,9 +4746,23 @@ function SmartWasteManagement() {
   // 📦 البيانات من Firebase
   const [stations, setStations] = useState([]);
   const [loadingStations, setLoadingStations] = useState(true);
-  const weeklyData = useMemo(() => generateWeeklyData(), []);
-  const monthlyTrend = useMemo(() => generateMonthlyTrend(), []);
-  const hourlyData = useMemo(() => generateHourlyData(), []);
+
+  // ── Analytics من Firestore (مع fallback للبيانات الافتراضية) ──────
+  const { data: _wDoc  } = useAnalyticsDoc("weekly");
+  const { data: _mDoc  } = useAnalyticsDoc("monthly");
+  const { data: _hDoc  } = useAnalyticsDoc("hourly");
+  const { data: _ftDoc } = useAnalyticsDoc("fire_temp");
+  const { data: _fwDoc } = useAnalyticsDoc("fire_weekly");
+  const { data: _shDoc } = useAnalyticsDoc("station_history");
+  const { data: _fsCol } = useCollection("fire_sensors", null);
+
+  const weeklyData               = _wDoc?.data   || generateWeeklyData();
+  const monthlyTrend             = _mDoc?.data   || generateMonthlyTrend();
+  const hourlyData               = _hDoc?.data   || generateHourlyData();
+  const fireTempHistory          = _ftDoc?.data  || generateTempHistory();
+  const fireWeeklyData           = _fwDoc?.data  || generateWeeklyFireIncidents();
+  const stationHistoryByDistrict = _shDoc?.data  || {};
+  const fireSensors              = _fsCol        || [];
 
   // ✅ التنبيهات مشتقة من بيانات المحطات الحقيقية
   const alerts = useMemo(() => generateAlerts(stations), [stations]);
@@ -4885,10 +4966,10 @@ function SmartWasteManagement() {
 
         <div style={{ flex: 1, overflow: "auto", padding: isMobile ? 12 : 24 }}>
           {page === "dashboard"  && <DashboardPage stations={stations} weeklyData={weeklyData} monthlyTrend={monthlyTrend} alerts={alerts} hourlyData={hourlyData} />}
-          {page === "stations"   && <StationsPage stations={stations} />}
+          {page === "stations"   && <StationsPage stations={stations} stationHistoryByDistrict={stationHistoryByDistrict} />}
           {page === "control"    && <SuctionControlPage stations={stations} user={loggedInUser} />}
           {page === "requests"   && <RequestsManagementPage />}
-          {page === "fire"       && <FireAlertPage stations={stations} />}
+          {page === "fire"       && <FireAlertPage stations={stations} fireSensors={fireSensors} fireTempHistory={fireTempHistory} fireWeekly={fireWeeklyData} />}
           {page === "predictions" && <PredictionsPage stations={stations} />}
           {page === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} />}
           {page === "settings"   && <SettingsPage />}
