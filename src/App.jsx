@@ -3007,6 +3007,96 @@ const RequestsManagementPage = () => {
 };
 
 // ======================== SETTINGS ========================
+// ── بطاقة مفتاح Claude API ──────────────────────────────────────────
+const GROQ_MODEL = "llama-3.3-70b-versatile";
+
+const ApiKeyCard = () => {
+  const F = ARABIC_FONT;
+  const [key, setKey]               = useState(() => localStorage.getItem("groq_api_key") || "");
+  const [saved, setSaved]           = useState(false);
+  const [visible, setVisible]       = useState(false);
+  const [testStatus, setTestStatus] = useState(null);
+  const [testMsg, setTestMsg]       = useState("");
+
+  const save = () => {
+    localStorage.setItem("groq_api_key", key.trim());
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  };
+  const clear = () => {
+    localStorage.removeItem("groq_api_key");
+    setKey(""); setTestStatus(null);
+  };
+
+  const testConnection = async () => {
+    const k = key.trim();
+    if (!k) { setTestMsg("أدخل المفتاح أولاً"); setTestStatus("error"); return; }
+    setTestStatus("testing"); setTestMsg("");
+    try {
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${k}` },
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          max_tokens: 10,
+          messages: [{ role: "user", content: "قل: متصل" }],
+        }),
+      });
+      if (res.ok) {
+        setTestStatus("ok"); setTestMsg(`✅ الاتصال يعمل — ${GROQ_MODEL}`);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        const msg = err?.error?.message || "";
+        if (res.status === 401) { setTestStatus("error"); setTestMsg("مفتاح API غير صحيح ❌"); }
+        else if (res.status === 429) { setTestStatus("error"); setTestMsg("تجاوز الحد — انتظر قليلاً"); }
+        else { setTestStatus("error"); setTestMsg(`خطأ ${res.status}: ${msg}`); }
+      }
+    } catch (e) {
+      setTestStatus("error"); setTestMsg("خطأ شبكة — تأكد من اتصال الإنترنت");
+    }
+  };
+
+  const statusColor = testStatus === "ok" ? C.accent : testStatus === "error" ? C.danger : C.info;
+
+  return (
+    <Card title="المساعد الذكي — Groq AI (مجاني)" icon="🤖">
+      <div style={{ padding: "8px 12px", borderRadius: 8, background: C.accent + "15", border: `1px solid ${C.accent}30`, fontSize: 11, color: C.accent, marginBottom: 14, fontFamily: F }}>
+        ✅ مجاني تماماً — بدون بطاقة بنكية — يعمل في جميع المناطق
+      </div>
+      <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.9, marginBottom: 14 }}>
+        احصل على مفتاح مجاني من <span style={{ color: "#f55036", fontWeight: 700 }}>console.groq.com</span> ← API Keys ← Create API Key.
+        يُحفظ المفتاح في المتصفح فقط.
+      </p>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <input
+          type={visible ? "text" : "password"}
+          value={key}
+          onChange={e => { setKey(e.target.value); setTestStatus(null); }}
+          placeholder="gsk_..."
+          style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: F, outline: "none" }}
+        />
+        <button onClick={() => setVisible(v => !v)} style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer", fontSize: 14 }}>
+          {visible ? "🙈" : "👁️"}
+        </button>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={save} style={{ padding: "10px 20px", borderRadius: 10, border: "none", background: saved ? C.accent : "linear-gradient(135deg,#6d28d9,#4c1d95)", color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13, fontFamily: F }}>
+          {saved ? "✅ تم الحفظ" : "💾 حفظ"}
+        </button>
+        <button onClick={testConnection} disabled={testStatus === "testing"} style={{ padding: "10px 18px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.info, fontWeight: 700, cursor: "pointer", fontSize: 13, fontFamily: F }}>
+          {testStatus === "testing" ? "⏳ جاري الاختبار..." : "🔗 اختبار الاتصال"}
+        </button>
+        {key && <button onClick={clear} style={{ padding: "10px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.danger, cursor: "pointer", fontSize: 13, fontFamily: F }}>🗑️ حذف</button>}
+      </div>
+      {testMsg && (
+        <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: statusColor + "15", border: `1px solid ${statusColor}40`, fontSize: 12, color: statusColor, fontFamily: F }}>
+          {testMsg}
+        </div>
+      )}
+    </Card>
+  );
+};
+
 const SettingsPage = () => {
   const [notif, setNotif] = useState(true);
   const [autoCollect, setAutoCollect] = useState(true);
@@ -3100,6 +3190,8 @@ const SettingsPage = () => {
           {seedStatus === "running" ? "جاري التهيئة…" : "🚀 تهيئة Collections الناقصة"}
         </button>
       </Card>
+
+      <ApiKeyCard />
 
       <Card title="تصدير قاعدة البيانات" icon="📊">
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
@@ -4159,6 +4251,238 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
   );
 };
 
+// ======================== AI ASSISTANT ========================
+const AIAssistant = ({ role, stations = [], alerts = [], userData = {}, myRequests = [], myReports = [], suctionJobs = [] }) => {
+  const F = ARABIC_FONT;
+  const [open, setOpen]       = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput]     = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
+
+  const apiKey = typeof window !== "undefined" ? localStorage.getItem("groq_api_key") || "" : "";
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, open]);
+
+  // Build system context from real data
+  const buildSystemPrompt = () => {
+    const now = new Date().toLocaleString("ar-SA");
+    if (role === "employee" || role === "executive") {
+      const critical  = stations.filter(s => getStatus(s.fillLevel) === "حرج");
+      const warning   = stations.filter(s => getStatus(s.fillLevel) === "تحذير");
+      const normal    = stations.filter(s => getStatus(s.fillLevel) === "طبيعي");
+      const activeJobs = suctionJobs.filter(j => j.status === "نشط" || j.status === "جاري");
+      return `أنت مساعد ذكي لنظام إدارة النفايات الذكي في مدينة بريدة، منطقة القصيم.
+وقت الآن: ${now}
+دورك: تساعد الموظفين والمدراء على فهم البيانات واتخاذ القرارات.
+
+=== البيانات الحالية للنظام ===
+إجمالي المحطات: ${stations.length}
+• حرجة (≥85%): ${critical.length} محطة ${critical.length > 0 ? "— " + critical.map(s => `${s.name} (${s.fillLevel}%)`).join("، ") : ""}
+• تحذير (60-84%): ${warning.length} محطة ${warning.length > 0 ? "— " + warning.map(s => `${s.name} (${s.fillLevel}%)`).join("، ") : ""}
+• طبيعية (<60%): ${normal.length} محطة
+
+التنبيهات النشطة: ${alerts.filter(a => a.type === "حرج").length} حرجة، ${alerts.filter(a => a.type === "تحذير").length} تحذير
+أوامر الشفط النشطة: ${activeJobs.length}
+
+قواعد الإجابة:
+- أجب بالعربية دائماً
+- اجعل إجاباتك مختصرة وعملية
+- استند فقط على البيانات المعطاة
+- إذا سُئلت عن شيء خارج نطاق بياناتك، قل ذلك بوضوح`;
+    }
+    // citizen
+    const pendingReqs  = myRequests.filter(r => r.status === "قيد المراجعة").length;
+    const acceptedReqs = myRequests.filter(r => r.status === "مقبول").length;
+    const pendingReps  = myReports.filter(r => r.status === "قيد المعالجة").length;
+    const myDistrict   = userData.district || "غير محدد";
+    const distStation  = stations.find(s => s.district === myDistrict);
+    return `أنت مساعد ذكي لبوابة المواطن في نظام إدارة النفايات ببريدة.
+وقت الآن: ${now}
+دورك: تساعد المواطن على متابعة طلباته وبلاغاته والحصول على معلومات عن حيّه.
+
+=== بيانات المواطن ===
+الاسم: ${userData.name || "مواطن"}
+الحي: ${myDistrict}
+طلبات الحاويات: ${myRequests.length} إجمالي (${pendingReqs} قيد المراجعة، ${acceptedReqs} مقبول)
+البلاغات: ${myReports.length} إجمالي (${pendingReps} قيد المعالجة)
+${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distStation.fillLevel}% (${getStatus(distStation.fillLevel)})` : "لا توجد محطة مرتبطة بحيك"}
+
+قواعد الإجابة:
+- أجب بالعربية دائماً
+- كن ودوداً وبسيطاً في لغتك
+- اجعل إجاباتك مختصرة ومفيدة
+- لا تشارك بيانات مواطنين آخرين`;
+  };
+
+  const sendMessage = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    if (!apiKey) {
+      setMessages(p => [...p, { role: "user", content: text }, { role: "assistant", content: "⚠️ يرجى إدخال مفتاح Gemini API في صفحة الإعدادات أولاً." }]);
+      setInput(""); return;
+    }
+    const newMessages = [...messages, { role: "user", content: text }];
+    setMessages(newMessages);
+    setInput("");
+    setLoading(true);
+    try {
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          max_tokens: 600,
+          messages: [
+            { role: "system", content: buildSystemPrompt() },
+            ...newMessages.map(m => ({ role: m.role, content: m.content })),
+          ],
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const msg = err?.error?.message || `HTTP ${res.status}`;
+        if (res.status === 401) throw new Error("مفتاح API غير صحيح — تحقق منه في الإعدادات");
+        if (res.status === 429) throw new Error("تجاوزت حد الاستخدام — انتظر قليلاً ثم حاول مجدداً");
+        throw new Error(msg);
+      }
+      const data = await res.json();
+      const reply = data?.choices?.[0]?.message?.content || "لم أتمكن من الإجابة.";
+      setMessages(p => [...p, { role: "assistant", content: reply }]);
+    } catch (e) {
+      setMessages(p => [...p, { role: "assistant", content: `❌ ${e.message}` }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const greeting = role === "employee" || role === "executive"
+    ? "مرحباً! أنا مساعدك الذكي. اسألني عن حالة المحطات، التنبيهات، أوامر الشفط، أو أي شيء آخر."
+    : "أهلاً! أنا مساعدك في بوابة المواطن. اسألني عن طلباتك أو وضع حيّك.";
+
+  const suggestions = role === "employee" || role === "executive"
+    ? ["أي محطة تحتاج شفط الآن؟", "لخص التنبيهات النشطة", "ما وضع المحطات الحرجة؟"]
+    : ["وش حالة طلباتي؟", "متى يجي الشفط لحينا؟", "كيف أرفع بلاغ؟"];
+
+  return (
+    <>
+      {/* Floating button */}
+      <button
+        onClick={() => setOpen(p => !p)}
+        title="المساعد الذكي"
+        style={{
+          position: "fixed", bottom: 24, left: 24, zIndex: 1200,
+          width: 56, height: 56, borderRadius: "50%", border: "none",
+          background: "linear-gradient(135deg, #6d28d9, #4c1d95)",
+          color: "#fff", fontSize: 26, cursor: "pointer",
+          boxShadow: "0 4px 20px rgba(109,40,217,0.5)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          transition: "transform 0.2s",
+        }}
+        onMouseEnter={e => e.currentTarget.style.transform = "scale(1.1)"}
+        onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}
+      >
+        {open ? "✕" : "🤖"}
+      </button>
+
+      {/* Chat panel */}
+      {open && (
+        <div style={{
+          position: "fixed", bottom: 92, left: 24, zIndex: 1200,
+          width: "min(380px, calc(100vw - 48px))",
+          height: "min(520px, calc(100vh - 120px))",
+          background: C.card, border: `1px solid #6d28d930`,
+          borderRadius: 20, display: "flex", flexDirection: "column",
+          boxShadow: "0 8px 40px rgba(109,40,217,0.25)",
+          fontFamily: F, overflow: "hidden",
+        }}>
+          {/* Header */}
+          <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#6d28d9,#4c1d95)", borderRadius: "20px 20px 0 0" }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>🤖 المساعد الذكي</div>
+            <div style={{ fontSize: 11, color: "#c4b5fd", marginTop: 2 }}>
+              {role === "employee" || role === "executive" ? "مساعد الموظف — يقرأ بيانات النظام" : "مساعد المواطن — بوابة بريدة"}
+            </div>
+          </div>
+
+          {/* Messages */}
+          <div style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+            {/* Greeting */}
+            <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: "#1e293b", borderRadius: "12px 12px 12px 0", padding: "10px 14px", fontSize: 12, color: C.text, lineHeight: 1.6 }}>
+              {greeting}
+            </div>
+
+            {/* Suggestion chips */}
+            {messages.length === 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+                {suggestions.map((s, i) => (
+                  <button key={i} onClick={() => { setInput(s); }} style={{
+                    alignSelf: "flex-start", padding: "6px 12px", borderRadius: 20,
+                    border: "1px solid #6d28d940", background: "#6d28d910",
+                    color: "#a78bfa", fontSize: 11, cursor: "pointer", fontFamily: F, textAlign: "right",
+                  }}>{s}</button>
+                ))}
+              </div>
+            )}
+
+            {/* Conversation */}
+            {messages.map((m, i) => (
+              <div key={i} style={{
+                alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+                maxWidth: "85%",
+                background: m.role === "user" ? "linear-gradient(135deg,#6d28d9,#4c1d95)" : "#1e293b",
+                borderRadius: m.role === "user" ? "12px 12px 0 12px" : "12px 12px 12px 0",
+                padding: "10px 14px", fontSize: 12, color: "#f1f5f9", lineHeight: 1.7,
+                whiteSpace: "pre-wrap",
+              }}>
+                {m.content}
+              </div>
+            ))}
+
+            {loading && (
+              <div style={{ alignSelf: "flex-start", background: "#1e293b", borderRadius: "12px 12px 12px 0", padding: "10px 14px", fontSize: 12, color: "#a78bfa" }}>
+                <span style={{ animation: "pulse 1s infinite" }}>● </span>جاري التفكير...
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          {/* Input */}
+          <div style={{ padding: "10px 12px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 8 }}>
+            <input
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && !e.shiftKey && sendMessage()}
+              placeholder="اكتب سؤالك..."
+              style={{
+                flex: 1, padding: "10px 14px", borderRadius: 12,
+                border: `1px solid ${C.border}`, background: C.bg,
+                color: C.text, fontSize: 12, fontFamily: F, outline: "none",
+              }}
+            />
+            <button
+              onClick={sendMessage}
+              disabled={loading || !input.trim()}
+              style={{
+                padding: "10px 14px", borderRadius: 12, border: "none",
+                background: loading || !input.trim() ? C.border : "linear-gradient(135deg,#6d28d9,#4c1d95)",
+                color: loading || !input.trim() ? C.dim : "#fff",
+                cursor: loading || !input.trim() ? "not-allowed" : "pointer",
+                fontSize: 16, fontFamily: F,
+              }}
+            >➤</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
+
 // ======================== CITIZEN PORTAL ========================
 // CITIZEN_BINS و CITIZEN_REPORTS أُزيلت — البيانات تأتي من Firestore الآن
 
@@ -4626,6 +4950,15 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
           </div>
         )}
       </div>
+
+      {/* المساعد الذكي — للمواطن */}
+      <AIAssistant
+        role="citizen"
+        stations={stations}
+        userData={user}
+        myRequests={myRequests}
+        myReports={myReports}
+      />
     </div>
   );
 };
@@ -4795,6 +5128,9 @@ function SmartWasteManagement() {
   const fireWeeklyData           = _fwDoc?.data  || generateWeeklyFireIncidents();
   const stationHistoryByDistrict = _shDoc?.data  || {};
   const fireSensors              = _fsCol        || [];
+
+  // أوامر الشفط (للمساعد الذكي)
+  const { data: suctionJobs } = useCollection(COLLECTIONS.SUCTION_JOBS);
 
   // ✅ التنبيهات مشتقة من بيانات المحطات الحقيقية
   const alerts = useMemo(() => generateAlerts(stations), [stations]);
@@ -5011,6 +5347,15 @@ function SmartWasteManagement() {
           {page === "settings"   && <SettingsPage />}
         </div>
       </main>
+
+      {/* المساعد الذكي — للموظف والإدارة العليا */}
+      <AIAssistant
+        role={userRole}
+        stations={stations}
+        alerts={alerts}
+        userData={loggedInUser}
+        suctionJobs={suctionJobs || []}
+      />
     </div>
   );
 }
