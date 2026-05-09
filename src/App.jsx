@@ -907,11 +907,30 @@ const StatusBadge = ({ status }) => {
 };
 
 const Card = ({ children, title, icon, style: sx }) => (
-  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 22, minWidth: 0, ...sx }}>
+  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 22, ...sx }}>
     {title && <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>{icon}{title}</div>}
-    <div style={{ width: "100%", minWidth: 0 }}>{children}</div>
+    <div style={{ position: "relative", width: "100%" }}>{children}</div>
   </div>
 );
+
+// مكوّن يقيس العرض الفعلي بـ ResizeObserver ويمرّره للرسم — يحل مشكلة الجوال
+const ChartBox = ({ height = 280, children }) => {
+  const ref = useRef(null);
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    if (!ref.current) return;
+    const measure = () => setW(ref.current.getBoundingClientRect().width || 0);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <div ref={ref} style={{ width: "100%", height, position: "relative" }}>
+      {w > 0 && React.cloneElement(React.Children.only(children), { width: w, height })}
+    </div>
+  );
+};
 
 // ======================== DASHBOARD ========================
 const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData }) => {
@@ -946,7 +965,7 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
         <Card title="توزيع النفايات الأسبوعي (كجم)" icon={<BarChart2 size={16} color="#94a3b8" />}>
-          <ResponsiveContainer width="99%" height={280}>
+          <ChartBox height={280}><ResponsiveContainer>
             <BarChart data={weeklyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
               <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 11, fontFamily: ARABIC_FONT }} />
@@ -957,11 +976,11 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
                 <Bar key={key} dataKey={key} stackId="a" fill={color} radius={key === "معادن" ? [4, 4, 0, 0] : [0, 0, 0, 0]} />
               ))}
             </BarChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartBox>
         </Card>
 
         <Card title="توزيع مستويات الامتلاء" icon={<Target size={16} color="#94a3b8" />}>
-          <ResponsiveContainer width="99%" height={220}>
+          <ChartBox height={220}><ResponsiveContainer>
             <PieChart>
               <Pie data={fillDistribution} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={4}
                 label={({ name, value }) => `${name}: ${value}`}>
@@ -969,7 +988,7 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
               </Pie>
               <Tooltip content={<CustomTooltip />} />
             </PieChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartBox>
           <div style={{ display: "flex", justifyContent: "center", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
             {fillDistribution.map((d, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: C.muted }}>
@@ -982,7 +1001,7 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
         <Card title="الاتجاه الشهري - الجمع والكفاءة" icon={<TrendingUp size={16} color="#94a3b8" />}>
-          <ResponsiveContainer width="99%" height={260}>
+          <ChartBox height={260}><ResponsiveContainer>
             <ComposedChart data={monthlyTrend} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
               <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -993,11 +1012,11 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
               <Bar yAxisId="left" dataKey="عمليات_الجمع" fill={C.accent} radius={[4, 4, 0, 0]} opacity={0.8} name="عمليات الجمع" />
               <Line yAxisId="right" type="monotone" dataKey="الكفاءة" stroke={C.info} strokeWidth={3} dot={{ r: 4, fill: C.info }} name="الكفاءة %" />
             </ComposedChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartBox>
         </Card>
 
         <Card title="نشاط الشفط على مدار الساعة" icon={<Clock size={16} color="#94a3b8" />}>
-          <ResponsiveContainer width="99%" height={260}>
+          <ChartBox height={260}><ResponsiveContainer>
             <AreaChart data={hourlyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
               <defs>
                 <linearGradient id="gS" x1="0" y1="0" x2="0" y2="1">
@@ -1017,13 +1036,13 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
               <Area type="monotone" dataKey="الشفط" stroke={C.accent} fill="url(#gS)" strokeWidth={2} name="معدل الشفط" />
               <Area type="monotone" dataKey="الضغط" stroke={C.warning} fill="url(#gP)" strokeWidth={2} name="الضغط (بار)" />
             </AreaChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartBox>
         </Card>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
         <Card title="أداء المحطات - بريدة" icon={<Target size={16} color="#94a3b8" />}>
-          <ResponsiveContainer width="99%" height={300}>
+          <ChartBox height={300}><ResponsiveContainer>
             <RadarChart cx="50%" cy="50%" outerRadius="70%" data={stationPerformance}>
               <PolarGrid stroke={C.border} />
               <PolarAngleAxis dataKey="name" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
@@ -1034,7 +1053,7 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
               <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
               <Tooltip content={<CustomTooltip />} />
             </RadarChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartBox>
         </Card>
 
         <Card title="التنبيهات" icon={<Bell size={16} color="#94a3b8" />}>
@@ -1493,7 +1512,7 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
           {/* Charts */}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:16 }}>
             <Card title="سجل الامتلاء والضغط" icon={<TrendingUp size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={220}>
+              <ChartBox height={220}><ResponsiveContainer>
                 <LineChart data={stationHistory}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="day" tick={{ fill:C.muted, fontSize:10, fontFamily:F }} />
@@ -1503,10 +1522,10 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
                   <Line type="monotone" dataKey="الامتلاء" stroke={C.warning} strokeWidth={2} dot={{ r:3 }} name="الامتلاء %" />
                   <Line type="monotone" dataKey="الضغط" stroke={C.info} strokeWidth={2} dot={{ r:3 }} name="الضغط (بار)" />
                 </LineChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
             </Card>
             <Card title="كمية النفايات اليومية" icon={<Package size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={220}>
+              <ChartBox height={220}><ResponsiveContainer>
                 <BarChart data={stationHistory}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="day" tick={{ fill:C.muted, fontSize:10, fontFamily:F }} />
@@ -1514,7 +1533,7 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
                   <Tooltip content={<CustomTooltip />} />
                   <Bar dataKey="الكمية" fill={C.accent} radius={[6,6,0,0]} name="الكمية (كجم)" />
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
             </Card>
           </div>
         </div>
@@ -1676,7 +1695,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
             ))}
           </div>
           <Card title="مقارنة امتلاء المحطات - بريدة" icon={<BarChart2 size={16} color="#94a3b8" />}>
-            <ResponsiveContainer width="99%" height={350}>
+            <ChartBox height={350}><ResponsiveContainer>
               <BarChart data={stationFillData} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} domain={[0, 100]} />
@@ -1688,7 +1707,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
                   ))}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartBox>
           </Card>
         </div>
       )}
@@ -1696,7 +1715,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
       {tab === "waste" && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
           <Card title="توزيع النفايات حسب النوع" icon={<Trash2 size={16} color="#94a3b8" />}>
-            <ResponsiveContainer width="99%" height={280}>
+            <ChartBox height={280}><ResponsiveContainer>
               <PieChart>
                 <Pie data={wasteByType} cx="50%" cy="50%" outerRadius={100} innerRadius={55} dataKey="value" paddingAngle={3}
                   label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
@@ -1704,11 +1723,11 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
                 </Pie>
                 <Tooltip content={<CustomTooltip />} />
               </PieChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartBox>
             <div style={{ textAlign: "center", fontSize: 14, fontWeight: 700, color: C.text }}>الإجمالي: {totalWaste.toLocaleString()} كجم</div>
           </Card>
           <Card title="النفايات اليومية حسب النوع" icon={<TrendingUp size={16} color="#94a3b8" />}>
-            <ResponsiveContainer width="99%" height={300}>
+            <ChartBox height={300}><ResponsiveContainer>
               <AreaChart data={weeklyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -1719,7 +1738,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
                   <Area key={key} type="monotone" dataKey={key} stackId="1" stroke={color} fill={color} fillOpacity={0.4} />
                 ))}
               </AreaChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartBox>
           </Card>
         </div>
       )}
@@ -1732,7 +1751,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
             <StatCard title="تكلفة الكيلوغرام" value={(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12 / (totalWaste * 4.3)).toFixed(2)} unit="ر.س" icon={<Scale size={22} color="#fff" />} gradient={C.g1} />
           </div>
           <Card title="التكاليف الشهرية مقابل عمليات الجمع" icon={<Banknote size={16} color="#94a3b8" />}>
-            <ResponsiveContainer width="99%" height={300}>
+            <ChartBox height={300}><ResponsiveContainer>
               <ComposedChart data={monthlyTrend} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -1743,7 +1762,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
                 <Bar yAxisId="left" dataKey="التكلفة" fill={C.warning} radius={[4, 4, 0, 0]} opacity={0.8} name="التكلفة (ر.س)" />
                 <Line yAxisId="right" type="monotone" dataKey="عمليات_الجمع" stroke={C.accent} strokeWidth={3} dot={{ r: 3 }} name="عمليات الجمع" />
               </ComposedChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartBox>
           </Card>
         </div>
       )}
@@ -1953,7 +1972,7 @@ const PredictionsPage = ({ stations }) => {
 
           {/* Annual Prediction vs Actual */}
           <Card title="التنبؤ السنوي مقابل الفعلي (كجم/يوم)" icon={<BarChart2 size={16} color="#94a3b8" />}>
-            <ResponsiveContainer width="99%" height={300}>
+            <ChartBox height={300}><ResponsiveContainer>
               <ComposedChart data={predictionData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -1964,7 +1983,7 @@ const PredictionsPage = ({ stations }) => {
                 <Bar dataKey="المتوقع" fill="#f59e0b" opacity={0.7} radius={[4, 4, 0, 0]} name="المتوقع" />
                 <Line type="monotone" dataKey="الفعلي" stroke="#10b981" strokeWidth={3} dot={{ r: 5, fill: "#10b981" }} name="الفعلي" connectNulls={false} />
               </ComposedChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartBox>
           </Card>
 
           {/* Upcoming Events + Impact by Type */}
@@ -1991,7 +2010,7 @@ const PredictionsPage = ({ stations }) => {
             </Card>
 
             <Card title="التأثير حسب نوع الحدث" icon={<BarChart2 size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={280}>
+              <ChartBox height={280}><ResponsiveContainer>
                 <BarChart data={impactByType} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} />
@@ -2001,7 +2020,7 @@ const PredictionsPage = ({ stations }) => {
                     {impactByType.map((e, i) => <Cell key={i} fill={["#8b5cf6", "#10b981", "#f59e0b", "#22c55e", "#0ea5e9"][i % 5]} />)}
                   </Bar>
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
                 {impactByType.map((t, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, padding: "4px 8px", background: C.bg, borderRadius: 6 }}>
@@ -2061,7 +2080,7 @@ const PredictionsPage = ({ stations }) => {
 
                 {/* Simulated daily impact chart for this event */}
                 <Card title={`التأثير اليومي المتوقع - ${selectedEvent.name}`} icon={<TrendingDown size={16} color="#94a3b8" />}>
-                  <ResponsiveContainer width="99%" height={220}>
+                  <ChartBox height={220}><ResponsiveContainer>
                     <AreaChart data={Array.from({ length: Math.min(selectedEvent.duration, 30) }, (_, i) => {
                       const peak = selectedEvent.duration / 2;
                       const factor = 1 + (selectedEvent.wasteMultiplier - 1) * Math.exp(-0.5 * Math.pow((i - peak) / (selectedEvent.duration * 0.25), 2));
@@ -2081,7 +2100,7 @@ const PredictionsPage = ({ stations }) => {
                       <Area type="monotone" dataKey="الطبيعي" stroke="#64748b" fill="none" strokeDasharray="5 5" name="المعدل الطبيعي" />
                       <Area type="monotone" dataKey="الكمية" stroke={selectedEvent.color} fill="url(#gEvent)" strokeWidth={2} name="الكمية المتوقعة (كجم)" />
                     </AreaChart>
-                  </ResponsiveContainer>
+                  </ResponsiveContainer></ChartBox>
                 </Card>
 
                 {/* Recommendations */}
@@ -2141,7 +2160,7 @@ const PredictionsPage = ({ stations }) => {
       {view === "forecast" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <Card title="توقعات الـ 30 يوم القادمة (كجم/يوم لكل محطة)" icon={<TrendingUp size={16} color="#94a3b8" />}>
-            <ResponsiveContainer width="99%" height={320}>
+            <ChartBox height={320}><ResponsiveContainer>
               <AreaChart data={forecast30} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                 <defs>
                   <linearGradient id="gForecast" x1="0" y1="0" x2="0" y2="1">
@@ -2162,12 +2181,12 @@ const PredictionsPage = ({ stations }) => {
                 <Area type="monotone" dataKey="الحد_الأدنى" stroke="none" fill="transparent" name="الحد الأدنى" />
                 <Line type="monotone" dataKey="المتوقع" stroke="#f59e0b" strokeWidth={3} dot={false} name="التوقع" />
               </AreaChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartBox>
           </Card>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
             <Card title="توقعات تأثير النفايات حسب النوع" icon={<Trash2 size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={260}>
+              <ChartBox height={260}><ResponsiveContainer>
                 <BarChart data={wasteTypeImpact} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="name" tick={{ fill: C.muted, fontSize: 11, fontFamily: ARABIC_FONT }} />
@@ -2177,7 +2196,7 @@ const PredictionsPage = ({ stations }) => {
                   <Bar dataKey="العادي" fill="#64748b" opacity={0.5} radius={[4, 4, 0, 0]} name="المعدل العادي" />
                   <Bar dataKey="المتوقع" fill="#f59e0b" radius={[4, 4, 0, 0]} name="المتوقع القادم" />
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
             </Card>
 
             <Card title="ملخص التوقعات" icon={<ClipboardList size={16} color="#94a3b8" />}>
@@ -2219,7 +2238,7 @@ const PredictionsPage = ({ stations }) => {
           </div>
 
           <Card title="مقارنة الخطورة الحالية مع المتوقعة لكل محطة" icon={<BarChart2 size={16} color="#94a3b8" />}>
-            <ResponsiveContainer width="99%" height={380}>
+            <ChartBox height={380}><ResponsiveContainer>
               <BarChart data={stationRisk} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
@@ -2229,7 +2248,7 @@ const PredictionsPage = ({ stations }) => {
                 <Bar dataKey="الخطورة_الحالية" fill={C.info} opacity={0.7} radius={[0, 4, 4, 0]} name="الحالي %" />
                 <Bar dataKey="الخطورة_المتوقعة" fill={C.danger} opacity={0.7} radius={[0, 4, 4, 0]} name="المتوقع %" />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartBox>
           </Card>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
@@ -2504,7 +2523,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           {/* Temperature Timeline + Risk Pie */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
             <Card title="منحنى الحرارة الداخلية (24 ساعة)" icon={<Thermometer size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={280}>
+              <ChartBox height={280}><ResponsiveContainer>
                 <AreaChart data={tempHistory} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                   <defs>
                     <linearGradient id="gIntTemp" x1="0" y1="0" x2="0" y2="1">
@@ -2522,11 +2541,11 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                   <Line type="monotone" dataKey="حد_الإنذار" stroke="#f97316" strokeWidth={1} strokeDasharray="8 4" dot={false} name="حد الإنذار (60°C)" />
                   <Line type="monotone" dataKey="حد_الخطر" stroke="#ef4444" strokeWidth={1} strokeDasharray="8 4" dot={false} name="حد الخطر (75°C)" />
                 </AreaChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
             </Card>
 
             <Card title="توزيع مستويات الخطورة" icon={<Target size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={200}>
+              <ChartBox height={200}><ResponsiveContainer>
                 <PieChart>
                   <Pie data={riskDistribution} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={4}
                     label={({ name, value }) => value > 0 ? `${value}` : ""}>
@@ -2534,7 +2553,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                   </Pie>
                   <Tooltip content={<CustomTooltip />} />
                 </PieChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
                 {riskDistribution.map((d, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11, color: C.muted }}>
@@ -2595,7 +2614,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
             <Card title="مؤشر خطورة الحريق لكل محطة" icon={<BarChart2 size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={350}>
+              <ChartBox height={350}><ResponsiveContainer>
                 <BarChart data={stationRiskChart} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
@@ -2605,11 +2624,11 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                     {stationRiskChart.map((e, i) => <Cell key={i} fill={e.الخطورة > 75 ? "#ef4444" : e.الخطورة > 50 ? "#f97316" : e.الخطورة > 30 ? "#f59e0b" : "#10b981"} />)}
                   </Bar>
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
             </Card>
 
             <Card title="علاقة الحرارة بالغاز والرطوبة" icon={<Microscope size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={350}>
+              <ChartBox height={350}><ResponsiveContainer>
                 <RadarChart cx="50%" cy="50%" outerRadius="70%" data={gasVsTempData}>
                   <PolarGrid stroke={C.border} />
                   <PolarAngleAxis dataKey="name" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
@@ -2620,12 +2639,12 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                   <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
                   <Tooltip content={<CustomTooltip />} />
                 </RadarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
             </Card>
           </div>
 
           <Card title="سجل الإنذارات والحوادث (8 أسابيع)" icon={<TrendingUp size={16} color="#94a3b8" />}>
-            <ResponsiveContainer width="99%" height={280}>
+            <ChartBox height={280}><ResponsiveContainer>
               <ComposedChart data={weeklyIncidents} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="week" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -2636,7 +2655,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                 <Bar dataKey="إنذارات_كاذبة" fill="#64748b" radius={[4, 4, 0, 0]} opacity={0.6} name="إنذارات كاذبة" />
                 <Line type="monotone" dataKey="حوادث_فعلية" stroke="#ef4444" strokeWidth={3} dot={{ r: 5, fill: "#ef4444" }} name="حوادث فعلية" />
               </ComposedChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartBox>
           </Card>
 
           {/* Fire risk factors */}
@@ -2722,7 +2741,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                 </div>
 
                 <Card title="سجل الحرارة الداخلية - 24 ساعة" icon={<TrendingUp size={16} color="#94a3b8" />}>
-                  <ResponsiveContainer width="99%" height={220}>
+                  <ChartBox height={220}><ResponsiveContainer>
                     <AreaChart data={tempHistory} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                       <defs>
                         <linearGradient id="gFire" x1="0" y1="0" x2="0" y2="1">
@@ -2739,7 +2758,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                       <Line type="monotone" dataKey="حد_الإنذار" stroke="#f97316" strokeDasharray="6 3" dot={false} name="حد الإنذار 60°C" />
                       <Line type="monotone" dataKey="حد_الخطر" stroke="#ef4444" strokeDasharray="6 3" dot={false} name="حد الخطر 75°C" />
                     </AreaChart>
-                  </ResponsiveContainer>
+                  </ResponsiveContainer></ChartBox>
                 </Card>
               </div>
             </>
@@ -2849,7 +2868,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
 
           {/* Simulation Chart */}
           <Card title="منحنى المحاكاة - تصاعد الحرارة" icon={<TrendingUp size={16} color="#94a3b8" />}>
-            <ResponsiveContainer width="99%" height={240}>
+            <ChartBox height={240}><ResponsiveContainer>
               <AreaChart data={Array.from({ length: 60 }, (_, i) => {
                 const t = 25 + (simTemp - 25) * (1 - Math.exp(-i / 20));
                 return { دقيقة: `${i}`, الحرارة: Math.round(t), حد_الإنذار: 60, حد_الخطر: 75 };
@@ -2869,7 +2888,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                 <Line type="monotone" dataKey="حد_الإنذار" stroke="#f97316" strokeDasharray="6 3" dot={false} name="حد الإنذار" />
                 <Line type="monotone" dataKey="حد_الخطر" stroke="#ef4444" strokeDasharray="6 3" dot={false} name="حد الخطر" />
               </AreaChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartBox>
           </Card>
         </div>
       )}
@@ -4110,7 +4129,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
               <Card title="الأداء الربعي (ر.س)" icon={<BarChart2 size={16} color="#94a3b8" />}>
-                <ResponsiveContainer width="99%" height={280}>
+                <ChartBox height={280}><ResponsiveContainer>
                   <ComposedChart data={quarterlyData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                     <XAxis dataKey="quarter" tick={{ fill: C.muted, fontSize: 12 }} />
@@ -4121,11 +4140,11 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                     <Bar dataKey="التكاليف" fill="#ef4444" radius={[4, 4, 0, 0]} opacity={0.6} />
                     <Line type="monotone" dataKey="الأرباح" stroke="#10b981" strokeWidth={3} dot={{ r: 5 }} />
                   </ComposedChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer></ChartBox>
               </Card>
 
               <Card title="رضا المواطنين والشكاوى" icon={<Smile size={16} color="#94a3b8" />}>
-                <ResponsiveContainer width="99%" height={280}>
+                <ChartBox height={280}><ResponsiveContainer>
                   <AreaChart data={satisfactionTrend} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                     <defs>
                       <linearGradient id="gSat" x1="0" y1="0" x2="0" y2="1">
@@ -4141,7 +4160,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                     <Area type="monotone" dataKey="الرضا" stroke="#10b981" fill="url(#gSat)" strokeWidth={2} name="نسبة الرضا %" />
                     <Line type="monotone" dataKey="الشكاوى" stroke="#ef4444" strokeWidth={2} strokeDasharray="4 4" dot={{ r: 3 }} name="الشكاوى" />
                   </AreaChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer></ChartBox>
               </Card>
             </div>
 
@@ -4171,7 +4190,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
               <Card title="العائد على الاستثمار الشهري (ر.س)" icon={<TrendingUp size={16} color="#94a3b8" />}>
-                <ResponsiveContainer width="99%" height={300}>
+                <ChartBox height={300}><ResponsiveContainer>
                   <AreaChart data={roiData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                     <defs>
                       <linearGradient id="gROI" x1="0" y1="0" x2="0" y2="1">
@@ -4188,11 +4207,11 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                     <Line type="monotone" dataKey="الاستثمار" stroke="#ef4444" strokeWidth={2} strokeDasharray="4 4" dot={false} />
                     <Line type="monotone" dataKey="التوفير" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
                   </AreaChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer></ChartBox>
               </Card>
 
               <Card title="توزيع التكاليف التشغيلية" icon={<LucidePieChart size={16} color="#94a3b8" />}>
-                <ResponsiveContainer width="99%" height={240}>
+                <ChartBox height={240}><ResponsiveContainer>
                   <PieChart>
                     <Pie data={costBreakdown} cx="50%" cy="50%" outerRadius={90} innerRadius={50} dataKey="value" paddingAngle={3}
                       label={({ name, value }) => `${name} ${value}%`}>
@@ -4200,12 +4219,12 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                     </Pie>
                     <Tooltip content={<CustomTooltip />} />
                   </PieChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer></ChartBox>
               </Card>
             </div>
 
             <Card title="مقارنة التكلفة لكل حي (ر.س/شهر)" icon={<Banknote size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={300}>
+              <ChartBox height={300}><ResponsiveContainer>
                 <BarChart data={districtPerf} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="district" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -4215,7 +4234,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                     {districtPerf.map((e, i) => <Cell key={i} fill={e.التكلفة > 35000 ? "#ef4444" : e.التكلفة > 30000 ? "#f59e0b" : "#10b981"} />)}
                   </Bar>
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
             </Card>
           </div>
         )}
@@ -4224,7 +4243,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
         {tab === "districts" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <Card title="أداء الأحياء الشامل" icon={<Building size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={350}>
+              <ChartBox height={350}><ResponsiveContainer>
                 <BarChart data={districtPerf} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
@@ -4234,12 +4253,12 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                   <Bar dataKey="الأداء" fill="#3b82f6" radius={[0, 4, 4, 0]} opacity={0.8} name="الأداء %" />
                   <Bar dataKey="الرضا" fill="#10b981" radius={[0, 4, 4, 0]} opacity={0.8} name="الرضا %" />
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
             </Card>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
               <Card title="الأداء مقابل الرضا" icon={<Target size={16} color="#94a3b8" />}>
-                <ResponsiveContainer width="99%" height={280}>
+                <ChartBox height={280}><ResponsiveContainer>
                   <RadarChart cx="50%" cy="50%" outerRadius="70%" data={districtPerf.slice(0, 8)}>
                     <PolarGrid stroke={C.border} />
                     <PolarAngleAxis dataKey="district" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
@@ -4249,11 +4268,11 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                     <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
                     <Tooltip content={<CustomTooltip />} />
                   </RadarChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer></ChartBox>
               </Card>
 
               <Card title="عدد الحوادث لكل حي" icon={<AlertTriangle size={16} color="#94a3b8" />}>
-                <ResponsiveContainer width="99%" height={280}>
+                <ChartBox height={280}><ResponsiveContainer>
                   <BarChart data={[...districtPerf].sort((a, b) => b.الحوادث - a.الحوادث)} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                     <XAxis dataKey="district" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
@@ -4263,7 +4282,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                       {districtPerf.map((e, i) => <Cell key={i} fill={e.الحوادث > 5 ? "#ef4444" : e.الحوادث > 2 ? "#f59e0b" : "#10b981"} />)}
                     </Bar>
                   </BarChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer></ChartBox>
               </Card>
             </div>
           </div>
@@ -4273,7 +4292,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
         {tab === "benchmark" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <Card title="المقارنة المعيارية - بريدة مقابل المعايير الوطنية" icon={<TrendingUp size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={350}>
+              <ChartBox height={350}><ResponsiveContainer>
                 <BarChart data={benchmarkData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="metric" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -4284,7 +4303,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                   <Bar dataKey="المعيار_الوطني" fill="#64748b" radius={[4, 4, 0, 0]} opacity={0.6} name="المعيار الوطني" />
                   <Bar dataKey="أفضل_ممارسة" fill="#10b981" radius={[4, 4, 0, 0]} opacity={0.5} name="أفضل ممارسة عالمية" />
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
             </Card>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
@@ -4448,7 +4467,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
 
             {/* Vision 2030 Alignment */}
             <Card title="التوافق مع رؤية 2030" icon={<Flag size={16} color="#94a3b8" />}>
-              <ResponsiveContainer width="99%" height={300}>
+              <ChartBox height={300}><ResponsiveContainer>
                 <RadarChart cx="50%" cy="50%" outerRadius="75%" data={[
                   { axis: "الاستدامة البيئية", الحالي: 75, المستهدف: 95 },
                   { axis: "جودة الحياة", الحالي: 82, المستهدف: 95 },
@@ -4465,7 +4484,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                   <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
                   <Tooltip content={<CustomTooltip />} />
                 </RadarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartBox>
             </Card>
           </div>
         )}
@@ -5522,7 +5541,7 @@ function SmartWasteManagement() {
 
       {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
 
-      <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+      <main style={{ flex: 1, width: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {/* ── Header ──────────────────────────────────────── */}
         <header style={{
           padding: isMobile ? "10px 14px" : "14px 24px",
