@@ -27,7 +27,7 @@
 
   /* ══ HEADER ══════════════════════════════════════ */
   .header {
-    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 60%, #0d4a3a 100%);
+    background: linear-gradient(135deg, #0f172a 0%, #0d4a3a 60%, #1e3a5f 100%);
     padding: 20px 24px;
     display: flex;
     flex-direction: column;
@@ -67,6 +67,8 @@
   .badge-react    { background: #0ea5e9; }
   .badge-firebase { background: #f59e0b; color: #000; }
   .badge-vercel   { background: #334155; }
+  .badge-lucide   { background: #7c3aed; }
+  .badge-v2       { background: #10b981; }
 
   /* ══ BODY ════════════════════════════════════════ */
   .body {
@@ -91,6 +93,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
   }
   .layer-label::after {
     content: '';
@@ -104,6 +107,8 @@
   .layer-users    .layer-label { color: #0369a1; }
   .layer-frontend { background: #f0fdf4; border: 1.5px solid #bbf7d0; }
   .layer-frontend .layer-label { color: #15803d; }
+  .layer-components { background: #fdf4ff; border: 1.5px solid #e9d5ff; }
+  .layer-components .layer-label { color: #7c3aed; }
   .layer-services { background: #fefce8; border: 1.5px solid #fde68a; }
   .layer-services .layer-label { color: #92400e; }
   .layer-database { background: #faf5ff; border: 1.5px solid #ddd6fe; }
@@ -142,6 +147,9 @@
   .cards.services-grid {
     grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   }
+  .cards.components-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  }
 
   .card {
     border-radius: 10px;
@@ -174,6 +182,22 @@
   .card-col      .card-title { color: #4c1d95; }
   .card-analytics{ background: #f5f3ff; border-color: #a78bfa; }
   .card-analytics .card-title { color: #5b21b6; }
+  .card-component { background: #fdf4ff; border-color: #d8b4fe; box-shadow: 0 1px 4px rgba(124,58,237,0.08); }
+  .card-component .card-title { color: #6d28d9; }
+  .card-new { position: relative; }
+  .card-new::after {
+    content: 'NEW';
+    position: absolute;
+    top: -6px;
+    left: -6px;
+    background: #10b981;
+    color: #fff;
+    font-size: 8px;
+    font-weight: 800;
+    padding: 1px 5px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+  }
 
   /* ══ DB sections ══════════════════════════════════ */
   .db-section-title {
@@ -188,6 +212,29 @@
     border-top: 1px dashed #c4b5fd;
     margin: 12px 0;
   }
+
+  /* ══ TECH ROW ════════════════════════════════════ */
+  .tech-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .tech-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: clamp(9px, 1.8vw, 11px);
+    font-weight: 700;
+    border: 1.5px solid;
+  }
+  .tc-green  { background: #d1fae5; border-color: #6ee7b7; color: #065f46; }
+  .tc-blue   { background: #dbeafe; border-color: #93c5fd; color: #1e40af; }
+  .tc-purple { background: #ede9fe; border-color: #c4b5fd; color: #5b21b6; }
+  .tc-amber  { background: #fef3c7; border-color: #fcd34d; color: #78350f; }
+  .tc-slate  { background: #f1f5f9; border-color: #cbd5e1; color: #334155; }
 
   /* ══ FOOTER ══════════════════════════════════════ */
   .footer {
@@ -221,18 +268,18 @@
     font-style: italic;
   }
 
-  /* ══ LARGE SCREENS: wider cards ══════════════════ */
+  /* ══ LARGE SCREENS ═══════════════════════════════ */
   @media (min-width: 640px) {
     .cards.users-grid {
       grid-template-columns: 1fr 1fr 1fr 1fr;
       max-width: 100%;
     }
     .cards.auth-center {
-      display: none; /* auth card moved inline on desktop */
+      display: none;
     }
     .auth-inline { display: flex !important; }
   }
-  .auth-inline { display: none; } /* hidden on mobile */
+  .auth-inline { display: none; }
 
   @media (min-width: 640px) {
     .footer { flex-direction: row; justify-content: space-between; align-items: center; }
@@ -252,11 +299,13 @@
     <div class="header-top">
       <div class="header-title">
         <h1>♻️ Smart Waste MIS — نظام إدارة النفايات الذكي</h1>
-        <p>System Architecture Diagram &nbsp;|&nbsp; مخطط البنية المعمارية — بريدة</p>
+        <p>System Architecture Diagram &nbsp;|&nbsp; مخطط البنية المعمارية — بريدة، منطقة القصيم &nbsp;|&nbsp; v2.0 &nbsp;|&nbsp; 1447/11/22 هـ</p>
       </div>
       <div class="header-badges">
-        <span class="badge badge-react">React 18</span>
+        <span class="badge badge-v2">v2.0</span>
+        <span class="badge badge-react">React 19</span>
         <span class="badge badge-firebase">Firebase</span>
+        <span class="badge badge-lucide">Lucide Icons</span>
         <span class="badge badge-vercel">Vercel</span>
       </div>
     </div>
@@ -269,7 +318,6 @@
     <div class="layer layer-users">
       <div class="layer-label">👤 طبقة المستخدمين — User Roles</div>
 
-      <!-- Mobile: roles then auth below -->
       <div class="cards users-grid">
         <div class="card card-employee">
           <div class="card-icon">👷</div>
@@ -309,13 +357,13 @@
     <!-- Arrow -->
     <div class="arrow-row">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
-      Role-based Routing
+      Role-based Routing → citizen / employee / executive
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
     </div>
 
     <!-- ── 2. FRONTEND ────────────────────────────── -->
     <div class="layer layer-frontend">
-      <div class="layer-label">⚛️ طبقة الواجهة — Frontend (React 18 + Vite 5)</div>
+      <div class="layer-label">⚛️ طبقة الواجهة — Frontend (React 19 + Vite 8 + Lucide Icons)</div>
       <div class="cards">
         <div class="card card-page" style="background:#e8f5e9">
           <div class="card-icon">📊</div>
@@ -355,7 +403,7 @@
         <div class="card card-page">
           <div class="card-icon">🏛️</div>
           <div class="card-title">Exec Dashboard</div>
-          <div class="card-sub">الإدارة العليا</div>
+          <div class="card-sub">بوابة القرار</div>
         </div>
         <div class="card card-page">
           <div class="card-icon">📋</div>
@@ -367,6 +415,68 @@
           <div class="card-title">Citizen Portal</div>
           <div class="card-sub">بوابة المواطن</div>
         </div>
+        <div class="card card-page card-new">
+          <div class="card-icon">🏛️</div>
+          <div class="card-title">Gov Login</div>
+          <div class="card-sub">صفحة دخول حكومية</div>
+        </div>
+        <div class="card card-page card-new">
+          <div class="card-icon">🔔</div>
+          <div class="card-title">Notifications</div>
+          <div class="card-sub">قائمة التنبيهات</div>
+        </div>
+      </div>
+
+      <div class="tech-row">
+        <span class="tech-chip tc-blue">RTL Arabic</span>
+        <span class="tech-chip tc-green">Responsive Mobile</span>
+        <span class="tech-chip tc-purple">Lucide Icons (60+)</span>
+        <span class="tech-chip tc-amber">Recharts + ChartBox</span>
+        <span class="tech-chip tc-slate">ResizeObserver</span>
+      </div>
+    </div>
+
+    <!-- Arrow -->
+    <div class="arrow-row">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      Shared UI Components
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+    </div>
+
+    <!-- ── 3. COMPONENTS (NEW) ────────────────────── -->
+    <div class="layer layer-components">
+      <div class="layer-label">🧩 المكونات المشتركة — Shared Components (App.jsx)</div>
+      <div class="cards components-grid">
+        <div class="card card-component card-new">
+          <div class="card-icon">♻️</div>
+          <div class="card-title">AppLogo</div>
+          <div class="card-sub">شعار متدرج CSS بأيقونة Recycle</div>
+        </div>
+        <div class="card card-component card-new">
+          <div class="card-icon">📊</div>
+          <div class="card-title">ChartBox</div>
+          <div class="card-sub">ResizeObserver — إصلاح الجوال</div>
+        </div>
+        <div class="card card-component">
+          <div class="card-icon">🃏</div>
+          <div class="card-title">Card</div>
+          <div class="card-sub">بطاقة عامة قابلة للتوسيع</div>
+        </div>
+        <div class="card card-component">
+          <div class="card-icon">📐</div>
+          <div class="card-title">StatBox</div>
+          <div class="card-sub">مؤشر رقمي مع اتجاه</div>
+        </div>
+        <div class="card card-component">
+          <div class="card-icon">🔴</div>
+          <div class="card-title">StatusBadge</div>
+          <div class="card-sub">حرج / تحذير / طبيعي</div>
+        </div>
+        <div class="card card-component">
+          <div class="card-icon">🧭</div>
+          <div class="card-title">Sidebar</div>
+          <div class="card-sub">قائمة جانبية + Drawer</div>
+        </div>
       </div>
     </div>
 
@@ -377,7 +487,7 @@
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
     </div>
 
-    <!-- ── 3. SERVICES ────────────────────────────── -->
+    <!-- ── 4. SERVICES ────────────────────────────── -->
     <div class="layer layer-services">
       <div class="layer-label">⚙️ طبقة الخدمات — Service Layer (firestoreService.js)</div>
       <div class="cards services-grid">
@@ -421,7 +531,7 @@
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
     </div>
 
-    <!-- ── 4. DATABASE ─────────────────────────────── -->
+    <!-- ── 5. DATABASE ─────────────────────────────── -->
     <div class="layer layer-database">
       <div class="layer-label">🗄️ طبقة البيانات — Cloud Firestore</div>
 
@@ -442,7 +552,7 @@
 
       <hr class="db-divider" />
 
-      <div class="db-section-title">📊 Analytics Documents (14 وثيقة)</div>
+      <div class="db-section-title">📊 Analytics Documents (13 وثيقة) — sub-collection analytics/{doc}</div>
       <div class="cards">
         <div class="card card-analytics"><div class="card-icon">📅</div><div class="card-title">weekly</div><div class="card-sub">أسبوعي</div></div>
         <div class="card card-analytics"><div class="card-icon">📆</div><div class="card-title">monthly</div><div class="card-sub">شهري</div></div>
@@ -466,12 +576,14 @@
   <div class="footer">
     <div class="footer-legend">
       <div class="legend-item"><div class="legend-dot" style="background:#7dd3fc"></div>المستخدمون</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#86efac"></div>واجهة React</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#86efac"></div>واجهة React 19</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#d8b4fe"></div>مكونات مشتركة</div>
       <div class="legend-item"><div class="legend-dot" style="background:#fde68a"></div>طبقة الخدمات</div>
       <div class="legend-item"><div class="legend-dot" style="background:#c4b5fd"></div>Firestore</div>
       <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div>Analytics</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div>جديد v2.0</div>
     </div>
-    <div class="footer-note">بريدة، منطقة القصيم &nbsp;|&nbsp; React 18 + Firebase + Vercel</div>
+    <div class="footer-note">بريدة، منطقة القصيم &nbsp;|&nbsp; React 19 + Vite 8 + Firebase + Lucide Icons + Vercel &nbsp;|&nbsp; 1447/11/22 هـ</div>
   </div>
 
 </div>
