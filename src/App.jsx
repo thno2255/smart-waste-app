@@ -14,6 +14,21 @@
 import React, { useState, useEffect, useMemo, useRef, createContext, useContext } from "react";
 
 import {
+  BarChart2, DollarSign, TrendingUp, TrendingDown, Zap,
+  Landmark, MapIcon, Target, Smile, PieChart as LucidePieChart,
+  Banknote, Building, AlertTriangle, Trophy, Clock,
+  Settings as SettingsIcon, LogOut, Lock, Flag, User,
+  Users, Crown, CheckCircle, Timer, ChartNoAxesCombined,
+  Factory, Recycle, Bell, Package, Calendar, Scale, Leaf,
+  Globe, Truck, Sparkles, Thermometer, Flame, Wind, Gauge,
+  Radio, Microscope, FlaskConical, FireExtinguisher, Droplets,
+  Phone, Bot, Plug, Database, Trash2, FileText, MapPin,
+  Bookmark, LayoutDashboard, Inbox, Sliders, ClipboardList,
+  Home, HardHat, ShieldCheck, Eye, EyeOff, Mail, KeyRound,
+  ChevronRight, X, BellRing, ShieldAlert,
+} from "lucide-react";
+
+import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ComposedChart,
@@ -216,12 +231,28 @@ const AuthProvider = ({ children }) => {
 // ============================================================
 const DISTRICTS = ["حي الخليج","حي الفايزية","حي الإسكان","حي الريان","حي السالمية","حي الحمر","حي المنتزه","حي الأفق","حي النقع","حي الضاحي","حي الهلالية","حي البصيرة"];
 const ROLES_LIST = [
-  { value: "citizen", label: "مواطن", icon: "🏠", desc: "طلب حاويات ومتابعة الخدمات", color: "#10b981" },
-  { value: "employee", label: "موظف", icon: "👷", desc: "إدارة المحطات والعمليات", color: "#3b82f6" },
-  { value: "executive", label: "إدارة عليا", icon: "🏛️", desc: "لوحة متخذي القرار", color: "#f59e0b" },
+  { value: "citizen",   label: "مواطن",      icon: <Home size={22} />,       desc: "طلب حاويات ومتابعة الخدمات", color: "#10b981" },
+  { value: "employee",  label: "موظف",       icon: <HardHat size={22} />,    desc: "إدارة المحطات والعمليات",    color: "#3b82f6" },
+  { value: "executive", label: "إدارة عليا", icon: <Landmark size={22} />,   desc: "لوحة متخذي القرار",          color: "#f59e0b" },
 ];
 
-const inputStyle = { width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:"'Noto Kufi Arabic',sans-serif", outline:"none", boxSizing:"border-box" };
+const inputStyle = { width:"100%", padding:"12px 16px", borderRadius:10, border:"1px solid #1e3a5f", background:"#0a1628", color:"#e2e8f0", fontSize:14, fontFamily:"'Noto Kufi Arabic',sans-serif", outline:"none", boxSizing:"border-box", transition:"border-color 0.2s" };
+
+// ── شعار النظام الموحد ──────────────────────────────────────────
+const AppLogo = ({ size = 72 }) => (
+  <div style={{ width:size, height:size, position:"relative", margin:"0 auto", flexShrink:0 }}>
+    {/* الدائرة الخارجية */}
+    <div style={{ position:"absolute", inset:0, borderRadius:"50%", background:"linear-gradient(135deg,#0d7a4e,#10b981)", boxShadow:"0 0 0 3px #10b98140, 0 12px 40px #10b98130" }} />
+    {/* حلقة داخلية */}
+    <div style={{ position:"absolute", inset:6, borderRadius:"50%", border:"1px solid #ffffff25", background:"linear-gradient(135deg,#065f3a,#0d7a4e)" }} />
+    {/* أيقونة */}
+    <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <Recycle size={size * 0.42} color="#ffffff" strokeWidth={1.8} />
+    </div>
+    {/* نقطة بريق */}
+    <div style={{ position:"absolute", top:"14%", right:"18%", width:size*0.12, height:size*0.12, borderRadius:"50%", background:"#ffffff40" }} />
+  </div>
+);
 
 const AuthPage = () => {
   const { login, register, resetPassword } = useAuth();
@@ -231,13 +262,22 @@ const AuthPage = () => {
   const [success, setSuccess] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showConfirmPass, setShowConfirmPass] = useState(false);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [district, setDistrict] = useState("");
   const [role, setRole] = useState("citizen");
+  const [isMobileAuth, setIsMobileAuth] = useState(window.innerWidth < 900);
 
-  const resetForm = () => { setEmail(""); setPassword(""); setConfirmPassword(""); setFullName(""); setPhone(""); setDistrict(""); setRole("citizen"); setError(""); setSuccess(""); };
+  useEffect(() => {
+    const fn = () => setIsMobileAuth(window.innerWidth < 900);
+    window.addEventListener("resize", fn);
+    return () => window.removeEventListener("resize", fn);
+  }, []);
+
+  const resetForm = () => { setEmail(""); setPassword(""); setConfirmPassword(""); setFullName(""); setPhone(""); setDistrict(""); setRole("citizen"); setError(""); setSuccess(""); setShowPass(false); setShowConfirmPass(false); };
 
   const handleLogin = async (e) => {
     if (e) e.preventDefault();
@@ -265,91 +305,273 @@ const AuthPage = () => {
     if (!email) { setError("يرجى إدخال البريد الإلكتروني أولاً"); return; }
     setLoading(true); setError(""); setSuccess("");
     const r = await resetPassword(email);
-    if (r.success) setSuccess("تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني ✉️");
+    if (r.success) setSuccess("تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني");
     else setError(r.error);
     setLoading(false);
   };
 
   const F = "'Noto Kufi Arabic',sans-serif";
+  const govGreen = "#10b981";
+  const govDark  = "#071628";
+  const govCard  = "#0c1f35";
+  const govBorder = "#1e3a5f";
+
+  const fieldWrap = { position:"relative", display:"flex", flexDirection:"column", gap:6 };
+  const labelSt   = { fontSize:12, color:"#94a3b8", fontWeight:600 };
+  const iconWrap   = { position:"absolute", left:14, bottom:13, color:"#64748b", display:"flex", alignItems:"center" };
 
   return (
-    <div dir="rtl" style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0a0e1a 0%,#1a1040 50%,#0a0e1a 100%)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F, padding:20 }}>
+    <div dir="rtl" style={{ minHeight:"100vh", background:govDark, fontFamily:F, display:"flex", flexDirection:"column" }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-      <div style={{ width:"100%", maxWidth: mode==="register"?520:440, padding:"clamp(20px,5vw,40px)", background:"#111827", borderRadius:24, border:"1px solid #1e293b", position:"relative", overflow:"hidden" }}>
-        <div style={{ position:"absolute", top:-60, left:"50%", transform:"translateX(-50%)", width:200, height:200, background:"radial-gradient(circle,#10b98120,transparent)", borderRadius:"50%" }} />
 
-        {/* Header */}
-        <div style={{ textAlign:"center", marginBottom:28, position:"relative" }}>
-          <div style={{ width:68, height:68, borderRadius:18, background:"linear-gradient(135deg,#10b981,#059669)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:34, margin:"0 auto 14px", boxShadow:"0 8px 30px #10b98130" }}>♻️</div>
-          <h1 style={{ fontSize:22, fontWeight:900, color:"#f1f5f9", margin:"0 0 6px 0" }}>نظام إدارة النفايات الذكي</h1>
-          <p style={{ fontSize:13, color:"#94a3b8", margin:0 }}>مدينة بريدة - منطقة القصيم</p>
+      {/* ── شريط حكومي علوي ─────────────────────────────────────── */}
+      <div style={{ background:"#051020", borderBottom:"2px solid #10b98130", padding:"8px 24px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ width:30, height:30, borderRadius:7, background:"linear-gradient(135deg,#10b981,#065f3a)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <ShieldCheck size={15} color="#fff" />
+          </div>
+          <span style={{ fontSize:12, fontWeight:800, color:"#f1f5f9" }}>المملكة العربية السعودية</span>
         </div>
+        <div style={{ display:"flex", alignItems:"center", gap:6, background:"#10b98115", border:"1px solid #10b98130", padding:"4px 10px", borderRadius:20 }}>
+          <Lock size={10} color={govGreen} />
+          <span style={{ fontSize:10, color:govGreen, fontWeight:700 }}>بوابة آمنة</span>
+        </div>
+      </div>
 
-        {/* Tabs — تظهر فقط في login و register */}
-        {mode !== "forgot" && (
-          <div style={{ display:"flex", gap:0, marginBottom:24, background:"#0a0e1a", borderRadius:12, padding:4 }}>
-            {[{key:"login",label:"تسجيل دخول"},{key:"register",label:"إنشاء حساب"}].map(tab=>(
-              <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"none", background:mode===tab.key?"#10b981":"transparent", color:mode===tab.key?"#000":"#94a3b8", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s" }}>{tab.label}</button>
-            ))}
-          </div>
-        )}
+      {/* ── المحتوى الرئيسي ─────────────────────────────────────── */}
+      <div style={{ flex:1, display:"flex", alignItems:"stretch", minHeight:0 }}>
 
-        {/* عنوان صفحة نسيت كلمة المرور */}
-        {mode === "forgot" && (
-          <div style={{ textAlign:"center", marginBottom:24 }}>
-            <div style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:6 }}>🔑 استعادة كلمة المرور</div>
-            <div style={{ fontSize:12, color:"#94a3b8" }}>أدخل بريدك الإلكتروني وسنرسل لك رابط إعادة التعيين</div>
-          </div>
-        )}
+        {/* عمود اليمين: الهوية والشرح — مخفي على الجوال */}
+        {!isMobileAuth && (
+          <div style={{ flex:"1 1 420px", background:"linear-gradient(160deg,#051020 0%,#0a1e38 60%,#071628 100%)", borderLeft:`1px solid ${govBorder}`, display:"flex", flexDirection:"column", justifyContent:"center", alignItems:"center", padding:"48px 40px", position:"relative", overflow:"hidden" }}>
+            {/* زخارف خلفية */}
+            <div style={{ position:"absolute", top:-80, right:-80, width:320, height:320, borderRadius:"50%", background:"radial-gradient(circle,#10b98112,transparent)" }} />
+            <div style={{ position:"absolute", bottom:-60, left:-60, width:240, height:240, borderRadius:"50%", background:"radial-gradient(circle,#3b82f60a,transparent)" }} />
+            {/* خط أفقي مزخرف */}
+            <div style={{ position:"absolute", top:0, left:0, right:0, height:3, background:"linear-gradient(90deg,transparent,#10b98160,transparent)" }} />
 
-        {error && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, marginBottom:16, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {error}</div>}
-        {success && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, marginBottom:16, textAlign:"center", border:"1px solid #10b98130" }}>✅ {success}</div>}
+            <div style={{ position:"relative", zIndex:1, textAlign:"center", maxWidth:360 }}>
+              <AppLogo size={100} />
+              <div style={{ marginTop:28, marginBottom:8 }}>
+                <div style={{ fontSize:11, color:govGreen, fontWeight:700, letterSpacing:2, textTransform:"uppercase", marginBottom:10 }}>SMART WASTE MANAGEMENT SYSTEM</div>
+                <h2 style={{ fontSize:26, fontWeight:900, color:"#f1f5f9", margin:"0 0 8px 0", lineHeight:1.3 }}>نظام إدارة النفايات الذكي</h2>
+                <p style={{ fontSize:13, color:"#64748b", fontWeight:600, margin:0 }}>مدينة بريدة • منطقة القصيم</p>
+              </div>
 
-        {mode==="login" && (
-          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-            <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} /></div>
-            <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>كلمة المرور</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="أدخل كلمة المرور" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleLogin(e)} /></div>
-            <div style={{ textAlign:"left" }}>
-              <button onClick={()=>{setMode("forgot");resetForm();}} style={{ background:"none", border:"none", color:"#10b981", fontSize:12, cursor:"pointer", fontFamily:F, padding:0 }}>نسيت كلمة المرور؟</button>
-            </div>
-            <button onClick={handleLogin} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading?"جاري تسجيل الدخول...":"تسجيل الدخول"}</button>
-          </div>
-        )}
+              {/* فاصل */}
+              <div style={{ display:"flex", alignItems:"center", gap:10, margin:"24px 0" }}>
+                <div style={{ flex:1, height:1, background:"linear-gradient(90deg,transparent,#1e3a5f)" }} />
+                <div style={{ width:6, height:6, borderRadius:"50%", background:govGreen }} />
+                <div style={{ flex:1, height:1, background:"linear-gradient(90deg,#1e3a5f,transparent)" }} />
+              </div>
 
-        {mode==="forgot" && (
-          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-            <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} onKeyDown={e=>e.key==="Enter"&&handleResetPassword(e)} /></div>
-            <button onClick={handleResetPassword} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F }}>{loading?"جاري الإرسال...":"إرسال رابط الاستعادة"}</button>
-            <button onClick={()=>{setMode("login");resetForm();}} style={{ padding:10, borderRadius:12, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", fontSize:13, cursor:"pointer", fontFamily:F }}>← العودة لتسجيل الدخول</button>
-          </div>
-        )}
+              {/* شرح التطبيق */}
+              <p style={{ fontSize:13, color:"#94a3b8", lineHeight:1.9, marginBottom:24, textAlign:"right" }}>
+                منصة رقمية ذكية لإدارة النفايات وتحسين جودة البيئة الحضرية، تُسهم في تحقيق أهداف رؤية المملكة 2030 نحو مدن مستدامة ونظيفة.
+              </p>
 
-        {mode==="register" && (
-          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-            <div>
-              <label style={{fontSize:12,color:"#94a3b8",marginBottom:8,display:"block"}}>نوع الحساب</label>
-              <div style={{display:"flex",gap:8}}>
-                {ROLES_LIST.map(r=>(
-                  <button key={r.value} onClick={()=>setRole(r.value)} style={{ flex:1, padding:"12px 8px", borderRadius:12, border:`2px solid ${role===r.value?r.color:"#1e293b"}`, background:role===r.value?r.color+"15":"transparent", cursor:"pointer", textAlign:"center" }}>
-                    <div style={{fontSize:24,marginBottom:4}}>{r.icon}</div>
-                    <div style={{fontSize:12,fontWeight:700,color:role===r.value?r.color:"#94a3b8",fontFamily:F}}>{r.label}</div>
-                    <div style={{fontSize:9,color:"#64748b",marginTop:2,fontFamily:F}}>{r.desc}</div>
-                  </button>
-                ))}
+              {/* مزايا */}
+              {[
+                { icon: <Recycle size={14} />,     text: "إدارة ذكية ومستدامة للنفايات" },
+                { icon: <BellRing size={14} />,    text: "تنبيهات فورية واستجابة سريعة" },
+                { icon: <BarChart2 size={14} />,   text: "تحليلات دقيقة لدعم القرار" },
+                { icon: <ShieldCheck size={14} />, text: "بيئة آمنة وصلاحيات متدرجة" },
+              ].map((f, i) => (
+                <div key={i} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, background:"#0a1e3820", border:"1px solid #1e3a5f40", borderRadius:8, padding:"8px 12px" }}>
+                  <div style={{ color:govGreen, flexShrink:0 }}>{f.icon}</div>
+                  <span style={{ fontSize:12, color:"#94a3b8", textAlign:"right" }}>{f.text}</span>
+                </div>
+              ))}
+
+              <div style={{ marginTop:24, fontSize:10, color:"#334155", display:"flex", justifyContent:"center", gap:16 }}>
+                <span>الإصدار 2.0</span>
+                <span>•</span>
+                <span>1447/11/22 هـ</span>
+                <span>•</span>
+                <span>رؤية 2030</span>
               </div>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))",gap:12}}>
-              <div style={{gridColumn:"1/-1"}}><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>الاسم الكامل *</label><input type="text" value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="الاسم الثلاثي" style={inputStyle} /></div>
-              <div style={{gridColumn:"1/-1"}}><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>البريد الإلكتروني *</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={inputStyle} /></div>
-              <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>كلمة المرور *</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="6 أحرف على الأقل" style={inputStyle} /></div>
-              <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>تأكيد كلمة المرور *</label><input type="password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="أعد كتابة كلمة المرور" style={inputStyle} /></div>
-              <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>رقم الجوال</label><input type="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="05XXXXXXXX" style={{...inputStyle,direction:"ltr",textAlign:"right"}} /></div>
-              <div><label style={{fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"}}>الحي</label><select value={district} onChange={e=>setDistrict(e.target.value)} style={{...inputStyle,appearance:"auto"}}><option value="">اختر الحي</option>{DISTRICTS.map(d=><option key={d} value={d}>{d}</option>)}</select></div>
-            </div>
-            <button onClick={handleRegister} disabled={loading} style={{ padding:14, borderRadius:12, border:"none", background:loading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:15, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, marginTop:4 }}>{loading?"جاري إنشاء الحساب...":"إنشاء حساب جديد"}</button>
           </div>
         )}
-        <div style={{textAlign:"center",marginTop:20,fontSize:11,color:"#64748b"}}>🔒 جميع البيانات مشفرة ومحمية</div>
+
+        {/* عمود اليسار: نموذج الدخول */}
+        <div style={{ flex:"0 0 auto", width: isMobileAuth ? "100%" : 460, display:"flex", flexDirection:"column", justifyContent:"center", alignItems:"center", padding: isMobileAuth ? "24px 16px" : "40px 32px", background: isMobileAuth ? govDark : "#080f1e", overflowY:"auto" }}>
+
+          {/* شعار للجوال فقط */}
+          {isMobileAuth && (
+            <div style={{ textAlign:"center", marginBottom:28 }}>
+              <AppLogo size={80} />
+              <div style={{ marginTop:14 }}>
+                <div style={{ fontSize:11, color:govGreen, fontWeight:700, letterSpacing:1 }}>SMART WASTE MANAGEMENT</div>
+                <h2 style={{ fontSize:20, fontWeight:900, color:"#f1f5f9", margin:"6px 0 4px" }}>نظام إدارة النفايات الذكي</h2>
+                <p style={{ fontSize:12, color:"#64748b", margin:0 }}>مدينة بريدة • منطقة القصيم</p>
+              </div>
+            </div>
+          )}
+
+          <div style={{ width:"100%", maxWidth: mode==="register" ? 420 : 380 }}>
+
+            {/* عنوان الكارد */}
+            {mode !== "forgot" && (
+              <div style={{ marginBottom:24 }}>
+                <h3 style={{ fontSize:18, fontWeight:800, color:"#f1f5f9", margin:"0 0 4px" }}>
+                  {mode === "login" ? "تسجيل الدخول" : "إنشاء حساب جديد"}
+                </h3>
+                <p style={{ fontSize:12, color:"#64748b", margin:0 }}>
+                  {mode === "login" ? "أدخل بياناتك للوصول إلى المنظومة" : "أنشئ حسابك للانضمام إلى المنظومة"}
+                </p>
+              </div>
+            )}
+
+            {/* تبويبات */}
+            {mode !== "forgot" && (
+              <div style={{ display:"flex", gap:0, marginBottom:24, background:"#051020", borderRadius:10, padding:4, border:`1px solid ${govBorder}` }}>
+                {[{key:"login",label:"تسجيل دخول"},{key:"register",label:"إنشاء حساب"}].map(tab=>(
+                  <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"9px 0", borderRadius:8, border:"none", background:mode===tab.key?govGreen:"transparent", color:mode===tab.key?"#000":"#64748b", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.25s" }}>{tab.label}</button>
+                ))}
+              </div>
+            )}
+
+            {/* استعادة كلمة المرور - رأس */}
+            {mode === "forgot" && (
+              <div style={{ textAlign:"center", marginBottom:24 }}>
+                <div style={{ width:56, height:56, borderRadius:14, background:"linear-gradient(135deg,#10b981,#059669)", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 14px" }}><KeyRound size={26} color="#fff" /></div>
+                <div style={{ fontSize:17, fontWeight:800, color:"#f1f5f9", marginBottom:6 }}>استعادة كلمة المرور</div>
+                <div style={{ fontSize:12, color:"#64748b" }}>أدخل بريدك الإلكتروني وسنرسل لك رابط إعادة التعيين</div>
+              </div>
+            )}
+
+            {/* رسائل */}
+            {error && (
+              <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#ef4444", background:"#ef444412", padding:"10px 14px", borderRadius:10, marginBottom:16, border:"1px solid #ef444430" }}>
+                <ShieldAlert size={14} color="#ef4444" style={{ flexShrink:0 }} />
+                {error}
+              </div>
+            )}
+            {success && (
+              <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#10b981", background:"#10b98112", padding:"10px 14px", borderRadius:10, marginBottom:16, border:"1px solid #10b98130" }}>
+                <CheckCircle size={14} color="#10b981" style={{ flexShrink:0 }} />
+                {success}
+              </div>
+            )}
+
+            {/* ── نموذج الدخول ── */}
+            {mode==="login" && (
+              <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+                <div style={fieldWrap}>
+                  <label style={labelSt}>البريد الإلكتروني</label>
+                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={{ ...inputStyle, paddingLeft:40 }} />
+                  <span style={iconWrap}><Mail size={15} /></span>
+                </div>
+                <div style={fieldWrap}>
+                  <label style={labelSt}>كلمة المرور</label>
+                  <input type={showPass?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="أدخل كلمة المرور" style={{ ...inputStyle, paddingLeft:40 }} onKeyDown={e=>e.key==="Enter"&&handleLogin(e)} />
+                  <span style={iconWrap}><KeyRound size={15} /></span>
+                  <button onClick={()=>setShowPass(v=>!v)} style={{ position:"absolute", left:40, bottom:13, background:"none", border:"none", color:"#64748b", cursor:"pointer", padding:0, display:"flex" }}>{showPass?<EyeOff size={15}/>:<Eye size={15}/>}</button>
+                </div>
+                <div style={{ textAlign:"left" }}>
+                  <button onClick={()=>{setMode("forgot");resetForm();}} style={{ background:"none", border:"none", color:govGreen, fontSize:12, cursor:"pointer", fontFamily:F, padding:0, display:"inline-flex", alignItems:"center", gap:4 }}>
+                    <KeyRound size={11} /> نسيت كلمة المرور؟
+                  </button>
+                </div>
+                <button onClick={handleLogin} disabled={loading} style={{ padding:"13px 0", borderRadius:10, border:"none", background:loading?"#1e3a5f":"linear-gradient(135deg,#10b981,#059669)", color:loading?"#64748b":"#fff", fontSize:14, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:8, transition:"all 0.2s" }}>
+                  {loading ? <><Clock size={15}/> جاري التحقق...</> : <><ChevronRight size={15}/> دخول إلى المنظومة</>}
+                </button>
+              </div>
+            )}
+
+            {/* ── نموذج الاستعادة ── */}
+            {mode==="forgot" && (
+              <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+                <div style={fieldWrap}>
+                  <label style={labelSt}>البريد الإلكتروني</label>
+                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={{ ...inputStyle, paddingLeft:40 }} onKeyDown={e=>e.key==="Enter"&&handleResetPassword(e)} />
+                  <span style={iconWrap}><Mail size={15} /></span>
+                </div>
+                <button onClick={handleResetPassword} disabled={loading} style={{ padding:"13px 0", borderRadius:10, border:"none", background:loading?"#1e3a5f":"linear-gradient(135deg,#10b981,#059669)", color:loading?"#64748b":"#fff", fontSize:14, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                  {loading ? <><Clock size={15}/> جاري الإرسال...</> : <><Mail size={15}/> إرسال رابط الاستعادة</>}
+                </button>
+                <button onClick={()=>{setMode("login");resetForm();}} style={{ padding:"10px 0", borderRadius:10, border:`1px solid ${govBorder}`, background:"transparent", color:"#94a3b8", fontSize:13, cursor:"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                  <ChevronRight size={13} style={{ transform:"rotate(180deg)" }} /> العودة لتسجيل الدخول
+                </button>
+              </div>
+            )}
+
+            {/* ── نموذج التسجيل ── */}
+            {mode==="register" && (
+              <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+                {/* نوع الحساب */}
+                <div>
+                  <label style={{ ...labelSt, marginBottom:8, display:"block" }}>نوع الحساب</label>
+                  <div style={{ display:"flex", gap:8 }}>
+                    {ROLES_LIST.map(r=>(
+                      <button key={r.value} onClick={()=>setRole(r.value)} style={{ flex:1, padding:"12px 6px", borderRadius:10, border:`2px solid ${role===r.value?r.color:govBorder}`, background:role===r.value?r.color+"15":"transparent", cursor:"pointer", textAlign:"center", transition:"all 0.2s" }}>
+                        <div style={{ display:"flex", justifyContent:"center", marginBottom:6, color:role===r.value?r.color:"#64748b" }}>{r.icon}</div>
+                        <div style={{ fontSize:11, fontWeight:700, color:role===r.value?r.color:"#94a3b8", fontFamily:F }}>{r.label}</div>
+                        <div style={{ fontSize:9, color:"#475569", marginTop:2, fontFamily:F }}>{r.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:12 }}>
+                  <div style={{ gridColumn:"1/-1", ...fieldWrap }}>
+                    <label style={labelSt}>الاسم الكامل *</label>
+                    <input type="text" value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="الاسم الثلاثي" style={{ ...inputStyle, paddingLeft:40 }} />
+                    <span style={iconWrap}><User size={15} /></span>
+                  </div>
+                  <div style={{ gridColumn:"1/-1", ...fieldWrap }}>
+                    <label style={labelSt}>البريد الإلكتروني *</label>
+                    <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={{ ...inputStyle, paddingLeft:40 }} />
+                    <span style={iconWrap}><Mail size={15} /></span>
+                  </div>
+                  <div style={fieldWrap}>
+                    <label style={labelSt}>كلمة المرور *</label>
+                    <input type={showPass?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="6 أحرف على الأقل" style={{ ...inputStyle, paddingLeft:40 }} />
+                    <span style={iconWrap}><KeyRound size={15} /></span>
+                    <button onClick={()=>setShowPass(v=>!v)} style={{ position:"absolute", left:40, bottom:13, background:"none", border:"none", color:"#64748b", cursor:"pointer", padding:0, display:"flex" }}>{showPass?<EyeOff size={15}/>:<Eye size={15}/>}</button>
+                  </div>
+                  <div style={fieldWrap}>
+                    <label style={labelSt}>تأكيد كلمة المرور *</label>
+                    <input type={showConfirmPass?"text":"password"} value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="أعد كتابة كلمة المرور" style={{ ...inputStyle, paddingLeft:40 }} />
+                    <span style={iconWrap}><KeyRound size={15} /></span>
+                    <button onClick={()=>setShowConfirmPass(v=>!v)} style={{ position:"absolute", left:40, bottom:13, background:"none", border:"none", color:"#64748b", cursor:"pointer", padding:0, display:"flex" }}>{showConfirmPass?<EyeOff size={15}/>:<Eye size={15}/>}</button>
+                  </div>
+                  <div style={fieldWrap}>
+                    <label style={labelSt}>رقم الجوال</label>
+                    <input type="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="05XXXXXXXX" style={{ ...inputStyle, direction:"ltr", textAlign:"right", paddingLeft:40 }} />
+                    <span style={iconWrap}><Phone size={15} /></span>
+                  </div>
+                  <div style={fieldWrap}>
+                    <label style={labelSt}>الحي</label>
+                    <select value={district} onChange={e=>setDistrict(e.target.value)} style={{ ...inputStyle, appearance:"auto" }}>
+                      <option value="">اختر الحي</option>
+                      {DISTRICTS.map(d=><option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <button onClick={handleRegister} disabled={loading} style={{ padding:"13px 0", borderRadius:10, border:"none", background:loading?"#1e3a5f":"linear-gradient(135deg,#10b981,#059669)", color:loading?"#64748b":"#fff", fontSize:14, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, marginTop:4, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                  {loading ? <><Clock size={15}/> جاري إنشاء الحساب...</> : <><CheckCircle size={15}/> إنشاء الحساب</>}
+                </button>
+              </div>
+            )}
+
+            {/* تذييل الأمان */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, marginTop:20, padding:"10px 0", borderTop:`1px solid ${govBorder}` }}>
+              <Lock size={11} color="#475569" />
+              <span style={{ fontSize:11, color:"#475569" }}>جميع البيانات مشفرة بمعيار TLS 1.3</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── شريط سفلي ──────────────────────────────────────────── */}
+      <div style={{ background:"#051020", borderTop:`1px solid ${govBorder}`, padding:"8px 24px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+        <span style={{ fontSize:10, color:"#334155" }}>© 1447 هـ - المملكة العربية السعودية. جميع الحقوق محفوظة.</span>
+        <div style={{ display:"flex", gap:16 }}>
+          {["سياسة الخصوصية","شروط الاستخدام","الدعم الفني"].map(t=>(
+            <span key={t} style={{ fontSize:10, color:"#475569", cursor:"pointer" }}>{t}</span>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -599,13 +821,13 @@ const generateAlerts = (stations = []) => {
   stations.forEach((s) => {
     const status = getStatus(s.fillLevel);
     if (status === "حرج") {
-      alerts.push({ id: `${s.id}_c`, type: "حرج", message: `${s.name} - مستوى الامتلاء وصل ${s.fillLevel}%`, time: "الآن", icon: "🔴" });
+      alerts.push({ id: `${s.id}_c`, type: "حرج", message: `${s.name} - مستوى الامتلاء وصل ${s.fillLevel}%`, time: "الآن", icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} /> });
     } else if (status === "تحذير") {
-      alerts.push({ id: `${s.id}_w`, type: "تحذير", message: `${s.name} - مستوى الامتلاء ${s.fillLevel}%`, time: "الآن", icon: "🟡" });
+      alerts.push({ id: `${s.id}_w`, type: "تحذير", message: `${s.name} - مستوى الامتلاء ${s.fillLevel}%`, time: "الآن", icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} /> });
     }
   });
   if (alerts.length === 0) {
-    alerts.push({ id: "ok", type: "معلومة", message: "جميع المحطات تعمل بشكل طبيعي ✅", time: "الآن", icon: "🟢" });
+    alerts.push({ id: "ok", type: "معلومة", message: "جميع المحطات تعمل بشكل طبيعي ✅", time: "الآن", icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#10b981",flexShrink:0}} /> });
   }
   return alerts;
 };
@@ -685,9 +907,9 @@ const StatusBadge = ({ status }) => {
 };
 
 const Card = ({ children, title, icon, style: sx }) => (
-  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 22, ...sx }}>
-    {title && <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 16 }}>{icon} {title}</div>}
-    {children}
+  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 22, minWidth: 0, ...sx }}>
+    {title && <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>{icon}{title}</div>}
+    <div style={{ width: "100%", minWidth: 0 }}>{children}</div>
   </div>
 );
 
@@ -716,15 +938,15 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-        <StatCard title="إجمالي المحطات" value={stations.length} icon="🏭" gradient={C.g1} />
-        <StatCard title="متوسط الامتلاء" value={avgFill} unit="%" icon="📊" gradient={C.g2} trend={-5.2} />
-        <StatCard title="الكمية اليومية" value={totalDaily} unit="كجم" icon="♻️" gradient={C.g3} trend={12.8} />
-        <StatCard title="كفاءة التشغيل" value={avgEff} unit="%" icon="⚡" gradient={C.g4} trend={3.1} />
+        <StatCard title="إجمالي المحطات" value={stations.length} icon={<Factory size={22} color="#fff" />} gradient={C.g1} />
+        <StatCard title="متوسط الامتلاء" value={avgFill} unit="%" icon={<BarChart2 size={22} color="#fff" />} gradient={C.g2} trend={-5.2} />
+        <StatCard title="الكمية اليومية" value={totalDaily} unit="كجم" icon={<Recycle size={22} color="#fff" />} gradient={C.g3} trend={12.8} />
+        <StatCard title="كفاءة التشغيل" value={avgEff} unit="%" icon={<Zap size={22} color="#fff" />} gradient={C.g4} trend={3.1} />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-        <Card title="توزيع النفايات الأسبوعي (كجم)" icon="📊">
-          <ResponsiveContainer width="100%" height={280}>
+        <Card title="توزيع النفايات الأسبوعي (كجم)" icon={<BarChart2 size={16} color="#94a3b8" />}>
+          <ResponsiveContainer width="99%" height={280}>
             <BarChart data={weeklyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
               <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 11, fontFamily: ARABIC_FONT }} />
@@ -738,8 +960,8 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
           </ResponsiveContainer>
         </Card>
 
-        <Card title="توزيع مستويات الامتلاء" icon="🎯">
-          <ResponsiveContainer width="100%" height={220}>
+        <Card title="توزيع مستويات الامتلاء" icon={<Target size={16} color="#94a3b8" />}>
+          <ResponsiveContainer width="99%" height={220}>
             <PieChart>
               <Pie data={fillDistribution} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={4}
                 label={({ name, value }) => `${name}: ${value}`}>
@@ -759,8 +981,8 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-        <Card title="الاتجاه الشهري - الجمع والكفاءة" icon="📈">
-          <ResponsiveContainer width="100%" height={260}>
+        <Card title="الاتجاه الشهري - الجمع والكفاءة" icon={<TrendingUp size={16} color="#94a3b8" />}>
+          <ResponsiveContainer width="99%" height={260}>
             <ComposedChart data={monthlyTrend} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
               <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -774,8 +996,8 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
           </ResponsiveContainer>
         </Card>
 
-        <Card title="نشاط الشفط على مدار الساعة" icon="⏰">
-          <ResponsiveContainer width="100%" height={260}>
+        <Card title="نشاط الشفط على مدار الساعة" icon={<Clock size={16} color="#94a3b8" />}>
+          <ResponsiveContainer width="99%" height={260}>
             <AreaChart data={hourlyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
               <defs>
                 <linearGradient id="gS" x1="0" y1="0" x2="0" y2="1">
@@ -800,8 +1022,8 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-        <Card title="أداء المحطات - بريدة" icon="🎯">
-          <ResponsiveContainer width="100%" height={300}>
+        <Card title="أداء المحطات - بريدة" icon={<Target size={16} color="#94a3b8" />}>
+          <ResponsiveContainer width="99%" height={300}>
             <RadarChart cx="50%" cy="50%" outerRadius="70%" data={stationPerformance}>
               <PolarGrid stroke={C.border} />
               <PolarAngleAxis dataKey="name" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
@@ -815,7 +1037,7 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
           </ResponsiveContainer>
         </Card>
 
-        <Card title="التنبيهات" icon="🔔">
+        <Card title="التنبيهات" icon={<Bell size={16} color="#94a3b8" />}>
           {criticalCount > 0 && (
             <span style={{ background: C.danger + "30", color: C.danger, fontSize: 11, padding: "2px 8px", borderRadius: 10, fontWeight: 600, marginBottom: 12, display: "inline-block" }}>
               {criticalCount} حرج
@@ -837,12 +1059,12 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
         {[
-          { label: "محطات طبيعية", count: stations.filter((s) => getStatus(s.fillLevel) === "طبيعي").length, color: C.accent, icon: "✅" },
-          { label: "محطات تحت التحذير", count: stations.filter((s) => getStatus(s.fillLevel) === "تحذير").length, color: C.warning, icon: "⚠️" },
-          { label: "محطات حرجة", count: criticalCount, color: C.danger, icon: "🚨" },
+          { label: "محطات طبيعية", count: stations.filter((s) => getStatus(s.fillLevel) === "طبيعي").length, color: C.accent, icon: <CheckCircle size={32} color={C.accent} /> },
+          { label: "محطات تحت التحذير", count: stations.filter((s) => getStatus(s.fillLevel) === "تحذير").length, color: C.warning, icon: <AlertTriangle size={32} color={C.warning} /> },
+          { label: "محطات حرجة", count: criticalCount, color: C.danger, icon: <AlertTriangle size={32} color={C.danger} /> },
         ].map((item, i) => (
           <div key={i} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 16, padding: 20, textAlign: "center" }}>
-            <div style={{ fontSize: 32, marginBottom: 6 }}>{item.icon}</div>
+            <div style={{ marginBottom: 6, display: "flex", justifyContent: "center" }}>{item.icon}</div>
             <div style={{ fontSize: 36, fontWeight: 800, color: item.color }}>{item.count}</div>
             <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{item.label}</div>
           </div>
@@ -1167,17 +1389,17 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
             const avgFill   = ctrs.length ? Math.round(ctrs.reduce((a,c)=>a+c.fillLevel,0)/ctrs.length) : 0;
 
             return (
-              <Card title="حاويات المنازل" icon="📦">
+              <Card title="حاويات المنازل" icon={<Package size={16} color="#94a3b8" />}>
                 {/* ── مؤشرات الملخص ─────────────────────── */}
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))", gap:10, marginBottom:18 }}>
                   {[
-                    { label:"إجمالي الحاويات", val:ctrs.length,   color:C.info,    icon:"📦" },
-                    { label:"حرج",             val:cCrit.length,  color:C.danger,  icon:"🔴" },
-                    { label:"تحذير",           val:cWarn.length,  color:C.warning, icon:"🟡" },
-                    { label:"متوسط الامتلاء",  val:`${avgFill}%`, color:avgFill>=85?C.danger:avgFill>=60?C.warning:C.accent, icon:"📊" },
+                    { label:"إجمالي الحاويات", val:ctrs.length,   color:C.info,    icon:<Package size={20} color={C.info} /> },
+                    { label:"حرج",             val:cCrit.length,  color:C.danger,  icon:<div style={{width:12,height:12,borderRadius:"50%",background:"#ef4444"}} /> },
+                    { label:"تحذير",           val:cWarn.length,  color:C.warning, icon:<div style={{width:12,height:12,borderRadius:"50%",background:"#f59e0b"}} /> },
+                    { label:"متوسط الامتلاء",  val:`${avgFill}%`, color:avgFill>=85?C.danger:avgFill>=60?C.warning:C.accent, icon:<BarChart2 size={20} color={avgFill>=85?C.danger:avgFill>=60?C.warning:C.accent} /> },
                   ].map((m,i) => (
                     <div key={i} style={{ background:C.bg, borderRadius:12, padding:"12px 14px", textAlign:"center", border:`1px solid ${m.color}25` }}>
-                      <div style={{ fontSize:20, marginBottom:4 }}>{m.icon}</div>
+                      <div style={{ marginBottom:4, display:"flex", justifyContent:"center", alignItems:"center" }}>{m.icon}</div>
                       <div style={{ fontSize:22, fontWeight:800, color:m.color }}>{m.val}</div>
                       <div style={{ fontSize:10, color:C.dim, marginTop:2 }}>{m.label}</div>
                     </div>
@@ -1270,8 +1492,8 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
 
           {/* Charts */}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:16 }}>
-            <Card title="سجل الامتلاء والضغط" icon="📈">
-              <ResponsiveContainer width="100%" height={220}>
+            <Card title="سجل الامتلاء والضغط" icon={<TrendingUp size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={220}>
                 <LineChart data={stationHistory}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="day" tick={{ fill:C.muted, fontSize:10, fontFamily:F }} />
@@ -1283,8 +1505,8 @@ const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
                 </LineChart>
               </ResponsiveContainer>
             </Card>
-            <Card title="كمية النفايات اليومية" icon="📦">
-              <ResponsiveContainer width="100%" height={220}>
+            <Card title="كمية النفايات اليومية" icon={<Package size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={220}>
                 <BarChart data={stationHistory}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="day" tick={{ fill:C.muted, fontSize:10, fontFamily:F }} />
@@ -1410,10 +1632,10 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
   const goalColors = [C.accent, C.info, C.purple, C.warning];
 
   const envMetrics = (envDoc?.metrics || [
-    { label: "انبعاثات CO₂ الموفرة", value: "2.4 طن",   icon: "🌍", desc: "مقارنة بالطرق التقليدية" },
-    { label: "نسبة إعادة التدوير",   value: "68%",       icon: "♻️", desc: "من إجمالي النفايات"      },
-    { label: "الطاقة الموفرة",       value: "1,200 kWh", icon: "⚡", desc: "شهرياً"                  },
-    { label: "تقليل الرحلات",        value: "45%",       icon: "🚛", desc: "انخفاض في رحلات النقل"   },
+    { label: "انبعاثات CO₂ الموفرة", value: "2.4 طن",   icon: <Globe size={36} />, desc: "مقارنة بالطرق التقليدية" },
+    { label: "نسبة إعادة التدوير",   value: "68%",       icon: <Recycle size={36} />, desc: "من إجمالي النفايات"      },
+    { label: "الطاقة الموفرة",       value: "1,200 kWh", icon: <Zap size={36} />, desc: "شهرياً"                  },
+    { label: "تقليل الرحلات",        value: "45%",       icon: <Truck size={36} />, desc: "انخفاض في رحلات النقل"   },
   ]).map((m, i) => ({ ...m, color: envColors[i % envColors.length] }));
 
   const sustainGoals = (envDoc?.goals || [
@@ -1453,8 +1675,8 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
               </div>
             ))}
           </div>
-          <Card title="مقارنة امتلاء المحطات - بريدة" icon="📊">
-            <ResponsiveContainer width="100%" height={350}>
+          <Card title="مقارنة امتلاء المحطات - بريدة" icon={<BarChart2 size={16} color="#94a3b8" />}>
+            <ResponsiveContainer width="99%" height={350}>
               <BarChart data={stationFillData} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} domain={[0, 100]} />
@@ -1473,8 +1695,8 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
 
       {tab === "waste" && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-          <Card title="توزيع النفايات حسب النوع" icon="🗑️">
-            <ResponsiveContainer width="100%" height={280}>
+          <Card title="توزيع النفايات حسب النوع" icon={<Trash2 size={16} color="#94a3b8" />}>
+            <ResponsiveContainer width="99%" height={280}>
               <PieChart>
                 <Pie data={wasteByType} cx="50%" cy="50%" outerRadius={100} innerRadius={55} dataKey="value" paddingAngle={3}
                   label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
@@ -1485,8 +1707,8 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
             </ResponsiveContainer>
             <div style={{ textAlign: "center", fontSize: 14, fontWeight: 700, color: C.text }}>الإجمالي: {totalWaste.toLocaleString()} كجم</div>
           </Card>
-          <Card title="النفايات اليومية حسب النوع" icon="📈">
-            <ResponsiveContainer width="100%" height={300}>
+          <Card title="النفايات اليومية حسب النوع" icon={<TrendingUp size={16} color="#94a3b8" />}>
+            <ResponsiveContainer width="99%" height={300}>
               <AreaChart data={weeklyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -1505,12 +1727,12 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
       {tab === "cost" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
-            <StatCard title="إجمالي التكلفة السنوية" value={monthlyTrend.reduce((a, m) => a + m.التكلفة, 0).toLocaleString()} unit="ر.س" icon="💰" gradient={C.g3} />
-            <StatCard title="متوسط التكلفة الشهرية" value={Math.round(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12).toLocaleString()} unit="ر.س" icon="📅" gradient={C.g2} trend={-8.5} />
-            <StatCard title="تكلفة الكيلوغرام" value={(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12 / (totalWaste * 4.3)).toFixed(2)} unit="ر.س" icon="⚖️" gradient={C.g1} />
+            <StatCard title="إجمالي التكلفة السنوية" value={monthlyTrend.reduce((a, m) => a + m.التكلفة, 0).toLocaleString()} unit="ر.س" icon={<DollarSign size={22} color="#fff" />} gradient={C.g3} />
+            <StatCard title="متوسط التكلفة الشهرية" value={Math.round(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12).toLocaleString()} unit="ر.س" icon={<Calendar size={22} color="#fff" />} gradient={C.g2} trend={-8.5} />
+            <StatCard title="تكلفة الكيلوغرام" value={(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12 / (totalWaste * 4.3)).toFixed(2)} unit="ر.س" icon={<Scale size={22} color="#fff" />} gradient={C.g1} />
           </div>
-          <Card title="التكاليف الشهرية مقابل عمليات الجمع" icon="💵">
-            <ResponsiveContainer width="100%" height={300}>
+          <Card title="التكاليف الشهرية مقابل عمليات الجمع" icon={<Banknote size={16} color="#94a3b8" />}>
+            <ResponsiveContainer width="99%" height={300}>
               <ComposedChart data={monthlyTrend} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -1531,14 +1753,14 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
             {envMetrics.map((item, i) => (
               <div key={i} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 16, padding: 20, textAlign: "center" }}>
-                <div style={{ fontSize: 36, marginBottom: 8 }}>{item.icon}</div>
+                <div style={{ marginBottom: 8, display: "flex", justifyContent: "center", color: item.color }}>{item.icon}</div>
                 <div style={{ fontSize: 26, fontWeight: 800, color: item.color }}>{item.value}</div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginTop: 4 }}>{item.label}</div>
                 <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>{item.desc}</div>
               </div>
             ))}
           </div>
-          <Card title="أهداف الاستدامة - بريدة" icon="🌱">
+          <Card title="أهداف الاستدامة - بريدة" icon={<Leaf size={16} color="#94a3b8" />}>
             {sustainGoals.map((item, i) => (
               <div key={i} style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
@@ -1723,15 +1945,15 @@ const PredictionsPage = ({ stations }) => {
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {/* KPIs */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-            <StatCard title="إجمالي التوقعات السنوية" value={Math.round(totalPredicted / 1000)} unit="طن" icon="🔮" gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
-            <StatCard title="دقة التنبؤ" value={avgAccuracy} unit="%" icon="🎯" gradient="linear-gradient(135deg, #10b981, #059669)" />
-            <StatCard title="ذروة متوقعة" value={peakMonth.month} icon="📊" gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
-            <StatCard title="أحداث مؤثرة" value={EVENTS_DB.length} icon="📅" gradient="linear-gradient(135deg, #8b5cf6, #7c3aed)" />
+            <StatCard title="إجمالي التوقعات السنوية" value={Math.round(totalPredicted / 1000)} unit="طن" icon={<Sparkles size={22} color="#fff" />} gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
+            <StatCard title="دقة التنبؤ" value={avgAccuracy} unit="%" icon={<Target size={22} color="#fff" />} gradient="linear-gradient(135deg, #10b981, #059669)" />
+            <StatCard title="ذروة متوقعة" value={peakMonth.month} icon={<BarChart2 size={22} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
+            <StatCard title="أحداث مؤثرة" value={EVENTS_DB.length} icon={<Calendar size={22} color="#fff" />} gradient="linear-gradient(135deg, #8b5cf6, #7c3aed)" />
           </div>
 
           {/* Annual Prediction vs Actual */}
-          <Card title="التنبؤ السنوي مقابل الفعلي (كجم/يوم)" icon="📊">
-            <ResponsiveContainer width="100%" height={300}>
+          <Card title="التنبؤ السنوي مقابل الفعلي (كجم/يوم)" icon={<BarChart2 size={16} color="#94a3b8" />}>
+            <ResponsiveContainer width="99%" height={300}>
               <ComposedChart data={predictionData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -1747,7 +1969,7 @@ const PredictionsPage = ({ stations }) => {
 
           {/* Upcoming Events + Impact by Type */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="الأحداث القادمة" icon="⏰">
+            <Card title="الأحداث القادمة" icon={<Clock size={16} color="#94a3b8" />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
                 {upcomingEvents.map((e, i) => (
                   <div key={i} style={{ padding: "12px 14px", borderRadius: 12, background: C.bg, border: `1px solid ${e.color}30`, display: "flex", gap: 12, alignItems: "center" }}>
@@ -1768,8 +1990,8 @@ const PredictionsPage = ({ stations }) => {
               </div>
             </Card>
 
-            <Card title="التأثير حسب نوع الحدث" icon="📊">
-              <ResponsiveContainer width="100%" height={280}>
+            <Card title="التأثير حسب نوع الحدث" icon={<BarChart2 size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={280}>
                 <BarChart data={impactByType} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} />
@@ -1824,13 +2046,13 @@ const PredictionsPage = ({ stations }) => {
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14, marginBottom: 24 }}>
                   {[
-                    { label: "معامل الزيادة", val: `×${selectedEvent.wasteMultiplier}`, icon: "📈", color: selectedEvent.wasteMultiplier > 2 ? C.danger : C.warning },
-                    { label: "مدة التأثير", val: `${selectedEvent.duration} يوم`, icon: "⏱️", color: C.info },
-                    { label: "النفايات الأكثر", val: selectedEvent.peakType, icon: "🗑️", color: C.accent },
-                    { label: "الشهر", val: selectedEvent.recurring === "monthly" ? "شهري" : ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"][selectedEvent.month - 1], icon: "📅", color: C.purple },
+                    { label: "معامل الزيادة", val: `×${selectedEvent.wasteMultiplier}`, icon: <TrendingUp size={24} color={selectedEvent.wasteMultiplier > 2 ? C.danger : C.warning} />, color: selectedEvent.wasteMultiplier > 2 ? C.danger : C.warning },
+                    { label: "مدة التأثير", val: `${selectedEvent.duration} يوم`, icon: <Clock size={24} color={C.info} />, color: C.info },
+                    { label: "النفايات الأكثر", val: selectedEvent.peakType, icon: <Trash2 size={24} color={C.accent} />, color: C.accent },
+                    { label: "الشهر", val: selectedEvent.recurring === "monthly" ? "شهري" : ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"][selectedEvent.month - 1], icon: <Calendar size={24} color={C.purple} />, color: C.purple },
                   ].map((item, i) => (
                     <div key={i} style={{ background: C.bg, borderRadius: 12, padding: 16, textAlign: "center" }}>
-                      <div style={{ fontSize: 24, marginBottom: 6 }}>{item.icon}</div>
+                      <div style={{ marginBottom: 6, display: "flex", justifyContent: "center" }}>{item.icon}</div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: item.color }}>{item.val}</div>
                       <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>{item.label}</div>
                     </div>
@@ -1838,8 +2060,8 @@ const PredictionsPage = ({ stations }) => {
                 </div>
 
                 {/* Simulated daily impact chart for this event */}
-                <Card title={`التأثير اليومي المتوقع - ${selectedEvent.name}`} icon="📉">
-                  <ResponsiveContainer width="100%" height={220}>
+                <Card title={`التأثير اليومي المتوقع - ${selectedEvent.name}`} icon={<TrendingDown size={16} color="#94a3b8" />}>
+                  <ResponsiveContainer width="99%" height={220}>
                     <AreaChart data={Array.from({ length: Math.min(selectedEvent.duration, 30) }, (_, i) => {
                       const peak = selectedEvent.duration / 2;
                       const factor = 1 + (selectedEvent.wasteMultiplier - 1) * Math.exp(-0.5 * Math.pow((i - peak) / (selectedEvent.duration * 0.25), 2));
@@ -1918,8 +2140,8 @@ const PredictionsPage = ({ stations }) => {
       {/* ===== 30-DAY FORECAST ===== */}
       {view === "forecast" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title="توقعات الـ 30 يوم القادمة (كجم/يوم لكل محطة)" icon="📈">
-            <ResponsiveContainer width="100%" height={320}>
+          <Card title="توقعات الـ 30 يوم القادمة (كجم/يوم لكل محطة)" icon={<TrendingUp size={16} color="#94a3b8" />}>
+            <ResponsiveContainer width="99%" height={320}>
               <AreaChart data={forecast30} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                 <defs>
                   <linearGradient id="gForecast" x1="0" y1="0" x2="0" y2="1">
@@ -1944,8 +2166,8 @@ const PredictionsPage = ({ stations }) => {
           </Card>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="توقعات تأثير النفايات حسب النوع" icon="🗑️">
-              <ResponsiveContainer width="100%" height={260}>
+            <Card title="توقعات تأثير النفايات حسب النوع" icon={<Trash2 size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={260}>
                 <BarChart data={wasteTypeImpact} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="name" tick={{ fill: C.muted, fontSize: 11, fontFamily: ARABIC_FONT }} />
@@ -1958,18 +2180,18 @@ const PredictionsPage = ({ stations }) => {
               </ResponsiveContainer>
             </Card>
 
-            <Card title="ملخص التوقعات" icon="📋">
+            <Card title="ملخص التوقعات" icon={<ClipboardList size={16} color="#94a3b8" />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
-                  { label: "أعلى يوم متوقع", val: `${Math.max(...forecast30.map(d => d.المتوقع))} كجم`, icon: "🔝", color: C.danger },
-                  { label: "أقل يوم متوقع", val: `${Math.min(...forecast30.map(d => d.المتوقع))} كجم`, icon: "🔻", color: C.accent },
-                  { label: "المتوسط المتوقع", val: `${Math.round(forecast30.reduce((a, d) => a + d.المتوقع, 0) / 30)} كجم/يوم`, icon: "📊", color: C.info },
-                  { label: "أيام فوق المعدل", val: `${forecast30.filter(d => d.المتوقع > 150).length} يوم`, icon: "⚠️", color: C.warning },
-                  { label: "أيام عطلة نهاية أسبوع", val: `${forecast30.filter(d => d.isWeekend).length} يوم`, icon: "📅", color: C.purple },
-                  { label: "أعلى معامل زيادة", val: `×${Math.max(...forecast30.map(d => d.multiplier)).toFixed(2)}`, icon: "💹", color: "#ec4899" },
+                  { label: "أعلى يوم متوقع", val: `${Math.max(...forecast30.map(d => d.المتوقع))} كجم`, icon: <TrendingUp size={20} color={C.danger} />, color: C.danger },
+                  { label: "أقل يوم متوقع", val: `${Math.min(...forecast30.map(d => d.المتوقع))} كجم`, icon: <TrendingDown size={20} color={C.accent} />, color: C.accent },
+                  { label: "المتوسط المتوقع", val: `${Math.round(forecast30.reduce((a, d) => a + d.المتوقع, 0) / 30)} كجم/يوم`, icon: <BarChart2 size={20} color={C.info} />, color: C.info },
+                  { label: "أيام فوق المعدل", val: `${forecast30.filter(d => d.المتوقع > 150).length} يوم`, icon: <AlertTriangle size={20} color={C.warning} />, color: C.warning },
+                  { label: "أيام عطلة نهاية أسبوع", val: `${forecast30.filter(d => d.isWeekend).length} يوم`, icon: <Calendar size={20} color={C.purple} />, color: C.purple },
+                  { label: "أعلى معامل زيادة", val: `×${Math.max(...forecast30.map(d => d.multiplier)).toFixed(2)}`, icon: <Sparkles size={20} color="#ec4899" />, color: "#ec4899" },
                 ].map((item, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: C.bg, borderRadius: 10 }}>
-                    <span style={{ fontSize: 20 }}>{item.icon}</span>
+                    <span style={{ display: "flex", alignItems: "center" }}>{item.icon}</span>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 11, color: C.dim }}>{item.label}</div>
                       <div style={{ fontSize: 14, fontWeight: 700, color: item.color }}>{item.val}</div>
@@ -1996,8 +2218,8 @@ const PredictionsPage = ({ stations }) => {
             </p>
           </div>
 
-          <Card title="مقارنة الخطورة الحالية مع المتوقعة لكل محطة" icon="📊">
-            <ResponsiveContainer width="100%" height={380}>
+          <Card title="مقارنة الخطورة الحالية مع المتوقعة لكل محطة" icon={<BarChart2 size={16} color="#94a3b8" />}>
+            <ResponsiveContainer width="99%" height={380}>
               <BarChart data={stationRisk} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
@@ -2011,7 +2233,7 @@ const PredictionsPage = ({ stations }) => {
           </Card>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="المحطات الأكثر خطورة" icon="🚨">
+            <Card title="المحطات الأكثر خطورة" icon={<AlertTriangle size={16} color="#94a3b8" />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {stationRisk.slice(0, 6).map((s, i) => {
                   const risk = s.الخطورة_المتوقعة;
@@ -2037,19 +2259,19 @@ const PredictionsPage = ({ stations }) => {
               </div>
             </Card>
 
-            <Card title="خطة الاستجابة المقترحة" icon="📝">
+            <Card title="خطة الاستجابة المقترحة" icon={<FileText size={16} color="#94a3b8" />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
-                  { priority: "عاجل", action: "زيادة دورات الشفط للمحطات الحرجة إلى كل 4 ساعات", color: C.danger, icon: "🔴" },
-                  { priority: "عاجل", action: "تجهيز حاويات احتياطية في الأحياء ذات الكثافة العالية", color: C.danger, icon: "🔴" },
-                  { priority: "مهم", action: "إرسال إشعارات للسكان بمواعيد الجمع الإضافية", color: C.warning, icon: "🟡" },
-                  { priority: "مهم", action: "تخصيص فرق صيانة طوارئ على مدار الساعة", color: C.warning, icon: "🟡" },
-                  { priority: "وقائي", action: "فحص شامل لجميع المحطات قبل بدء الحدث", color: C.info, icon: "🔵" },
-                  { priority: "وقائي", action: "تحديث جداول النقل لتغطية ساعات الذروة المتوقعة", color: C.info, icon: "🔵" },
-                  { priority: "تنسيقي", action: "التنسيق مع البلدية لتوفير موارد إضافية مؤقتة", color: C.accent, icon: "🟢" },
+                  { priority: "عاجل", action: "زيادة دورات الشفط للمحطات الحرجة إلى كل 4 ساعات", color: C.danger, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} /> },
+                  { priority: "عاجل", action: "تجهيز حاويات احتياطية في الأحياء ذات الكثافة العالية", color: C.danger, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} /> },
+                  { priority: "مهم", action: "إرسال إشعارات للسكان بمواعيد الجمع الإضافية", color: C.warning, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} /> },
+                  { priority: "مهم", action: "تخصيص فرق صيانة طوارئ على مدار الساعة", color: C.warning, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} /> },
+                  { priority: "وقائي", action: "فحص شامل لجميع المحطات قبل بدء الحدث", color: C.info, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#3b82f6",flexShrink:0}} /> },
+                  { priority: "وقائي", action: "تحديث جداول النقل لتغطية ساعات الذروة المتوقعة", color: C.info, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#3b82f6",flexShrink:0}} /> },
+                  { priority: "تنسيقي", action: "التنسيق مع البلدية لتوفير موارد إضافية مؤقتة", color: C.accent, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#10b981",flexShrink:0}} /> },
                 ].map((item, i) => (
-                  <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px", background: C.bg, borderRadius: 10, border: `1px solid ${item.color}20` }}>
-                    <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
+                  <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", padding: "10px 12px", background: C.bg, borderRadius: 10, border: `1px solid ${item.color}20` }}>
+                    <div style={{ flexShrink: 0 }}>{item.icon}</div>
                     <div>
                       <span style={{ fontSize: 10, fontWeight: 700, color: item.color, background: `${item.color}15`, padding: "1px 6px", borderRadius: 4 }}>{item.priority}</span>
                       <div style={{ fontSize: 12, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>{item.action}</div>
@@ -2273,16 +2495,16 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
 
           {/* KPIs */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-            <StatCard title="متوسط الحرارة الداخلية" value={avgTemp} unit="°C" icon="🌡️" gradient="linear-gradient(135deg, #ef4444, #dc2626)" trend={avgTemp > 45 ? 8.3 : -2.1} />
-            <StatCard title="محطات عالية الخطورة" value={highRisk.length} icon="🔥" gradient="linear-gradient(135deg, #f97316, #ea580c)" />
-            <StatCard title="كشف دخان" value={smokeCount} unit="محطة" icon="💨" gradient="linear-gradient(135deg, #64748b, #475569)" />
-            <StatCard title="متوسط مستوى الغاز" value={avgGas} unit="%" icon="⛽" gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
+            <StatCard title="متوسط الحرارة الداخلية" value={avgTemp} unit="°C" icon={<Thermometer size={22} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" trend={avgTemp > 45 ? 8.3 : -2.1} />
+            <StatCard title="محطات عالية الخطورة" value={highRisk.length} icon={<Flame size={22} color="#fff" />} gradient="linear-gradient(135deg, #f97316, #ea580c)" />
+            <StatCard title="كشف دخان" value={smokeCount} unit="محطة" icon={<Wind size={22} color="#fff" />} gradient="linear-gradient(135deg, #64748b, #475569)" />
+            <StatCard title="متوسط مستوى الغاز" value={avgGas} unit="%" icon={<Gauge size={22} color="#fff" />} gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
           </div>
 
           {/* Temperature Timeline + Risk Pie */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-            <Card title="منحنى الحرارة الداخلية (24 ساعة)" icon="🌡️">
-              <ResponsiveContainer width="100%" height={280}>
+            <Card title="منحنى الحرارة الداخلية (24 ساعة)" icon={<Thermometer size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={280}>
                 <AreaChart data={tempHistory} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                   <defs>
                     <linearGradient id="gIntTemp" x1="0" y1="0" x2="0" y2="1">
@@ -2303,8 +2525,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
               </ResponsiveContainer>
             </Card>
 
-            <Card title="توزيع مستويات الخطورة" icon="🎯">
-              <ResponsiveContainer width="100%" height={200}>
+            <Card title="توزيع مستويات الخطورة" icon={<Target size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={200}>
                 <PieChart>
                   <Pie data={riskDistribution} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={4}
                     label={({ name, value }) => value > 0 ? `${value}` : ""}>
@@ -2328,7 +2550,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           </div>
 
           {/* Station Risk Cards */}
-          <Card title="حالة المحطات - المراقبة الحية" icon="📡">
+          <Card title="حالة المحطات - المراقبة الحية" icon={<Radio size={16} color="#94a3b8" />}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 12 }}>
               {fireData.sort((a, b) => b.riskScore - a.riskScore).map((s, i) => {
                 const rColor = getRiskColor(s.riskLevel);
@@ -2372,8 +2594,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
       {view === "analysis" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="مؤشر خطورة الحريق لكل محطة" icon="📊">
-              <ResponsiveContainer width="100%" height={350}>
+            <Card title="مؤشر خطورة الحريق لكل محطة" icon={<BarChart2 size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={350}>
                 <BarChart data={stationRiskChart} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
@@ -2386,8 +2608,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
               </ResponsiveContainer>
             </Card>
 
-            <Card title="علاقة الحرارة بالغاز والرطوبة" icon="🔬">
-              <ResponsiveContainer width="100%" height={350}>
+            <Card title="علاقة الحرارة بالغاز والرطوبة" icon={<Microscope size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={350}>
                 <RadarChart cx="50%" cy="50%" outerRadius="70%" data={gasVsTempData}>
                   <PolarGrid stroke={C.border} />
                   <PolarAngleAxis dataKey="name" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
@@ -2402,8 +2624,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
             </Card>
           </div>
 
-          <Card title="سجل الإنذارات والحوادث (8 أسابيع)" icon="📈">
-            <ResponsiveContainer width="100%" height={280}>
+          <Card title="سجل الإنذارات والحوادث (8 أسابيع)" icon={<TrendingUp size={16} color="#94a3b8" />}>
+            <ResponsiveContainer width="99%" height={280}>
               <ComposedChart data={weeklyIncidents} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="week" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -2418,19 +2640,19 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           </Card>
 
           {/* Fire risk factors */}
-          <Card title="عوامل خطر الحريق الرئيسية" icon="⚡">
+          <Card title="عوامل خطر الحريق الرئيسية" icon={<Zap size={16} color="#94a3b8" />}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
               {[
-                { factor: "ارتفاع الحرارة الداخلية", weight: 35, desc: "تجاوز 55°C يزيد الخطر بشكل كبير", icon: "🌡️", color: "#ef4444", affected: fireData.filter(s => s.internalTemp > 55).length },
-                { factor: "تسرب الغازات", weight: 25, desc: "غازات الميثان والهيدروجين القابلة للاشتعال", icon: "⛽", color: "#f97316", affected: fireData.filter(s => s.gasLevel > 60).length },
-                { factor: "مواد قابلة للاشتعال", weight: 15, desc: "بلاستيك، ورق، ومواد مختلطة", icon: "📦", color: "#f59e0b", affected: fireData.filter(s => s.hasFlammable).length },
-                { factor: "الامتلاء الزائد", weight: 10, desc: "الضغط والاحتكاك يولدان حرارة", icon: "📊", color: "#8b5cf6", affected: fireData.filter(s => s.fillLevel > 75).length },
-                { factor: "انخفاض الرطوبة", weight: 10, desc: "الجفاف يسهّل الاشتعال", icon: "💧", color: "#3b82f6", affected: fireData.filter(s => s.humidity < 30).length },
-                { factor: "الحرارة الخارجية", weight: 5, desc: "درجات حرارة بريدة الصيفية العالية", icon: "☀️", color: "#06b6d4", affected: fireData.filter(s => s.ambientTemp > 45).length },
+                { factor: "ارتفاع الحرارة الداخلية", weight: 35, desc: "تجاوز 55°C يزيد الخطر بشكل كبير", icon: <Thermometer size={22} color="#ef4444" />, color: "#ef4444", affected: fireData.filter(s => s.internalTemp > 55).length },
+                { factor: "تسرب الغازات", weight: 25, desc: "غازات الميثان والهيدروجين القابلة للاشتعال", icon: <Gauge size={22} color="#f97316" />, color: "#f97316", affected: fireData.filter(s => s.gasLevel > 60).length },
+                { factor: "مواد قابلة للاشتعال", weight: 15, desc: "بلاستيك، ورق، ومواد مختلطة", icon: <Package size={22} color="#f59e0b" />, color: "#f59e0b", affected: fireData.filter(s => s.hasFlammable).length },
+                { factor: "الامتلاء الزائد", weight: 10, desc: "الضغط والاحتكاك يولدان حرارة", icon: <BarChart2 size={22} color="#8b5cf6" />, color: "#8b5cf6", affected: fireData.filter(s => s.fillLevel > 75).length },
+                { factor: "انخفاض الرطوبة", weight: 10, desc: "الجفاف يسهّل الاشتعال", icon: <Droplets size={22} color="#3b82f6" />, color: "#3b82f6", affected: fireData.filter(s => s.humidity < 30).length },
+                { factor: "الحرارة الخارجية", weight: 5, desc: "درجات حرارة بريدة الصيفية العالية", icon: <Zap size={22} color="#06b6d4" />, color: "#06b6d4", affected: fireData.filter(s => s.ambientTemp > 45).length },
               ].map((f, i) => (
                 <div key={i} style={{ background: C.bg, border: `1px solid ${f.color}25`, borderRadius: 12, padding: 16 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <span style={{ fontSize: 22 }}>{f.icon}</span>
+                    <span>{f.icon}</span>
                     <span style={{ fontSize: 11, fontWeight: 700, color: f.color, background: `${f.color}15`, padding: "2px 8px", borderRadius: 6 }}>وزن {f.weight}%</span>
                   </div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>{f.factor}</div>
@@ -2465,15 +2687,15 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14, marginBottom: 20 }}>
                   {[
-                    { label: "الحرارة الداخلية", val: `${selectedStation.internalTemp}°C`, color: selectedStation.internalTemp > 55 ? "#ef4444" : "#f59e0b", icon: "🌡️" },
-                    { label: "الحرارة الخارجية", val: `${selectedStation.ambientTemp}°C`, color: "#f59e0b", icon: "☀️" },
-                    { label: "مستوى الغاز", val: `${selectedStation.gasLevel}%`, color: selectedStation.gasLevel > 60 ? "#ef4444" : C.accent, icon: "⛽" },
-                    { label: "الرطوبة", val: `${selectedStation.humidity}%`, color: selectedStation.humidity < 30 ? "#f59e0b" : C.info, icon: "💧" },
-                    { label: "مؤشر الخطورة", val: `${selectedStation.riskScore}%`, color: getRiskColor(selectedStation.riskLevel), icon: "🔥" },
-                    { label: "آخر فحص", val: selectedStation.lastInspection, color: C.muted, icon: "🔍" },
+                    { label: "الحرارة الداخلية", val: `${selectedStation.internalTemp}°C`, color: selectedStation.internalTemp > 55 ? "#ef4444" : "#f59e0b", icon: <Thermometer size={22} color={selectedStation.internalTemp > 55 ? "#ef4444" : "#f59e0b"} /> },
+                    { label: "الحرارة الخارجية", val: `${selectedStation.ambientTemp}°C`, color: "#f59e0b", icon: <Zap size={22} color="#f59e0b" /> },
+                    { label: "مستوى الغاز", val: `${selectedStation.gasLevel}%`, color: selectedStation.gasLevel > 60 ? "#ef4444" : C.accent, icon: <Gauge size={22} color={selectedStation.gasLevel > 60 ? "#ef4444" : C.accent} /> },
+                    { label: "الرطوبة", val: `${selectedStation.humidity}%`, color: selectedStation.humidity < 30 ? "#f59e0b" : C.info, icon: <Droplets size={22} color={selectedStation.humidity < 30 ? "#f59e0b" : C.info} /> },
+                    { label: "مؤشر الخطورة", val: `${selectedStation.riskScore}%`, color: getRiskColor(selectedStation.riskLevel), icon: <Flame size={22} color={getRiskColor(selectedStation.riskLevel)} /> },
+                    { label: "آخر فحص", val: selectedStation.lastInspection, color: C.muted, icon: <Clock size={22} color={C.muted} /> },
                   ].map((item, i) => (
                     <div key={i} style={{ background: C.bg, borderRadius: 12, padding: 14, textAlign: "center" }}>
-                      <div style={{ fontSize: 22, marginBottom: 4 }}>{item.icon}</div>
+                      <div style={{ marginBottom: 4, display: "flex", justifyContent: "center" }}>{item.icon}</div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: item.color }}>{item.val}</div>
                       <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>{item.label}</div>
                     </div>
@@ -2482,13 +2704,13 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginBottom: 20 }}>
                   {[
-                    { label: "كاشف الدخان", active: selectedStation.smokeDetected, activeText: "تم كشف دخان!", inactiveText: "لا يوجد دخان", icon: "💨" },
-                    { label: "كاشف الشرارة", active: selectedStation.sparkDetected, activeText: "تم كشف شرارة!", inactiveText: "لا توجد شرارة", icon: "⚡" },
-                    { label: "طفاية حريق", active: selectedStation.fireExtinguisher, activeText: "متوفرة وصالحة", inactiveText: "غير متوفرة!", icon: "🧯" },
-                    { label: "نظام إطفاء تلقائي", active: selectedStation.autoSuppression, activeText: "مُفعّل", inactiveText: "غير مُفعّل", icon: "🚿" },
+                    { label: "كاشف الدخان", active: selectedStation.smokeDetected, activeText: "تم كشف دخان!", inactiveText: "لا يوجد دخان", icon: <Wind size={20} color="#94a3b8" /> },
+                    { label: "كاشف الشرارة", active: selectedStation.sparkDetected, activeText: "تم كشف شرارة!", inactiveText: "لا توجد شرارة", icon: <Zap size={20} color="#94a3b8" /> },
+                    { label: "طفاية حريق", active: selectedStation.fireExtinguisher, activeText: "متوفرة وصالحة", inactiveText: "غير متوفرة!", icon: <FireExtinguisher size={20} color="#94a3b8" /> },
+                    { label: "نظام إطفاء تلقائي", active: selectedStation.autoSuppression, activeText: "مُفعّل", inactiveText: "غير مُفعّل", icon: <Droplets size={20} color="#94a3b8" /> },
                   ].map((item, i) => (
                     <div key={i} style={{ background: C.bg, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, border: `1px solid ${item.active && (i < 2) ? "#ef444440" : C.border}` }}>
-                      <span style={{ fontSize: 20 }}>{item.icon}</span>
+                      <span>{item.icon}</span>
                       <div>
                         <div style={{ fontSize: 10, color: C.dim }}>{item.label}</div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: item.active ? (i < 2 ? "#ef4444" : C.accent) : (i < 2 ? C.accent : "#ef4444") }}>
@@ -2499,8 +2721,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                   ))}
                 </div>
 
-                <Card title="سجل الحرارة الداخلية - 24 ساعة" icon="📈">
-                  <ResponsiveContainer width="100%" height={220}>
+                <Card title="سجل الحرارة الداخلية - 24 ساعة" icon={<TrendingUp size={16} color="#94a3b8" />}>
+                  <ResponsiveContainer width="99%" height={220}>
                     <AreaChart data={tempHistory} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                       <defs>
                         <linearGradient id="gFire" x1="0" y1="0" x2="0" y2="1">
@@ -2556,7 +2778,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
       {/* ===== SIMULATION ===== */}
       {view === "simulation" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title="محاكاة سيناريو الحريق" icon="🧪">
+          <Card title="محاكاة سيناريو الحريق" icon={<FlaskConical size={16} color="#94a3b8" />}>
             <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.7, margin: "0 0 20px 0" }}>
               حرّك شريط الحرارة لمحاكاة ارتفاع درجة حرارة الحاوية الداخلية ومشاهدة كيف يتغير مستوى الخطورة والإجراءات المطلوبة في الوقت الفعلي.
             </p>
@@ -2626,8 +2848,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           </Card>
 
           {/* Simulation Chart */}
-          <Card title="منحنى المحاكاة - تصاعد الحرارة" icon="📈">
-            <ResponsiveContainer width="100%" height={240}>
+          <Card title="منحنى المحاكاة - تصاعد الحرارة" icon={<TrendingUp size={16} color="#94a3b8" />}>
+            <ResponsiveContainer width="99%" height={240}>
               <AreaChart data={Array.from({ length: 60 }, (_, i) => {
                 const t = 25 + (simTemp - 25) * (1 - Math.exp(-i / 20));
                 return { دقيقة: `${i}`, الحرارة: Math.round(t), حد_الإنذار: 60, حد_الخطر: 75 };
@@ -2655,42 +2877,42 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
       {/* ===== PROTOCOLS ===== */}
       {view === "protocols" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title="بروتوكولات الاستجابة لحرائق الحاويات" icon="📋">
+          <Card title="بروتوكولات الاستجابة لحرائق الحاويات" icon={<ClipboardList size={16} color="#94a3b8" />}>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {[
                 {
                   level: "المستوى 1 - مراقبة",
                   range: "أقل من 45°C",
                   color: C.accent,
-                  icon: "🟢",
+                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#10b981",flexShrink:0}} />,
                   steps: ["فحص دوري للمستشعرات كل 6 ساعات", "تسجيل القراءات في السجل اليومي", "التأكد من عمل كواشف الدخان"],
                 },
                 {
                   level: "المستوى 2 - تحذير",
                   range: "45°C - 60°C",
                   color: "#f59e0b",
-                  icon: "🟡",
+                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} />,
                   steps: ["إخطار مشرف المحطة عبر الرسائل", "زيادة تردد القراءات إلى كل 15 دقيقة", "فحص مصدر الحرارة والتحقق من وجود مواد خطرة", "تجهيز معدات الإطفاء الأولية"],
                 },
                 {
                   level: "المستوى 3 - إنذار",
                   range: "60°C - 75°C",
                   color: "#f97316",
-                  icon: "🟠",
+                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f97316",flexShrink:0}} />,
                   steps: ["تفعيل نظام التبريد التلقائي", "إيقاف عمليات الشفط في المحطة المتأثرة", "إرسال فريق الفحص الميداني", "إعداد فريق الإطفاء الداخلي", "إبلاغ إدارة المنشأة"],
                 },
                 {
                   level: "المستوى 4 - خطر حريق",
                   range: "أعلى من 75°C",
                   color: "#ef4444",
-                  icon: "🔴",
+                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} />,
                   steps: ["تفعيل نظام الإطفاء التلقائي فوراً", "الاتصال بالدفاع المدني (998)", "إخلاء المنطقة المحيطة 200 متر", "قطع التيار الكهربائي عن المحطة", "تفعيل خطة الطوارئ الشاملة", "توثيق الحادثة بالصور والفيديو"],
                 },
               ].map((protocol, i) => (
                 <div key={i} style={{ background: C.bg, border: `1px solid ${protocol.color}30`, borderRadius: 14, padding: 18 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 22 }}>{protocol.icon}</span>
+                      <div style={{ display: "flex", alignItems: "center" }}>{protocol.icon}</div>
                       <div>
                         <div style={{ fontSize: 14, fontWeight: 700, color: protocol.color }}>{protocol.level}</div>
                         <div style={{ fontSize: 11, color: C.dim }}>النطاق: {protocol.range}</div>
@@ -2711,7 +2933,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           </Card>
 
           {/* Emergency Contacts */}
-          <Card title="جهات الاتصال في حالات الطوارئ" icon="📞">
+          <Card title="جهات الاتصال في حالات الطوارئ" icon={<Phone size={16} color="#94a3b8" />}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
               {[
                 { name: "الدفاع المدني", phone: "998", icon: "🚒", color: "#ef4444", desc: "الاستجابة الأولى للحرائق" },
@@ -2734,21 +2956,21 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           </Card>
 
           {/* Equipment Checklist */}
-          <Card title="قائمة فحص معدات السلامة" icon="🧯">
+          <Card title="قائمة فحص معدات السلامة" icon={<FireExtinguisher size={16} color="#94a3b8" />}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
               {[
-                { item: "طفاية حريق بودرة ABC", stations: fireData.filter(s => s.fireExtinguisher).length, total: 12, icon: "🧯" },
-                { item: "نظام إطفاء تلقائي", stations: fireData.filter(s => s.autoSuppression).length, total: 12, icon: "🚿" },
-                { item: "كاشف دخان فعّال", stations: 11, total: 12, icon: "💨" },
-                { item: "كاشف حرارة فعّال", stations: 12, total: 12, icon: "🌡️" },
-                { item: "كاشف غاز فعّال", stations: 10, total: 12, icon: "⛽" },
-                { item: "إضاءة طوارئ", stations: 9, total: 12, icon: "💡" },
+                { item: "طفاية حريق بودرة ABC", stations: fireData.filter(s => s.fireExtinguisher).length, total: 12, icon: <FireExtinguisher size={22} color="#94a3b8" /> },
+                { item: "نظام إطفاء تلقائي", stations: fireData.filter(s => s.autoSuppression).length, total: 12, icon: <Droplets size={22} color="#94a3b8" /> },
+                { item: "كاشف دخان فعّال", stations: 11, total: 12, icon: <Wind size={22} color="#94a3b8" /> },
+                { item: "كاشف حرارة فعّال", stations: 12, total: 12, icon: <Thermometer size={22} color="#94a3b8" /> },
+                { item: "كاشف غاز فعّال", stations: 10, total: 12, icon: <Gauge size={22} color="#94a3b8" /> },
+                { item: "إضاءة طوارئ", stations: 9, total: 12, icon: <Zap size={22} color="#94a3b8" /> },
               ].map((eq, i) => {
                 const pct = Math.round((eq.stations / eq.total) * 100);
                 const eqColor = pct === 100 ? C.accent : pct > 75 ? "#f59e0b" : "#ef4444";
                 return (
                   <div key={i} style={{ background: C.bg, borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 22 }}>{eq.icon}</span>
+                    <span>{eq.icon}</span>
                     <div style={{ flex: 1 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
                         <span style={{ color: C.text, fontWeight: 600 }}>{eq.item}</span>
@@ -2834,13 +3056,13 @@ const RequestsManagementPage = () => {
       {/* Summary */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
         {[
-          { label: "إجمالي الطلبات",    val: requests.length,  icon: "📝", color: C.accent },
-          { label: "طلبات معلّقة",      val: pendingReqs,      icon: "⏳", color: C.warning },
-          { label: "إجمالي البلاغات",   val: reports.length,   icon: "📋", color: C.info },
-          { label: "بلاغات معلّقة",     val: pendingReps,      icon: "⚠️", color: C.danger },
+          { label: "إجمالي الطلبات",    val: requests.length,  icon: <FileText size={28} color={C.accent} />, color: C.accent },
+          { label: "طلبات معلّقة",      val: pendingReqs,      icon: <Clock size={28} color={C.warning} />, color: C.warning },
+          { label: "إجمالي البلاغات",   val: reports.length,   icon: <ClipboardList size={28} color={C.info} />, color: C.info },
+          { label: "بلاغات معلّقة",     val: pendingReps,      icon: <AlertTriangle size={28} color={C.danger} />, color: C.danger },
         ].map((s, i) => (
           <div key={i} style={{ background: C.card, border: `1px solid ${s.color}30`, borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 28 }}>{s.icon}</span>
+            <span style={{ display: "flex", alignItems: "center" }}>{s.icon}</span>
             <div>
               <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.val}</div>
               <div style={{ fontSize: 11, color: C.muted }}>{s.label}</div>
@@ -3059,7 +3281,7 @@ const ApiKeyCard = () => {
   const statusColor = testStatus === "ok" ? C.accent : testStatus === "error" ? C.danger : C.info;
 
   return (
-    <Card title="المساعد الذكي — Groq AI (مجاني)" icon="🤖">
+    <Card title="المساعد الذكي — Groq AI (مجاني)" icon={<Bot size={16} color="#94a3b8" />}>
       <div style={{ padding: "8px 12px", borderRadius: 8, background: C.accent + "15", border: `1px solid ${C.accent}30`, fontSize: 11, color: C.accent, marginBottom: 14, fontFamily: F }}>
         ✅ مجاني تماماً — بدون بطاقة بنكية — يعمل في جميع المناطق
       </div>
@@ -3112,7 +3334,7 @@ const SettingsPage = () => {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 600 }}>
-      <Card title="إعدادات النظام" icon="⚙️">
+      <Card title="إعدادات النظام" icon={<SettingsIcon size={16} color="#94a3b8" />}>
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           {[{ label: "التنبيهات الفورية", desc: "استقبال إشعارات عند تجاوز الحدود", val: notif, set: setNotif },
             { label: "التفريغ التلقائي", desc: "تشغيل الشفط تلقائياً عند الامتلاء", val: autoCollect, set: setAutoCollect }].map((item, i) => (
@@ -3137,7 +3359,7 @@ const SettingsPage = () => {
           </div>
         </div>
       </Card>
-      <Card title="حالة الاتصال" icon="🔌">
+      <Card title="حالة الاتصال" icon={<Plug size={16} color="#94a3b8" />}>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {[{ name: "خادم البيانات الرئيسي", ok: true }, { name: "شبكة المستشعرات - بريدة", ok: true }, { name: "نظام التنبيهات", ok: true }, { name: "خدمة الخرائط", ok: false }].map((item, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: C.bg, borderRadius: 10 }}>
@@ -3151,7 +3373,7 @@ const SettingsPage = () => {
         </div>
       </Card>
 
-      <Card title="تهيئة قاعدة البيانات" icon="🗄️">
+      <Card title="تهيئة قاعدة البيانات" icon={<Database size={16} color="#94a3b8" />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
           يُنشئ هذا الإجراء مستندًا تجريبيًا لكل مجموعة غير موجودة في Firestore
           (districts, sensors, alerts, fire_alerts, requests, citizen_reports).
@@ -3193,7 +3415,7 @@ const SettingsPage = () => {
 
       <ApiKeyCard />
 
-      <Card title="تصدير قاعدة البيانات" icon="📊">
+      <Card title="تصدير قاعدة البيانات" icon={<BarChart2 size={16} color="#94a3b8" />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
           يُصدِّر جميع البيانات من Firestore (10 مجموعات) إلى ملف Excel واحد.
           كل مجموعة في Sheet منفصل — جاهز للتحليل في Power BI أو Excel.
@@ -3339,13 +3561,13 @@ const SuctionControlPage = ({ stations, user }) => {
       {/* ─── Stats bar ───────────────────────────────────── */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))", gap:12 }}>
         {[
-          { label:"أوامر نشطة",   val:jobs.filter(j=>j.status==="pending"||j.status==="active").length,  color:C.info,   icon:"⚡" },
-          { label:"مجدولة",       val:jobs.filter(j=>j.status==="scheduled").length,                     color:C.purple, icon:"🕐" },
-          { label:"مكتملة اليوم", val:jobs.filter(j=>j.status==="completed"&&j.completedAt?.startsWith(new Date().toISOString().slice(0,10))).length, color:C.accent, icon:"✅" },
-          { label:"إجمالي الأوامر",val:jobs.length,                                                      color:C.muted,  icon:"📋" },
+          { label:"أوامر نشطة",   val:jobs.filter(j=>j.status==="pending"||j.status==="active").length,  color:C.info,   icon:<Zap size={22} color={C.info} /> },
+          { label:"مجدولة",       val:jobs.filter(j=>j.status==="scheduled").length,                     color:C.purple, icon:<Clock size={22} color={C.purple} /> },
+          { label:"مكتملة اليوم", val:jobs.filter(j=>j.status==="completed"&&j.completedAt?.startsWith(new Date().toISOString().slice(0,10))).length, color:C.accent, icon:<CheckCircle size={22} color={C.accent} /> },
+          { label:"إجمالي الأوامر",val:jobs.length,                                                      color:C.muted,  icon:<ClipboardList size={22} color={C.muted} /> },
         ].map((m,i)=>(
           <div key={i} style={{ background:C.card, border:`1px solid ${m.color}25`, borderRadius:14, padding:"14px 18px", textAlign:"center" }}>
-            <div style={{ fontSize:22, marginBottom:4 }}>{m.icon}</div>
+            <div style={{ marginBottom:4, display:"flex", justifyContent:"center" }}>{m.icon}</div>
             <div style={{ fontSize:26, fontWeight:900, color:m.color }}>{m.val}</div>
             <div style={{ fontSize:11, color:C.dim, marginTop:2 }}>{m.label}</div>
           </div>
@@ -3355,7 +3577,7 @@ const SuctionControlPage = ({ stations, user }) => {
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:16 }}>
 
         {/* ─── Issue Command ───────────────────────────── */}
-        <Card title="إصدار أمر شفط" icon="🚿">
+        <Card title="إصدار أمر شفط" icon={<Sliders size={16} color="#94a3b8" />}>
 
           {/* نوع العملية */}
           <div style={{ marginBottom:16 }}>
@@ -3480,7 +3702,7 @@ const SuctionControlPage = ({ stations, user }) => {
         </Card>
 
         {/* ─── Active + Scheduled Jobs ─────────────────── */}
-        <Card title="الأوامر النشطة والمجدولة" icon="📋">
+        <Card title="الأوامر النشطة والمجدولة" icon={<ClipboardList size={16} color="#94a3b8" />}>
           {pendingJobs.length===0 ? (
             <div style={{ textAlign:"center", padding:"50px 0", color:C.dim, fontSize:13 }}>
               <div style={{ fontSize:36, marginBottom:8 }}>📭</div>لا توجد أوامر نشطة
@@ -3521,7 +3743,7 @@ const SuctionControlPage = ({ stations, user }) => {
 
       {/* ─── History ─────────────────────────────────────── */}
       {historyJobs.length > 0 && (
-        <Card title="سجل العمليات" icon="🕓">
+        <Card title="سجل العمليات" icon={<Clock size={16} color="#94a3b8" />}>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {historyJobs.map(job => {
               const ss = statusStyle(job.status);
@@ -3549,9 +3771,9 @@ const SuctionControlPage = ({ stations, user }) => {
 
 // ======================== EXECUTIVE DECISION PORTAL ========================
 const EXEC_USERS = [
-  { username: "admin", password: "admin123", name: "م. عبدالله الراشد", role: "المدير التنفيذي", avatar: "👔" },
-  { username: "manager", password: "manager123", name: "م. سارة القحطاني", role: "مدير العمليات", avatar: "👩‍💼" },
-  { username: "cfo", password: "cfo123", name: "أ. فهد المطيري", role: "المدير المالي", avatar: "💼" },
+  { username: "admin", password: "admin123", name: "م. عبدالله الراشد", role: "المدير التنفيذي", initials: "عر" },
+  { username: "manager", password: "manager123", name: "م. سارة القحطاني", role: "مدير العمليات", initials: "سق" },
+  { username: "cfo", password: "cfo123", name: "أ. فهد المطيري", role: "المدير المالي", initials: "فم" },
 ];
 
 const ExecLoginPage = ({ onLogin }) => {
@@ -3575,10 +3797,10 @@ const ExecLoginPage = ({ onLogin }) => {
         <div style={{ position: "absolute", bottom: -40, right: -40, width: 150, height: 150, background: "radial-gradient(circle, #8b5cf620, transparent)", borderRadius: "50%" }} />
         
         <div style={{ textAlign: "center", marginBottom: 32, position: "relative" }}>
-          <div style={{ width: 72, height: 72, borderRadius: 20, background: "linear-gradient(135deg, #f59e0b, #d97706)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, margin: "0 auto 16px" }}>🏛️</div>
-          <h1 style={{ fontSize: 22, fontWeight: 900, color: "#f1f5f9", margin: "0 0 6px 0" }}>بوابة متخذي القرار</h1>
-          <p style={{ fontSize: 13, color: "#94a3b8", margin: 0 }}>نظام إدارة شفط النفايات الذكي - بريدة</p>
-          <div style={{ fontSize: 11, color: "#64748b", marginTop: 8, background: "#0a0e1a", padding: "4px 12px", borderRadius: 8, display: "inline-block" }}>🔒 وصول مقيّد - للإدارة العليا فقط</div>
+          <AppLogo size={72} />
+          <h1 style={{ fontSize: 22, fontWeight: 900, color: "#f1f5f9", margin: "16px 0 6px 0" }}>بوابة متخذي القرار</h1>
+          <p style={{ fontSize: 13, color: "#94a3b8", margin: 0 }}>نظام إدارة النفايات الذكي - بريدة</p>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 8, background: "#0a0e1a", padding: "4px 12px", borderRadius: 8, display: "inline-flex", alignItems: "center", gap: 5 }}><Lock size={11} /> وصول مقيّد - للإدارة العليا فقط</div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16, position: "relative" }}>
@@ -3613,7 +3835,7 @@ const ExecLoginPage = ({ onLogin }) => {
             <div style={{ background: "#0a0e1a", borderRadius: 10, padding: 12, fontSize: 11, color: "#94a3b8", border: "1px solid #1e293b" }}>
               {EXEC_USERS.map((u, i) => (
                 <div key={i} style={{ marginBottom: i < EXEC_USERS.length - 1 ? 8 : 0, display: "flex", justifyContent: "space-between" }}>
-                  <span>{u.avatar} {u.role}</span>
+                  <span><User size={11} style={{ display: "inline", verticalAlign: "middle", marginLeft: 4 }} /> {u.role}</span>
                   <span style={{ direction: "ltr", color: "#f59e0b" }}>{u.username} / {u.password}</span>
                 </div>
               ))}
@@ -3745,7 +3967,7 @@ const SessionTimeout = ({ onLogout, timeoutMin = 30, countdownSec = 10 }) => {
   return (
     <div style={{ position:"fixed", inset:0, background:"#000c", zIndex:9999, display:"flex", alignItems:"center", justifyContent:"center" }}>
       <div style={{ background:C.card, border:`2px solid ${C.warning}`, borderRadius:20, padding:"36px 40px", width:"95vw", maxWidth:400, textAlign:"center", direction:"rtl", fontFamily:F }}>
-        <div style={{ fontSize:48, marginBottom:12 }}>⏰</div>
+        <div style={{ display:"flex", justifyContent:"center", marginBottom:12 }}><Timer size={48} color={C.warning} /></div>
         <div style={{ fontSize:18, fontWeight:800, color:C.warning, marginBottom:8 }}>انتهت مدة الجلسة قريباً</div>
         <div style={{ fontSize:13, color:C.muted, marginBottom:20, lineHeight:1.7 }}>
           مضى {timeoutMin} دقيقة بدون نشاط.<br/>
@@ -3758,8 +3980,8 @@ const SessionTimeout = ({ onLogout, timeoutMin = 30, countdownSec = 10 }) => {
         </div>
         <div style={{ display:"flex", gap:10 }}>
           <button onClick={resetTimer} style={{ flex:1, padding:13, borderRadius:10, border:"none",
-            background:"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontWeight:800, fontSize:14, cursor:"pointer", fontFamily:F }}>
-            ✅ تمديد الجلسة
+            background:"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontWeight:800, fontSize:14, cursor:"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+            <CheckCircle size={16} /> تمديد الجلسة
           </button>
           <button onClick={onLogout} style={{ padding:"13px 20px", borderRadius:10, border:`1px solid ${C.danger}`,
             background:C.danger+"15", color:C.danger, fontWeight:700, fontSize:14, cursor:"pointer", fontFamily:F }}>
@@ -3834,7 +4056,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
       {/* Executive Header */}
       <header style={{ padding: isMobile ? "10px 14px" : "12px 28px", background: "linear-gradient(90deg, #111827, #1a1040)", borderBottom: "1px solid #f59e0b30", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "nowrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <div style={{ width: 38, height: 38, borderRadius: 10, background: "linear-gradient(135deg, #f59e0b, #d97706)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>🏛️</div>
+          <div style={{ flexShrink: 0 }}><AppLogo size={38} /></div>
           {!isMobile && <div>
             <div style={{ fontSize: 15, fontWeight: 900, color: "#f59e0b" }}>بوابة متخذي القرار</div>
             <div style={{ fontSize: 10, color: "#94a3b8" }}>نظام إدارة النفايات - بريدة • <ExecHeaderClock /></div>
@@ -3846,10 +4068,10 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
             <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{user.name}</div>
             <div style={{ fontSize: 10, color: "#f59e0b" }}>{user.roleTitle}</div>
           </div>}
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f59e0b20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{user.avatar}</div>
-          {!isMobile && <button onClick={() => window.__showAdminPanel && window.__showAdminPanel()} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #8b5cf640", background: "#8b5cf615", color: "#8b5cf6", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>👑 إدارة المستخدمين</button>}
-          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: "#10b981", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>⚙️{!isMobile && " إعدادات"}</button>
-          <button onClick={onLogout} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ef444440", background: "#ef444415", color: "#ef4444", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT }}>🚪{!isMobile && " خروج"}</button>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f59e0b20", display: "flex", alignItems: "center", justifyContent: "center" }}><User size={18} color="#f59e0b" /></div>
+          {!isMobile && <button onClick={() => window.__showAdminPanel && window.__showAdminPanel()} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #8b5cf640", background: "#8b5cf615", color: "#8b5cf6", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><Crown size={13} /> إدارة المستخدمين</button>}
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: "#10b981", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><SettingsIcon size={13} />{!isMobile && " إعدادات"}</button>
+          <button onClick={onLogout} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ef444440", background: "#ef444415", color: "#ef4444", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><LogOut size={13} />{!isMobile && " خروج"}</button>
         </div>
       </header>
       {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
@@ -3858,18 +4080,19 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
       {/* Tabs */}
       <div style={{ padding: isMobile ? "10px 12px 0" : "12px 28px 0", display: "flex", gap: 6, flexWrap: "wrap", overflowX: "auto" }}>
         {[
-          { key: "overview", label: "📊 نظرة تنفيذية" },
-          { key: "financial", label: "💰 التحليل المالي" },
-          { key: "districts", label: "🏘️ أداء الأحياء" },
-          { key: "benchmark", label: "📈 المقارنة المعيارية" },
-          { key: "scenarios", label: "🎯 سيناريوهات القرار" },
-          { key: "strategic", label: "🗺️ الأهداف الاستراتيجية" },
+          { key: "overview",  label: "نظرة تنفيذية",         icon: <ChartNoAxesCombined size={14} /> },
+          { key: "financial", label: "التحليل المالي",        icon: <DollarSign size={14} /> },
+          { key: "districts", label: "أداء الأحياء",          icon: <Building size={14} /> },
+          { key: "benchmark", label: "المقارنة المعيارية",    icon: <TrendingUp size={14} /> },
+          { key: "scenarios", label: "سيناريوهات القرار",    icon: <Target size={14} /> },
+          { key: "strategic", label: "الأهداف الاستراتيجية", icon: <MapIcon size={14} /> },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             padding: "9px 18px", borderRadius: 10, border: `1px solid ${tab === t.key ? "#f59e0b" : "#1e293b"}`,
             background: tab === t.key ? "#f59e0b18" : "transparent", color: tab === t.key ? "#f59e0b" : "#94a3b8",
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
-          }}>{t.label}</button>
+            display: "flex", alignItems: "center", gap: 6,
+          }}>{t.icon}{t.label}</button>
         ))}
       </div>
 
@@ -3879,15 +4102,15 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
         {tab === "overview" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
-              <StatCard title="إجمالي الإيرادات" value={(totalRevenue / 1000000).toFixed(2)} unit="مليون ر.س" icon="💰" gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
-              <StatCard title="إجمالي التكاليف" value={(totalCost / 1000000).toFixed(2)} unit="مليون ر.س" icon="📉" gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
-              <StatCard title="صافي الأرباح" value={(totalProfit / 1000000).toFixed(2)} unit="مليون ر.س" icon="📈" gradient="linear-gradient(135deg, #10b981, #059669)" trend={18.5} />
-              <StatCard title="كفاءة التشغيل" value={avgEfficiency} unit="%" icon="⚡" gradient="linear-gradient(135deg, #3b82f6, #1d4ed8)" trend={5.2} />
+              <StatCard title="إجمالي الإيرادات" value={(totalRevenue / 1000000).toFixed(2)} unit="مليون ر.س" icon={<DollarSign size={22} color="#fff" />} gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
+              <StatCard title="إجمالي التكاليف" value={(totalCost / 1000000).toFixed(2)} unit="مليون ر.س" icon={<TrendingDown size={22} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
+              <StatCard title="صافي الأرباح" value={(totalProfit / 1000000).toFixed(2)} unit="مليون ر.س" icon={<TrendingUp size={22} color="#fff" />} gradient="linear-gradient(135deg, #10b981, #059669)" trend={18.5} />
+              <StatCard title="كفاءة التشغيل" value={avgEfficiency} unit="%" icon={<Zap size={22} color="#fff" />} gradient="linear-gradient(135deg, #3b82f6, #1d4ed8)" trend={5.2} />
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-              <Card title="الأداء الربعي (ر.س)" icon="📊">
-                <ResponsiveContainer width="100%" height={280}>
+              <Card title="الأداء الربعي (ر.س)" icon={<BarChart2 size={16} color="#94a3b8" />}>
+                <ResponsiveContainer width="99%" height={280}>
                   <ComposedChart data={quarterlyData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                     <XAxis dataKey="quarter" tick={{ fill: C.muted, fontSize: 12 }} />
@@ -3901,8 +4124,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                 </ResponsiveContainer>
               </Card>
 
-              <Card title="رضا المواطنين والشكاوى" icon="😊">
-                <ResponsiveContainer width="100%" height={280}>
+              <Card title="رضا المواطنين والشكاوى" icon={<Smile size={16} color="#94a3b8" />}>
+                <ResponsiveContainer width="99%" height={280}>
                   <AreaChart data={satisfactionTrend} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                     <defs>
                       <linearGradient id="gSat" x1="0" y1="0" x2="0" y2="1">
@@ -3925,13 +4148,13 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
             {/* Quick Insights */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 14 }}>
               {[
-                { title: "أفضل حي أداءً", value: bestDistrict.district, sub: `${bestDistrict.الأداء}% كفاءة`, icon: "🏆", color: "#10b981" },
-                { title: "حي يحتاج تحسين", value: worstDistrict.district, sub: `${worstDistrict.الأداء}% كفاءة`, icon: "⚠️", color: "#ef4444" },
-                { title: "هامش الربح", value: `${Math.round((totalProfit / totalRevenue) * 100)}%`, sub: "نسبة مئوية سنوية", icon: "💹", color: "#f59e0b" },
-                { title: "العائد على الاستثمار", value: "340%", sub: "منذ بداية المشروع", icon: "🎯", color: "#8b5cf6" },
+                { title: "أفضل حي أداءً", value: bestDistrict.district, sub: `${bestDistrict.الأداء}% كفاءة`, icon: <Trophy size={26} color="#10b981" />, color: "#10b981" },
+                { title: "حي يحتاج تحسين", value: worstDistrict.district, sub: `${worstDistrict.الأداء}% كفاءة`, icon: <AlertTriangle size={26} color="#ef4444" />, color: "#ef4444" },
+                { title: "هامش الربح", value: `${Math.round((totalProfit / totalRevenue) * 100)}%`, sub: "نسبة مئوية سنوية", icon: <TrendingUp size={26} color="#f59e0b" />, color: "#f59e0b" },
+                { title: "العائد على الاستثمار", value: "340%", sub: "منذ بداية المشروع", icon: <Target size={26} color="#8b5cf6" />, color: "#8b5cf6" },
               ].map((insight, i) => (
                 <div key={i} style={{ background: "#111827", border: `1px solid ${insight.color}30`, borderRadius: 14, padding: 18, display: "flex", gap: 14, alignItems: "center" }}>
-                  <div style={{ width: 50, height: 50, borderRadius: 14, background: `${insight.color}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26 }}>{insight.icon}</div>
+                  <div style={{ width: 50, height: 50, borderRadius: 14, background: `${insight.color}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>{insight.icon}</div>
                   <div>
                     <div style={{ fontSize: 11, color: "#64748b" }}>{insight.title}</div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: insight.color }}>{insight.value}</div>
@@ -3947,8 +4170,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
         {tab === "financial" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-              <Card title="العائد على الاستثمار الشهري (ر.س)" icon="📈">
-                <ResponsiveContainer width="100%" height={300}>
+              <Card title="العائد على الاستثمار الشهري (ر.س)" icon={<TrendingUp size={16} color="#94a3b8" />}>
+                <ResponsiveContainer width="99%" height={300}>
                   <AreaChart data={roiData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                     <defs>
                       <linearGradient id="gROI" x1="0" y1="0" x2="0" y2="1">
@@ -3968,8 +4191,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                 </ResponsiveContainer>
               </Card>
 
-              <Card title="توزيع التكاليف التشغيلية" icon="🍕">
-                <ResponsiveContainer width="100%" height={240}>
+              <Card title="توزيع التكاليف التشغيلية" icon={<LucidePieChart size={16} color="#94a3b8" />}>
+                <ResponsiveContainer width="99%" height={240}>
                   <PieChart>
                     <Pie data={costBreakdown} cx="50%" cy="50%" outerRadius={90} innerRadius={50} dataKey="value" paddingAngle={3}
                       label={({ name, value }) => `${name} ${value}%`}>
@@ -3981,8 +4204,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
               </Card>
             </div>
 
-            <Card title="مقارنة التكلفة لكل حي (ر.س/شهر)" icon="💵">
-              <ResponsiveContainer width="100%" height={300}>
+            <Card title="مقارنة التكلفة لكل حي (ر.س/شهر)" icon={<Banknote size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={300}>
                 <BarChart data={districtPerf} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="district" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -4000,8 +4223,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
         {/* ===== DISTRICTS ===== */}
         {tab === "districts" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Card title="أداء الأحياء الشامل" icon="🏘️">
-              <ResponsiveContainer width="100%" height={350}>
+            <Card title="أداء الأحياء الشامل" icon={<Building size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={350}>
                 <BarChart data={districtPerf} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
@@ -4015,8 +4238,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
             </Card>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-              <Card title="الأداء مقابل الرضا" icon="🎯">
-                <ResponsiveContainer width="100%" height={280}>
+              <Card title="الأداء مقابل الرضا" icon={<Target size={16} color="#94a3b8" />}>
+                <ResponsiveContainer width="99%" height={280}>
                   <RadarChart cx="50%" cy="50%" outerRadius="70%" data={districtPerf.slice(0, 8)}>
                     <PolarGrid stroke={C.border} />
                     <PolarAngleAxis dataKey="district" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
@@ -4029,8 +4252,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                 </ResponsiveContainer>
               </Card>
 
-              <Card title="عدد الحوادث لكل حي" icon="🚨">
-                <ResponsiveContainer width="100%" height={280}>
+              <Card title="عدد الحوادث لكل حي" icon={<AlertTriangle size={16} color="#94a3b8" />}>
+                <ResponsiveContainer width="99%" height={280}>
                   <BarChart data={[...districtPerf].sort((a, b) => b.الحوادث - a.الحوادث)} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                     <XAxis dataKey="district" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
@@ -4049,8 +4272,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
         {/* ===== BENCHMARK ===== */}
         {tab === "benchmark" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Card title="المقارنة المعيارية - بريدة مقابل المعايير الوطنية" icon="📈">
-              <ResponsiveContainer width="100%" height={350}>
+            <Card title="المقارنة المعيارية - بريدة مقابل المعايير الوطنية" icon={<TrendingUp size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={350}>
                 <BarChart data={benchmarkData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                   <XAxis dataKey="metric" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
@@ -4095,7 +4318,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
         {tab === "scenarios" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ background: "#111827", border: "1px solid #f59e0b30", borderRadius: 14, padding: 18 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#f59e0b", marginBottom: 6 }}>🎯 أداة دعم القرار</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#f59e0b", marginBottom: 6, display: "flex", alignItems: "center", gap: 7 }}><Target size={16} color="#f59e0b" /> أداة دعم القرار</div>
               <p style={{ fontSize: 12, color: "#94a3b8", margin: 0, lineHeight: 1.7 }}>
                 استعرض السيناريوهات المختلفة مع تحليل العائد والمخاطر لكل خيار. اضغط على أي سيناريو لعرض التفاصيل الكاملة والتوصيات.
               </p>
@@ -4123,15 +4346,15 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14, marginBottom: 24 }}>
                     {[
-                      { label: "الاستثمار المطلوب", val: `${(selectedScenario.investment / 1000000).toFixed(1)}M ر.س`, color: "#ef4444", icon: "💰" },
-                      { label: "التوفير السنوي", val: `${(selectedScenario.annualSaving / 1000).toFixed(0)}K ر.س`, color: "#10b981", icon: "💹" },
-                      { label: "العائد ROI", val: `${selectedScenario.roi}%`, color: "#f59e0b", icon: "📈" },
-                      { label: "فترة الاسترداد", val: selectedScenario.payback, color: "#3b82f6", icon: "⏱️" },
-                      { label: "مستوى المخاطرة", val: selectedScenario.risk, color: selectedScenario.risk === "منخفض" ? "#10b981" : "#f59e0b", icon: "⚡" },
-                      { label: "الأثر المتوقع", val: selectedScenario.impact, color: "#8b5cf6", icon: "🎯" },
+                      { label: "الاستثمار المطلوب", val: `${(selectedScenario.investment / 1000000).toFixed(1)}M ر.س`, color: "#ef4444", icon: <DollarSign size={22} color="#ef4444" /> },
+                      { label: "التوفير السنوي", val: `${(selectedScenario.annualSaving / 1000).toFixed(0)}K ر.س`, color: "#10b981", icon: <TrendingUp size={22} color="#10b981" /> },
+                      { label: "العائد ROI", val: `${selectedScenario.roi}%`, color: "#f59e0b", icon: <TrendingUp size={22} color="#f59e0b" /> },
+                      { label: "فترة الاسترداد", val: selectedScenario.payback, color: "#3b82f6", icon: <Clock size={22} color="#3b82f6" /> },
+                      { label: "مستوى المخاطرة", val: selectedScenario.risk, color: selectedScenario.risk === "منخفض" ? "#10b981" : "#f59e0b", icon: <Zap size={22} color={selectedScenario.risk === "منخفض" ? "#10b981" : "#f59e0b"} /> },
+                      { label: "الأثر المتوقع", val: selectedScenario.impact, color: "#8b5cf6", icon: <Target size={22} color="#8b5cf6" /> },
                     ].map((item, i) => (
                       <div key={i} style={{ background: "#070b14", borderRadius: 12, padding: 16, textAlign: "center" }}>
-                        <div style={{ fontSize: 22, marginBottom: 4 }}>{item.icon}</div>
+                        <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>{item.icon}</div>
                         <div style={{ fontSize: 16, fontWeight: 800, color: item.color }}>{item.val}</div>
                         <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>{item.label}</div>
                       </div>
@@ -4173,10 +4396,10 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
                     </div>
                     <div style={{ fontSize: 16, fontWeight: 800, color: C.text, marginBottom: 8 }}>{s.name}</div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 8, fontSize: 11 }}>
-                      <div style={{ color: "#64748b" }}>💰 استثمار: <span style={{ color: C.text }}>{(s.investment / 1000000).toFixed(1)}M</span></div>
-                      <div style={{ color: "#64748b" }}>📈 ROI: <span style={{ color: "#f59e0b", fontWeight: 700 }}>{s.roi}%</span></div>
-                      <div style={{ color: "#64748b" }}>⏱️ استرداد: <span style={{ color: C.text }}>{s.payback}</span></div>
-                      <div style={{ color: "#64748b" }}>⚡ خطر: <span style={{ color: s.risk === "منخفض" ? "#10b981" : "#f59e0b" }}>{s.risk}</span></div>
+                      <div style={{ color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}><DollarSign size={11} /> استثمار: <span style={{ color: C.text }}>{(s.investment / 1000000).toFixed(1)}M</span></div>
+                      <div style={{ color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}><TrendingUp size={11} /> ROI: <span style={{ color: "#f59e0b", fontWeight: 700 }}>{s.roi}%</span></div>
+                      <div style={{ color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}><Clock size={11} /> استرداد: <span style={{ color: C.text }}>{s.payback}</span></div>
+                      <div style={{ color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}><Zap size={11} /> خطر: <span style={{ color: s.risk === "منخفض" ? "#10b981" : "#f59e0b" }}>{s.risk}</span></div>
                     </div>
                   </div>
                 ))}
@@ -4189,7 +4412,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
         {tab === "strategic" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ background: "linear-gradient(135deg, #111827, #1a1040)", border: "1px solid #f59e0b20", borderRadius: 16, padding: 24 }}>
-              <div style={{ fontSize: 18, fontWeight: 900, color: "#f59e0b", marginBottom: 6 }}>🗺️ الخطة الاستراتيجية - رؤية 2030</div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: "#f59e0b", marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}><MapIcon size={20} color="#f59e0b" /> الخطة الاستراتيجية - رؤية 2030</div>
               <p style={{ fontSize: 13, color: "#94a3b8", margin: 0, lineHeight: 1.8 }}>
                 متابعة التقدم نحو الأهداف الاستراتيجية لنظام إدارة النفايات الذكي في مدينة بريدة، 
                 بما يتوافق مع أهداف رؤية المملكة 2030 في الاستدامة البيئية وجودة الحياة.
@@ -4224,8 +4447,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
             </div>
 
             {/* Vision 2030 Alignment */}
-            <Card title="التوافق مع رؤية 2030" icon="🇸🇦">
-              <ResponsiveContainer width="100%" height={300}>
+            <Card title="التوافق مع رؤية 2030" icon={<Flag size={16} color="#94a3b8" />}>
+              <ResponsiveContainer width="99%" height={300}>
                 <RadarChart cx="50%" cy="50%" outerRadius="75%" data={[
                   { axis: "الاستدامة البيئية", الحالي: 75, المستهدف: 95 },
                   { axis: "جودة الحياة", الحالي: 82, المستهدف: 95 },
@@ -4573,7 +4796,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
       {/* Header */}
       <header style={{ padding: "12px 24px", background: C.card, borderBottom: `1px solid ${C.accent}30`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 42, height: 42, borderRadius: 12, background: C.g1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>♻️</div>
+          <AppLogo size={42} />
           <div>
             <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>بوابة المواطن</div>
             <div style={{ fontSize: 10, color: C.accent }}>نظام إدارة النفايات الذكي - بريدة • <CitizenDateDisplay /></div>
@@ -4621,24 +4844,24 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
-              <StatCard title="حاوياتي" value={reqsLoading ? "…" : myRequests.filter(r => r.status === "مقبول").length} icon="🗑️" gradient={C.g1} />
-              <StatCard title="بلاغاتي" value={repsLoading ? "…" : myReports.length} icon="📋" gradient={C.g2} />
-              <StatCard title="طلباتي" value={reqsLoading ? "…" : myRequests.length} icon="📝" gradient={C.g3} />
-              <StatCard title="امتلاء المحطة" value={myStation ? myStation.fillLevel : "—"} unit={myStation ? "%" : ""} icon="🏭" gradient={C.g4} />
+              <StatCard title="حاوياتي" value={reqsLoading ? "…" : myRequests.filter(r => r.status === "مقبول").length} icon={<Trash2 size={22} color="#fff" />} gradient={C.g1} />
+              <StatCard title="بلاغاتي" value={repsLoading ? "…" : myReports.length} icon={<ClipboardList size={22} color="#fff" />} gradient={C.g2} />
+              <StatCard title="طلباتي" value={reqsLoading ? "…" : myRequests.length} icon={<FileText size={22} color="#fff" />} gradient={C.g3} />
+              <StatCard title="امتلاء المحطة" value={myStation ? myStation.fillLevel : "—"} unit={myStation ? "%" : ""} icon={<Factory size={22} color="#fff" />} gradient={C.g4} />
             </div>
 
             {/* Quick Actions */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
               {[
-                { label: "طلب حاوية جديدة",    desc: "اطلب حاوية لمنزلك أو مبناك",          icon: "📝", color: C.accent,   action: () => { setTab("request"); setReqDone(null); } },
-                { label: "إبلاغ عن مشكلة",     desc: "بلّغ عن حاوية تالفة أو ممتلئة",       icon: "⚠️", color: C.warning,  action: () => { setTab("report"); setReportDone(null); } },
-                { label: "متابعة محطة الحي",    desc: "شاهد حالة محطة الشفط في حيك",         icon: "📊", color: C.info,    action: () => setTab("station") },
-                { label: "عرض حاويات الحي",    desc: "تابع حالة الحاويات في محطة حيك",       icon: "🗑️", color: "#8b5cf6", action: () => setTab("bins") },
+                { label: "طلب حاوية جديدة",    desc: "اطلب حاوية لمنزلك أو مبناك",          icon: <FileText size={32} color={C.accent} />, color: C.accent,   action: () => { setTab("request"); setReqDone(null); } },
+                { label: "إبلاغ عن مشكلة",     desc: "بلّغ عن حاوية تالفة أو ممتلئة",       icon: <AlertTriangle size={32} color={C.warning} />, color: C.warning,  action: () => { setTab("report"); setReportDone(null); } },
+                { label: "متابعة محطة الحي",    desc: "شاهد حالة محطة الشفط في حيك",         icon: <BarChart2 size={32} color={C.info} />, color: C.info,    action: () => setTab("station") },
+                { label: "عرض حاويات الحي",    desc: "تابع حالة الحاويات في محطة حيك",       icon: <Trash2 size={32} color="#8b5cf6" />, color: "#8b5cf6", action: () => setTab("bins") },
               ].map((item, i) => (
                 <div key={i} onClick={item.action} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 14, padding: 18, cursor: "pointer", transition: "all 0.2s" }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = item.color + "70"; e.currentTarget.style.transform = "translateY(-2px)"; }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = item.color + "30"; e.currentTarget.style.transform = "translateY(0)"; }}>
-                  <div style={{ fontSize: 32, marginBottom: 8 }}>{item.icon}</div>
+                  <div style={{ marginBottom: 8, display: "flex" }}>{item.icon}</div>
                   <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>{item.label}</div>
                   <div style={{ fontSize: 11, color: C.dim }}>{item.desc}</div>
                 </div>
@@ -4665,7 +4888,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
                     marginTop: 14, padding: "9px 22px", borderRadius: 10, border: "none",
                     background: C.g1, color: "#fff", fontWeight: 700, cursor: "pointer",
                     fontSize: 12, fontFamily: ARABIC_FONT,
-                  }}>📝 طلب حاوية الآن</button>
+                  }}><FileText size={14}/> طلب حاوية الآن</button>
                 </div>
               ) : (
                 approvedBins.map((bin) => {
@@ -4683,13 +4906,13 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
                         {[
-                          { label: "نوع الحاوية",   val: bin.binType,                                             icon: "♻️" },
-                          { label: "الحي",          val: bin.district,                                            icon: "📍" },
-                          { label: "تاريخ الموافقة", val: approvedAt ? new Date(approvedAt).toLocaleDateString("ar-SA") : "—", icon: "📅" },
-                          { label: "رقم الطلب",     val: bin.id.slice(0, 8),                                      icon: "🔖" },
+                          { label: "نوع الحاوية",   val: bin.binType,                                             icon: <Recycle size={18} color="#94a3b8" /> },
+                          { label: "الحي",          val: bin.district,                                            icon: <MapPin size={18} color="#94a3b8" /> },
+                          { label: "تاريخ الموافقة", val: approvedAt ? new Date(approvedAt).toLocaleDateString("ar-SA") : "—", icon: <Calendar size={18} color="#94a3b8" /> },
+                          { label: "رقم الطلب",     val: bin.id.slice(0, 8),                                      icon: <Bookmark size={18} color="#94a3b8" /> },
                         ].map((item, j) => (
                           <div key={j} style={{ background: C.bg, borderRadius: 10, padding: "10px 12px", display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ fontSize: 18 }}>{item.icon}</span>
+                            <span style={{ display: "flex", alignItems: "center" }}>{item.icon}</span>
                             <div>
                               <div style={{ fontSize: 10, color: C.dim }}>{item.label}</div>
                               <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{item.val}</div>
@@ -4741,7 +4964,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
 
               {/* Containers summary */}
               {myContainers.length > 0 && (
-                <Card title={`حاويات المحطة (${myContainers.length})`} icon="🗑️">
+                <Card title={`حاويات المحطة (${myContainers.length})`} icon={<Trash2 size={16} color="#94a3b8" />}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {myContainers.map((c, i) => {
                       const fl = Number(c.fillLevel) || 0;
@@ -4782,7 +5005,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
                 <button onClick={() => setReqDone(null)} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 13 }}>تقديم طلب آخر</button>
               </div>
             ) : (
-              <Card title="طلب حاوية جديدة" icon="📝">
+              <Card title="طلب حاوية جديدة" icon={<FileText size={16} color="#94a3b8" />}>
                 {reqDone?.error && (
                   <div style={{ background: C.danger + "20", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: C.danger }}>
                     ❌ خطأ: <strong>{reqDone.error}</strong>
@@ -4846,7 +5069,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
                 <button onClick={() => setReportDone(null)} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 13 }}>تقديم بلاغ آخر</button>
               </div>
             ) : (
-              <Card title="إبلاغ عن مشكلة" icon="⚠️">
+              <Card title="إبلاغ عن مشكلة" icon={<AlertTriangle size={16} color="#94a3b8" />}>
                 {reportDone?.error && (
                   <div style={{ background: C.danger + "20", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: C.danger }}>
                     ❌ خطأ: <strong>{reportDone.error}</strong>
@@ -5096,6 +5319,7 @@ function SmartWasteManagement() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [time, setTime] = useState(new Date());
   const [showPassModal, setShowPassModal] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   useEffect(() => {
     const onResize = () => {
@@ -5187,14 +5411,14 @@ function SmartWasteManagement() {
 
   // Employee portal (default operational dashboard)
   const navItems = [
-    { key: "dashboard", label: "لوحة التحكم",       icon: "📊" },
-    { key: "stations",  label: "المحطات",             icon: "🏭" },
-    { key: "control",   label: "وحدة التحكم",         icon: "🚿" },
-    { key: "requests",  label: "الطلبات والبلاغات",   icon: "📬" },
-    { key: "fire",      label: "إنذار الحرائق",       icon: "🔥" },
-    { key: "predictions", label: "التنبؤات",          icon: "🔮" },
-    { key: "reports",   label: "التقارير",             icon: "📋" },
-    { key: "settings",  label: "الإعدادات",            icon: "⚙️" },
+    { key: "dashboard", label: "لوحة التحكم",       icon: <LayoutDashboard size={20} /> },
+    { key: "stations",  label: "المحطات",             icon: <Factory size={20} /> },
+    { key: "control",   label: "وحدة التحكم",         icon: <Sliders size={20} /> },
+    { key: "requests",  label: "الطلبات والبلاغات",   icon: <Inbox size={20} /> },
+    { key: "fire",      label: "إنذار الحرائق",       icon: <Flame size={20} /> },
+    { key: "predictions", label: "التنبؤات",          icon: <Sparkles size={20} /> },
+    { key: "reports",   label: "التقارير",             icon: <ClipboardList size={20} /> },
+    { key: "settings",  label: "الإعدادات",            icon: <SettingsIcon size={20} /> },
   ];
 
   return (
@@ -5232,7 +5456,7 @@ function SmartWasteManagement() {
         }),
       }}>
         <div style={{ padding: "20px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12, minHeight: 70 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: C.g1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>♻️</div>
+          <div style={{ flexShrink: 0 }}><AppLogo size={40} /></div>
           {(sidebarOpen || isMobile) && <div style={{ overflow: "hidden" }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: C.text, whiteSpace: "nowrap" }}>إدارة النفايات - بريدة</div>
             <div style={{ fontSize: 10, color: C.accent, fontWeight: 600 }}>Smart Waste MIS</div>
@@ -5254,7 +5478,7 @@ function SmartWasteManagement() {
               cursor: "pointer", fontSize: 14, fontWeight: page === item.key ? 700 : 500,
               fontFamily: ARABIC_FONT, whiteSpace: "nowrap", width: "100%",
             }}>
-              <span style={{ fontSize: 20, flexShrink: 0 }}>{item.icon}</span>
+              <span style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>{item.icon}</span>
               {(sidebarOpen || isMobile) && item.label}
             </button>
           ))}
@@ -5264,7 +5488,7 @@ function SmartWasteManagement() {
         <div style={{ padding: "12px 8px", borderTop: `1px solid ${C.border}` }}>
           {(sidebarOpen || isMobile) && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", marginBottom: 8 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{loggedInUser.avatar}</div>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><User size={16} color={C.accent} /></div>
               <div style={{ overflow: "hidden" }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{loggedInUser.name}</div>
                 <div style={{ fontSize: 10, color: C.accent }}>{loggedInUser.roleTitle}</div>
@@ -5279,7 +5503,7 @@ function SmartWasteManagement() {
             border: `1px solid #10b98130`, background: `#10b98110`, color: "#10b981",
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
           }}>
-            <span style={{ fontSize: 16 }}>⚙️</span>
+            <SettingsIcon size={16} color="#10b981" />
             {(sidebarOpen || isMobile) && "إعدادات الحساب"}
           </button>
           <button onClick={handleLogout} style={{
@@ -5290,7 +5514,7 @@ function SmartWasteManagement() {
             border: `1px solid ${C.danger}30`, background: `${C.danger}10`, color: C.danger,
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
           }}>
-            <span style={{ fontSize: 16 }}>🚪</span>
+            <LogOut size={16} color={C.danger} />
             {(sidebarOpen || isMobile) && "تسجيل خروج"}
           </button>
         </div>
@@ -5324,15 +5548,67 @@ function SmartWasteManagement() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 8 : 14, flexShrink: 0 }}>
-            <div style={{ position: "relative", width: 36, height: 36, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 18 }}>
-              🔔
-              {alerts.filter((a) => a.type === "حرج").length > 0 && (
-                <span style={{ position: "absolute", top: -2, right: -2, width: 16, height: 16, borderRadius: "50%", background: C.danger, fontSize: 9, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>
-                  {alerts.filter((a) => a.type === "حرج").length}
-                </span>
+            {/* زر التنبيهات */}
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={() => setShowNotifications(v => !v)}
+                style={{ position:"relative", width: 36, height: 36, borderRadius: 10, background: showNotifications ? C.accent+"18" : C.bg, border: `1px solid ${showNotifications ? C.accent+"60" : C.border}`, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition:"all 0.2s" }}
+              >
+                <Bell size={17} color={showNotifications ? C.accent : C.muted} />
+                {alerts.filter((a) => a.type === "حرج").length > 0 && (
+                  <span style={{ position: "absolute", top: -3, right: -3, width: 16, height: 16, borderRadius: "50%", background: C.danger, fontSize: 9, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, border:`2px solid ${C.card}` }}>
+                    {alerts.filter((a) => a.type === "حرج").length}
+                  </span>
+                )}
+              </button>
+              {/* Dropdown التنبيهات */}
+              {showNotifications && (
+                <div style={{ position:"fixed", top:70, left: isMobile ? 12 : "auto", right: isMobile ? 12 : 24, width: isMobile ? "auto" : 340, background: C.card, border:`1px solid ${C.border}`, borderRadius:14, boxShadow:"0 12px 40px #0009", zIndex:999, overflow:"hidden" }}>
+                  <div style={{ padding:"14px 16px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <BellRing size={15} color={C.accent} />
+                      <span style={{ fontSize:14, fontWeight:700, color:C.text }}>التنبيهات</span>
+                      {alerts.filter(a=>!a.resolved).length > 0 && (
+                        <span style={{ background:C.danger, color:"#fff", fontSize:10, fontWeight:800, padding:"1px 7px", borderRadius:20 }}>{alerts.filter(a=>!a.resolved).length}</span>
+                      )}
+                    </div>
+                    <button onClick={() => setShowNotifications(false)} style={{ background:"none", border:"none", color:C.muted, cursor:"pointer", display:"flex", padding:2 }}><X size={15}/></button>
+                  </div>
+                  <div style={{ maxHeight:360, overflowY:"auto" }}>
+                    {alerts.length === 0 ? (
+                      <div style={{ padding:32, textAlign:"center" }}>
+                        <CheckCircle size={32} color={C.accent} style={{ margin:"0 auto 10px", display:"block" }} />
+                        <div style={{ fontSize:13, color:C.muted }}>لا توجد تنبيهات حالياً</div>
+                      </div>
+                    ) : (
+                      alerts.slice(0, 12).map((alert, i) => {
+                        const isHigh = alert.type === "حرج";
+                        const isMid  = alert.type === "تحذير";
+                        const clr    = isHigh ? C.danger : isMid ? C.warning : C.accent;
+                        return (
+                          <div key={alert.id || i} style={{ padding:"12px 16px", borderBottom:`1px solid ${C.border}30`, display:"flex", gap:10, alignItems:"flex-start", background: i % 2 === 0 ? "transparent" : "#ffffff04" }}>
+                            <div style={{ width:8, height:8, borderRadius:"50%", background:clr, flexShrink:0, marginTop:5 }} />
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ fontSize:12, color:C.text, fontWeight:600, marginBottom:2 }}>{alert.message}</div>
+                              <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                <span style={{ fontSize:10, color:clr, background:`${clr}15`, padding:"1px 8px", borderRadius:20, fontWeight:700 }}>{alert.type}</span>
+                                <span style={{ fontSize:10, color:C.muted }}>{alert.time}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                  <div style={{ padding:"10px 16px", borderTop:`1px solid ${C.border}`, display:"flex", justifyContent:"center" }}>
+                    <button onClick={() => { setPage("dashboard"); setShowNotifications(false); }} style={{ background:"none", border:"none", color:C.accent, fontSize:12, cursor:"pointer", fontFamily:ARABIC_FONT, fontWeight:600, display:"flex", alignItems:"center", gap:5 }}>
+                      <LayoutDashboard size={12} /> عرض لوحة التحكم
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: C.g1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{loggedInUser.avatar}</div>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: C.g1, display: "flex", alignItems: "center", justifyContent: "center" }}><User size={18} color="#fff" /></div>
           </div>
         </header>
 
