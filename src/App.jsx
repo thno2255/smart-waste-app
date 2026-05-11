@@ -353,7 +353,7 @@ const AuthPage = () => {
             <div style={{ position:"relative", zIndex:1, textAlign:"center", maxWidth:360 }}>
               <AppLogo size={100} />
               <div style={{ marginTop:28, marginBottom:8 }}>
-                <div style={{ fontSize:11, color:govGreen, fontWeight:700, letterSpacing:2, textTransform:"uppercase", marginBottom:10 }}>SMART WASTE MANAGEMENT SYSTEM</div>
+                <div style={{ fontSize:11, color:govGreen, fontWeight:700, letterSpacing:2, textTransform:"uppercase", marginBottom:10 }}>SMART WASTE MIS</div>
                 <h2 style={{ fontSize:26, fontWeight:900, color:"#f1f5f9", margin:"0 0 8px 0", lineHeight:1.3 }}>نظام إدارة النفايات الذكي</h2>
                 <p style={{ fontSize:13, color:"#64748b", fontWeight:600, margin:0 }}>مدينة بريدة • منطقة القصيم</p>
               </div>
@@ -402,7 +402,7 @@ const AuthPage = () => {
             <div style={{ textAlign:"center", marginBottom:28 }}>
               <AppLogo size={80} />
               <div style={{ marginTop:14 }}>
-                <div style={{ fontSize:11, color:govGreen, fontWeight:700, letterSpacing:1 }}>SMART WASTE MANAGEMENT</div>
+                <div style={{ fontSize:11, color:govGreen, fontWeight:700, letterSpacing:1 }}>SMART WASTE MIS</div>
                 <h2 style={{ fontSize:20, fontWeight:900, color:"#f1f5f9", margin:"6px 0 4px" }}>نظام إدارة النفايات الذكي</h2>
                 <p style={{ fontSize:12, color:"#64748b", margin:0 }}>مدينة بريدة • منطقة القصيم</p>
               </div>
@@ -4542,7 +4542,7 @@ const AIAssistant = ({ role, stations = [], alerts = [], userData = {}, myReques
     const pendingReps  = myReports.filter(r => r.status === "قيد المعالجة").length;
     const myDistrict   = userData.district || "غير محدد";
     const distStation  = stations.find(s => s.district === myDistrict);
-    return `أنت مساعد ذكي لبوابة المواطن في نظام إدارة النفايات ببريدة.
+    return `أنت مساعد ذكي لبوابة الأفراد في نظام إدارة النفايات ببريدة.
 وقت الآن: ${now}
 دورك: تساعد المواطن على متابعة طلباته وبلاغاته والحصول على معلومات عن حيّه.
 
@@ -4606,7 +4606,7 @@ ${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distS
 
   const greeting = role === "employee" || role === "executive"
     ? "مرحباً! أنا مساعدك الذكي. اسألني عن حالة المحطات، التنبيهات، أوامر الشفط، أو أي شيء آخر."
-    : "أهلاً! أنا مساعدك في بوابة المواطن. اسألني عن طلباتك أو وضع حيّك.";
+    : "أهلاً! أنا مساعدك في بوابة الأفراد. اسألني عن طلباتك أو وضع حيّك.";
 
   const suggestions = role === "employee" || role === "executive"
     ? ["أي محطة تحتاج شفط الآن؟", "لخص التنبيهات النشطة", "ما وضع المحطات الحرجة؟"]
@@ -4648,7 +4648,7 @@ ${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distS
           <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#6d28d9,#4c1d95)", borderRadius: "20px 20px 0 0" }}>
             <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>🤖 المساعد الذكي</div>
             <div style={{ fontSize: 11, color: "#c4b5fd", marginTop: 2 }}>
-              {role === "employee" || role === "executive" ? "مساعد الموظف — يقرأ بيانات النظام" : "مساعد المواطن — بوابة بريدة"}
+              {role === "employee" || role === "executive" ? "مساعد الموظف — يقرأ بيانات النظام" : "مساعد الأفراد — بوابة بريدة"}
             </div>
           </div>
 
@@ -4817,7 +4817,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <AppLogo size={42} />
           <div>
-            <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>بوابة المواطن</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>بوابة الأفراد</div>
             <div style={{ fontSize: 10, color: C.accent }}>نظام إدارة النفايات الذكي - بريدة • <CitizenDateDisplay /></div>
           </div>
         </div>
@@ -4858,7 +4858,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
             <div style={{ background: `linear-gradient(135deg, ${C.accent}15, ${C.card})`, border: `1px solid ${C.accent}30`, borderRadius: 16, padding: 24 }}>
               <div style={{ fontSize: 20, fontWeight: 900, color: C.text, marginBottom: 6 }}>مرحباً {user.name} 👋</div>
               <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.8 }}>
-                مرحباً بك في بوابة المواطن لنظام إدارة النفايات الذكي. يمكنك متابعة حاوياتك، طلب حاوية جديدة، الإبلاغ عن مشاكل، ومتابعة أداء محطة حيك.
+                مرحباً بك في بوابة الأفراد لنظام إدارة النفايات الذكي. يمكنك متابعة حاوياتك، طلب حاوية جديدة، الإبلاغ عن مشاكل، ومتابعة أداء محطة حيك.
               </p>
             </div>
 
@@ -5235,7 +5235,7 @@ const UnifiedLoginPage = ({ onLogin }) => {
   const roleCards = [
     { key: "employee", label: "الموظفين", icon: "👷", desc: "لوحة تحكم التشغيل والمراقبة", color: "#10b981", gradient: "linear-gradient(135deg, #10b981, #059669)" },
     { key: "executive", label: "الإدارة العليا", icon: "🏛️", desc: "بوابة متخذي القرار والتقارير التنفيذية", color: "#f59e0b", gradient: "linear-gradient(135deg, #f59e0b, #d97706)" },
-    { key: "citizen", label: "المواطنين", icon: "🏠", desc: "طلب حاويات، إبلاغ عن مشاكل، متابعة الحي", color: "#3b82f6", gradient: "linear-gradient(135deg, #3b82f6, #1d4ed8)" },
+    { key: "citizen", label: "الأفراد", icon: "🏠", desc: "طلب حاويات، إبلاغ عن مشاكل، متابعة الحي", color: "#3b82f6", gradient: "linear-gradient(135deg, #3b82f6, #1d4ed8)" },
   ];
 
   const filteredHints = selectedRole ? ALL_USERS.filter(u => u.role === selectedRole) : ALL_USERS;
