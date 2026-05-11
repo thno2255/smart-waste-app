@@ -231,7 +231,7 @@ const AuthProvider = ({ children }) => {
 // ============================================================
 const DISTRICTS = ["حي الخليج","حي الفايزية","حي الإسكان","حي الريان","حي السالمية","حي الحمر","حي المنتزه","حي الأفق","حي النقع","حي الضاحي","حي الهلالية","حي البصيرة"];
 const ROLES_LIST = [
-  { value: "citizen",   label: "مواطن",      icon: <Home size={22} />,       desc: "طلب حاويات ومتابعة الخدمات", color: "#10b981" },
+  { value: "citizen",   label: "فرد",        icon: <Home size={22} />,       desc: "طلب حاويات ومتابعة الخدمات", color: "#10b981" },
   { value: "employee",  label: "موظف",       icon: <HardHat size={22} />,    desc: "إدارة المحطات والعمليات",    color: "#3b82f6" },
   { value: "executive", label: "إدارة عليا", icon: <Landmark size={22} />,   desc: "لوحة متخذي القرار",          color: "#f59e0b" },
 ];
