@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="الأمر الجاهز لنشاط معسكر تحليل الأعمال — بناء نظام متصل بقاعدة بيانات حقيقية.">
+<meta name="theme-color" content="#0a2731">
+<meta property="og:title" content="ابنِ نظامك متصلًا بقاعدة بيانات">
+<meta property="og:description" content="نشاط عملي — معسكر تحليل الأعمال، جمعية نماء للاستشارات والأبحاث.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230f3642'/%3E%3Ctext y='68' x='50' font-size='52' text-anchor='middle' fill='%234fc98d' font-family='sans-serif'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
+<title>أمر بناء نظام متصل</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@400;700;900&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#0a2731;
+    --panel:#0f3642;
+    --panel-2:#123f4d;
+    --edge:#1c5566;
+    --ink:#e8f2f2;
+    --ink-soft:#a5c4cb;
+    --ink-faint:#7ca3ad;
+    --green:#4fc98d;
+    --green-deep:#052a1d;
+    --cyan:#5cc8e0;
+    --gold:#e3b95c;
+    --rose:#e88f7a;
+  }
+  body{
+    direction:rtl;
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif;
+    font-size:16px;
+    line-height:1.9;
+  }
+  .wrap{max-width:780px;margin:0 auto;padding-inline:20px;padding-block:34px 70px;}
+
+  .head{text-align:center;margin-bottom:30px;}
+  .mark{
+    width:72px;height:72px;margin:0 auto 18px;border-radius:20px;
+    background:linear-gradient(150deg,#14505f,#1b7a72);
+    display:flex;align-items:center;justify-content:center;
+    font-family:"Noto Kufi Arabic",sans-serif;font-weight:900;font-size:26px;color:#dff5ee;
+    border:1px solid var(--edge);
+  }
+  h1{
+    font-family:"Noto Kufi Arabic",sans-serif;font-weight:900;
+    font-size:clamp(26px,6vw,38px);margin:0 0 10px;color:#fff;text-wrap:balance;
+  }
+  .head .lede{margin:0 0 6px;color:var(--ink-soft);font-size:15.5px;}
+  .head .meta{margin:0;color:var(--ink-faint);font-size:13px;}
+  .chip{
+    display:inline-block;margin-top:16px;padding:6px 18px;border-radius:999px;
+    background:rgba(79,201,141,.12);border:1px solid rgba(79,201,141,.45);
+    color:var(--green);font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;font-size:13px;
+  }
+
+  .idea{
+    border:1px solid var(--edge);border-radius:12px;
+    background:var(--panel);
+    padding:16px 20px;margin:26px 0 22px;
+    font-size:15px;color:var(--ink-soft);text-align:center;
+  }
+  .idea b{color:var(--green);font-weight:600;}
+
+  .copy{
+    display:block;width:100%;box-sizing:border-box;
+    font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;font-size:18px;
+    background:var(--green);color:var(--green-deep);
+    border:0;border-radius:12px;padding:18px 20px;cursor:pointer;
+    transition:background .2s ease,transform .1s ease;
+  }
+  .copy:hover{background:#63d79b;}
+  .copy:active{transform:translateY(1px);}
+  .copy:focus-visible{outline:3px solid var(--gold);outline-offset:3px;}
+  .copy[data-done="1"]{background:var(--gold);color:#2a1e00;}
+  .hint{text-align:center;color:var(--ink-faint);font-size:13px;margin:10px 0 0;}
+
+  .prompt{
+    border:1px solid var(--edge);border-radius:14px;
+    background:var(--panel-2);
+    padding:24px 22px;margin-top:22px;
+    white-space:pre-wrap;word-break:break-word;
+    font-size:14.5px;line-height:2.05;
+  }
+  .prompt b{color:var(--cyan);font-weight:600;}
+  .prompt i{color:var(--gold);font-style:normal;}
+
+  h2{
+    font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;font-size:20px;
+    color:#fff;margin:52px 0 6px;text-wrap:balance;
+  }
+  h2 + p.sub{margin:0 0 4px;color:var(--ink-soft);font-size:14.5px;}
+
+  .checks{list-style:none;margin:20px 0 0;padding:0;display:grid;gap:12px;}
+  .checks li{
+    display:grid;grid-template-columns:20px 1fr;gap:12px;align-items:start;
+    background:var(--panel);border:1px solid var(--edge);border-radius:10px;
+    padding:12px 16px;font-size:14.5px;color:var(--ink-soft);
+  }
+  .checks li::before{
+    content:"";width:15px;height:15px;margin-top:8px;border-radius:4px;
+    border:2px solid var(--green);
+  }
+
+  .tools{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:18px;}
+  .tools span{
+    font-size:13px;font-family:"Noto Kufi Arabic",sans-serif;
+    background:var(--panel);border:1px solid var(--edge);color:var(--ink-soft);
+    border-radius:999px;padding:6px 16px;
+  }
+
+  footer{
+    margin-top:56px;padding-top:20px;border-top:1px solid var(--edge);
+    text-align:center;color:var(--ink-faint);font-size:13px;
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header class="head">
+    <div class="mark">نماء</div>
+    <h1>ابنِ نظامك متصلًا بقاعدة بيانات</h1>
+    <p class="lede">نشاط عملي — من الأمر إلى نظام يحفظ بياناته فعلًا</p>
+    <p class="meta">معسكر تحليل الأعمال: من البيانات إلى القرار — جمعية نماء للاستشارات والأبحاث</p>
+    <span class="chip">الأمر الأول — البناء والربط</span>
+  </header>
+
+  <div class="idea"><b>المفهوم:</b> ما لم يُحفظ في قاعدة بيانات، لم يحدث. الأمر أدناه يُلزم النموذج بأن يبني نظامًا يتذكّر، لا واجهة تنسى.</div>
+
+  <button class="copy" id="copyMain" type="button">نسخ الأمر كاملًا</button>
+  <p class="hint">النص كامل وجاهز للّصق في أي نموذج لغوي — املأ الأقواس الملوّنة قبل الإرسال</p>
+
+  <div class="prompt" id="mainPrompt"><b>الدور:</b> تصرّف كمهندس برمجيات متخصص في بناء أنظمة ويب متصلة بقاعدة بيانات سحابية، تبني نماذج قابلة للتجربة الفعلية لا للعرض فقط.
+
+<b>المهمة:</b> ابنِ نسخة أولى كاملة من نظام <i>[اسم النظام]</i> تعمل من أول نقرة إلى آخرها، وتحفظ بياناتها في قاعدة بيانات حقيقية لا في متغيرات داخل الكود.
+
+<b>المشروع:</b> <i>[اكتب هنا سطرًا واحدًا عن نظام تعرفه من عملك: من يستخدمه، وما الرحلة التي يقطعها فيه من أولها إلى آخرها]</i>
+
+<b>السياق:</b> الجهة <i>[اسمها ونوع نشاطها]</i>. المستخدمون وأدوارهم <i>[مثال: موظف استقبال يسجّل الطلب، مشرف يعتمده، مستفيد يتابع حالته]</i>. البيانات التي يتعامل معها النظام <i>[من أربعة إلى ستة أنواع]</i>. الوضع اليوم <i>[ورق أم واتساب أم إكسل]</i>. الحالات الحدّية التي تحدث فعلًا <i>[اذكر اثنتين]</i>.
+
+<b>آلية العمل:</b> ابدأ رسالتك بالنظام نفسه مباشرة، بلا مقدمة ولا خطة بناء، ولا تسألني أي سؤال قبل أن تنتج النسخة الأولى كاملة. وإن احتجت افتراضًا فاذكره في سطر واحد في آخر ردك ثم امضِ.
+
+<b>القيود:</b> استخدم React مع Vite للواجهة، و Firebase بخدمتَي Authentication و Cloud Firestore للباك اند. لا تخزّن أي بيانات في متغيرات داخل الكود ولا في ذاكرة المتصفح؛ كل قراءة وكتابة تمر عبر قاعدة البيانات. استخدم القراءة اللحظية عبر onSnapshot حتى يظهر أي تغيير عند بقية المستخدمين دون تحديث الصفحة. اجمع كل عمليات قاعدة البيانات في ملف خدمة واحد باسم firestoreService.js ولا تكررها داخل ملفات الواجهة. أضف تسجيل دخول بالبريد وكلمة المرور، واحفظ لكل مستخدم حقل دور، واجعل الشاشات تتغير بحسب الدور. اكتب ملف قواعد أمان باسم firestore.rules يمنع المستخدم من تعديل دوره ومن قراءة بيانات غيره. الواجهة بالعربية واتجاهها من اليمين إلى اليسار، والبيانات التجريبية واقعية وموسومة بوضوح بأنها تجريبية.
+
+<b>المخرجات:</b> هيكل المشروع وقائمة الملفات ودور كل ملف في سطر. ثم الكود كاملًا ملفًا ملفًا جاهزًا للّصق. ثم ملف firestore.rules. ثم شكل البيانات: اسم كل مجموعة والحقول داخلها. ثم خطوات التشغيل من الصفر في نقاط مرقّمة بما فيها إنشاء مشروع Firebase.
+
+<b>معايير القبول:</b> يُكمل شخص لم يرَ النظام الرحلة كاملة دون أن أشرح له. وإذا فتحته في متصفحين وغيّرت شيئًا في أحدهما ظهر في الآخر خلال ثانية. وإذا أغلقت المتصفح وفتحته من جديد بقيت البيانات كما تركتها. ولا يوجد زر لا يعمل، ولا شاشة فارغة، ولا بيانات مكتوبة داخل الكود.</div>
+
+  <h2>الأمر الثاني — بعد أن تصل النسخة الأولى</h2>
+  <p class="sub">لا تعِد الشرح من البداية. أضف ما لا يعرفه النموذج عن واقع جهتك، واطلب النسخة الثانية.</p>
+
+  <button class="copy" id="copySecond" type="button" style="margin-top:18px">نسخ أمر السياق</button>
+  <p class="hint">أرسله في المحادثة نفسها، لا في محادثة جديدة</p>
+
+  <div class="prompt" id="secondPrompt">لا تسألني عن المشروع ولا عن القيود ولا عن الرحلة، فكلها في هذه المحادثة. أضف إلى ما بنيته هذا السياق الذي لم تكن تعرفه:
+
+<b>الحجم الحقيقي:</b> <i>[كم مستخدمًا، كم طلبًا في اليوم، متى يزداد الضغط]</i>
+<b>القواعد التي تحكم العمل:</b> <i>[مثال: لا يُقبل الطلب قبل ثمان وأربعين ساعة، ولا يُلغى بعد الاعتماد]</i>
+<b>الحالات الحدّية:</b> <i>[اذكر ثلاثًا تحدث فعلًا اليوم]</i>
+<b>الهوية البصرية:</b> <i>[اللون الأساسي، والخط، واسم الجهة كما يُكتب]</i>
+
+ثم نفّذ ثلاثة أشياء بالترتيب: اذكر في ثلاثة أسطر ما الذي تغيّر في فهمك للنظام بعد هذا السياق. ثم أخرج النسخة الثانية التي تعالج ما تغيّر، دون توسيع النطاق وبلا إضافة أي شاشة جديدة. ثم اذكر ثلاث نقاط بقيت ضعيفة في النموذج، وما يعجز عن إثباته.</div>
+
+  <h2>افحص ناتجك بهذه المعايير</h2>
+  <p class="sub">كل بند يُجاب عنه بنعم أو لا. لا يوجد «تقريبًا».</p>
+  <ul class="checks">
+    <li>البيانات تبقى بعد إغلاق المتصفح وفتحه من جديد.</li>
+    <li>التغيير في متصفح يظهر في متصفح آخر دون تحديث الصفحة.</li>
+    <li>يوجد تسجيل دخول، والشاشات تختلف باختلاف الدور.</li>
+    <li>يوجد ملف قواعد أمان يمنع المستخدم من رفع صلاحيته.</li>
+    <li>رحلة واحدة كاملة تعمل من أولها إلى آخرها بلا زر معطّل.</li>
+    <li>تستطيع أن تشرح لماذا اخترت هذا الشكل، لا أن تعرضه فقط.</li>
+  </ul>
+
+  <h2>أين تلصق الأمر</h2>
+  <p class="sub">أي أداة من هذه تكفي. الأمر واحد، والنتيجة تختلف قليلًا.</p>
+  <div class="tools">
+    <span>Claude</span><span>ChatGPT</span><span>Gemini</span><span>Claude داخل VS Code</span><span>Lovable</span><span>Base44</span>
+  </div>
+
+  <footer>معسكر تحليل الأعمال — من البيانات إلى القرار · جمعية نماء للاستشارات والأبحاث</footer>
+</div>
+
+<script>
+  function wire(btnId, boxId, label){
+    var btn = document.getElementById(btnId);
+    var box = document.getElementById(boxId);
+    btn.addEventListener("click", function(){
+      var text = box.innerText;
+      var done = function(){
+        btn.textContent = "تم النسخ ✓";
+        btn.setAttribute("data-done","1");
+        setTimeout(function(){
+          btn.textContent = label;
+          btn.removeAttribute("data-done");
+        }, 2200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(done, function(){ fallback(text, done); });
+      } else { fallback(text, done); }
+    });
+  }
+  function fallback(text, done){
+    try{
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta); done();
+    } catch(e){ window.prompt("انسخ الأمر يدويًا:", text); }
+  }
+  wire("copyMain","mainPrompt","نسخ الأمر كاملًا");
+  wire("copySecond","secondPrompt","نسخ أمر السياق");
+</script>
+
+</body>
+</html>
