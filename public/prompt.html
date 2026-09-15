@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@400;700;900&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230f3642'/%3E%3Ctext y='70' x='50' font-size='54' text-anchor='middle' fill='%234fc98d' font-family='sans-serif'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230f3642'/%3E%3Cellipse cx='50' cy='33' rx='24' ry='9' fill='none' stroke='%234fc98d' stroke-width='6'/%3E%3Cpath d='M26 33v34c0 5 11 9 24 9s24-4 24-9V33' fill='none' stroke='%234fc98d' stroke-width='6'/%3E%3Cpath d='M26 50c0 5 11 9 24 9s24-4 24-9' fill='none' stroke='%234fc98d' stroke-width='6'/%3E%3C/svg%3E">
 <style>
   :root{
     --bg:#0a2731;
@@ -43,7 +43,6 @@
     background:linear-gradient(150deg,#14505f,#1b7a72);
     border:1px solid var(--edge);
     display:flex;align-items:center;justify-content:center;
-    font-size:28px;
   }
   h1{
     font-family:"Noto Kufi Arabic",sans-serif;font-weight:900;
@@ -56,13 +55,6 @@
     color:var(--green);font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;font-size:13px;
   }
 
-  .idea{
-    border:1px solid var(--edge);border-radius:12px;background:var(--panel);
-    padding:16px 20px;margin:26px 0 22px;
-    font-size:15px;color:var(--ink-soft);text-align:center;
-  }
-  .idea b{color:var(--green);font-weight:600;}
-
   .copy{
     display:block;width:100%;box-sizing:border-box;
     font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;font-size:18px;
@@ -74,7 +66,6 @@
   .copy:active{transform:translateY(1px);}
   .copy:focus-visible{outline:3px solid var(--gold);outline-offset:3px;}
   .copy[data-done="1"]{background:var(--gold);color:#2a1e00;}
-  .hint{text-align:center;color:var(--ink-faint);font-size:13px;margin:10px 0 0;}
 
   .prompt{
     border:1px solid var(--edge);border-radius:14px;background:var(--panel-2);
@@ -83,13 +74,11 @@
     font-size:14.5px;line-height:2.05;
   }
   .prompt b{color:var(--cyan);font-weight:600;}
-  .prompt .swap{color:var(--gold);}
 
   h2{
     font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;font-size:20px;
     color:#fff;margin:52px 0 6px;text-wrap:balance;
   }
-  h2 + p.sub{margin:0 0 4px;color:var(--ink-soft);font-size:14.5px;}
 
   .checks{list-style:none;margin:20px 0 0;padding:0;display:grid;gap:12px;}
   .checks li{
@@ -124,22 +113,25 @@
 <body>
 <div class="wrap">
   <header class="head">
-    <div class="mark">⚡</div>
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 100 100" width="34" height="34" fill="none" stroke="#4fc98d" stroke-width="7" stroke-linecap="round">
+        <ellipse cx="50" cy="26" rx="26" ry="10"></ellipse>
+        <path d="M24 26v48c0 5.5 11.6 10 26 10s26-4.5 26-10V26"></path>
+        <path d="M24 50c0 5.5 11.6 10 26 10s26-4.5 26-10"></path>
+      </svg>
+    </div>
     <h1>ابنِ نظامك متصلًا بقاعدة بيانات</h1>
     <p class="lede">أمر واحد كامل — من الفكرة إلى نظام يحفظ بياناته فعلًا</p>
     <span class="chip">الأمر الأول — البناء والربط</span>
   </header>
 
-  <div class="idea"><b>المفهوم:</b> ما لم يُحفظ في قاعدة بيانات، لم يحدث. هذا الأمر يُلزم النموذج بأن يبني نظامًا يتذكّر، لا واجهة تنسى.</div>
-
   <button class="copy" id="copyMain" type="button">نسخ الأمر كاملًا</button>
-  <p class="hint">الأمر مكتمل وجاهز للّصق مباشرة في أي نموذج لغوي</p>
 
   <div class="prompt" id="mainPrompt"><b>الدور:</b> تصرّف كمهندس برمجيات متخصص في بناء أنظمة ويب متصلة بقاعدة بيانات سحابية، تبني نماذج قابلة للتجربة الفعلية لا للعرض فقط.
 
 <b>المهمة:</b> ابنِ نسخة أولى كاملة من النظام الموصوف أدناه، تعمل من أول نقرة إلى آخرها، وتحفظ بياناتها في قاعدة بيانات حقيقية لا في متغيرات داخل الكود.
 
-<b>المشروع:</b> <span class="swap">نظام تسجيل المستفيدين في برنامج تدريبي: المستفيد يقدّم طلب تسجيل في دورة، وموظف القبول يراجع الطلب فيقبله أو يرفضه مع ذكر السبب، والمشرف يتابع الأعداد ونسب إشغال المقاعد حتى إغلاق التسجيل.</span>
+<b>المشروع:</b> نظام تسجيل المستفيدين في برنامج تدريبي: المستفيد يقدّم طلب تسجيل في دورة، وموظف القبول يراجع الطلب فيقبله أو يرفضه مع ذكر السبب، والمشرف يتابع الأعداد ونسب إشغال المقاعد حتى إغلاق التسجيل.
 
 <b>السياق:</b>
 الجهة: مركز تدريب يقدّم دورات قصيرة، وينفّذ في الفصل الواحد نحو اثنتي عشرة دورة.
@@ -156,13 +148,9 @@
 
 <b>معايير القبول:</b> يُكمل شخص لم يرَ النظام الرحلة كاملة دون أن أشرح له. وإذا فتحته في متصفحين وغيّرت شيئًا في أحدهما ظهر في الآخر خلال ثانية. وإذا أغلقت المتصفح وفتحته من جديد بقيت البيانات كما تركتها. ولا يوجد زر لا يعمل، ولا شاشة فارغة، ولا بيانات مكتوبة داخل الكود.</div>
 
-  <div class="idea" style="margin-top:18px">السطر الملوّن هو <b>المشروع</b> وحده. انسخ الأمر كما هو لتجربته فورًا، أو بدّل ذلك السطر بسطر واحد عن نظام تعرفه من عملك، ثم عدّل السياق تحته بما يناسبه.</div>
-
   <h2>الأمر الثاني — بعد أن تصل النسخة الأولى</h2>
-  <p class="sub">لا تعِد الشرح من البداية. أضف ما لا يعرفه النموذج عن الواقع، واطلب النسخة الثانية.</p>
 
   <button class="copy" id="copySecond" type="button" style="margin-top:18px">نسخ أمر السياق</button>
-  <p class="hint">أرسله في المحادثة نفسها، لا في محادثة جديدة</p>
 
   <div class="prompt" id="secondPrompt">لا تسألني عن المشروع ولا عن القيود ولا عن الرحلة، فكلها في هذه المحادثة. أضف إلى ما بنيته هذا السياق الذي لم تكن تعرفه:
 
@@ -177,7 +165,6 @@
 ثم نفّذ ثلاثة أشياء بالترتيب: اذكر في ثلاثة أسطر ما الذي تغيّر في فهمك للنظام بعد هذا السياق. ثم أخرج النسخة الثانية التي تعالج ما تغيّر، دون توسيع النطاق وبلا إضافة أي شاشة جديدة. ثم اذكر ثلاث نقاط بقيت ضعيفة في النموذج، وما يعجز عن إثباته.</div>
 
   <h2>افحص ناتجك بهذه المعايير</h2>
-  <p class="sub">كل بند يُجاب عنه بنعم أو لا. لا يوجد «تقريبًا».</p>
   <ul class="checks">
     <li>البيانات تبقى بعد إغلاق المتصفح وفتحه من جديد.</li>
     <li>التغيير في متصفح يظهر في متصفح آخر دون تحديث الصفحة.</li>
@@ -188,7 +175,6 @@
   </ul>
 
   <h2>أين تلصق الأمر</h2>
-  <p class="sub">أي أداة من هذه تكفي. الأمر واحد، والنتيجة تختلف قليلًا.</p>
   <div class="tools">
     <span>Claude</span><span>ChatGPT</span><span>Gemini</span><span>Claude داخل VS Code</span><span>Lovable</span><span>Base44</span>
   </div>
