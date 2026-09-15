@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="الأمر الجاهز لنشاط معسكر تحليل الأعمال — بناء نظام متصل بقاعدة بيانات حقيقية.">
+<meta name="description" content="أمر جاهز للنسخ: ابنِ نظامًا متصلًا بقاعدة بيانات حقيقية من أول رسالة.">
 <meta name="theme-color" content="#0a2731">
 <meta property="og:title" content="ابنِ نظامك متصلًا بقاعدة بيانات">
-<meta property="og:description" content="نشاط عملي — معسكر تحليل الأعمال، جمعية نماء للاستشارات والأبحاث.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230f3642'/%3E%3Ctext y='68' x='50' font-size='52' text-anchor='middle' fill='%234fc98d' font-family='sans-serif'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
+<meta property="og:description" content="أمر واحد كامل وجاهز للّصق في أي نموذج لغوي.">
 <title>أمر بناء نظام متصل</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@400;700;900&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230f3642'/%3E%3Ctext y='70' x='50' font-size='54' text-anchor='middle' fill='%234fc98d' font-family='sans-serif'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
 <style>
   :root{
     --bg:#0a2731;
@@ -25,33 +25,31 @@
     --green-deep:#052a1d;
     --cyan:#5cc8e0;
     --gold:#e3b95c;
-    --rose:#e88f7a;
   }
+  html,body{margin:0;padding:0;}
   body{
     direction:rtl;
-    margin:0;
     background:var(--bg);
     color:var(--ink);
     font-family:"IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif;
     font-size:16px;
     line-height:1.9;
   }
-  .wrap{max-width:780px;margin:0 auto;padding-inline:20px;padding-block:34px 70px;}
+  .wrap{max-width:780px;margin:0 auto;padding-inline:20px;padding-block:38px 70px;}
 
-  .head{text-align:center;margin-bottom:30px;}
+  .head{text-align:center;margin-bottom:28px;}
   .mark{
-    width:72px;height:72px;margin:0 auto 18px;border-radius:20px;
+    width:66px;height:66px;margin:0 auto 18px;border-radius:19px;
     background:linear-gradient(150deg,#14505f,#1b7a72);
-    display:flex;align-items:center;justify-content:center;
-    font-family:"Noto Kufi Arabic",sans-serif;font-weight:900;font-size:26px;color:#dff5ee;
     border:1px solid var(--edge);
+    display:flex;align-items:center;justify-content:center;
+    font-size:28px;
   }
   h1{
     font-family:"Noto Kufi Arabic",sans-serif;font-weight:900;
-    font-size:clamp(26px,6vw,38px);margin:0 0 10px;color:#fff;text-wrap:balance;
+    font-size:clamp(25px,6vw,36px);margin:0 0 10px;color:#fff;text-wrap:balance;
   }
-  .head .lede{margin:0 0 6px;color:var(--ink-soft);font-size:15.5px;}
-  .head .meta{margin:0;color:var(--ink-faint);font-size:13px;}
+  .head .lede{margin:0;color:var(--ink-soft);font-size:15.5px;}
   .chip{
     display:inline-block;margin-top:16px;padding:6px 18px;border-radius:999px;
     background:rgba(79,201,141,.12);border:1px solid rgba(79,201,141,.45);
@@ -59,8 +57,7 @@
   }
 
   .idea{
-    border:1px solid var(--edge);border-radius:12px;
-    background:var(--panel);
+    border:1px solid var(--edge);border-radius:12px;background:var(--panel);
     padding:16px 20px;margin:26px 0 22px;
     font-size:15px;color:var(--ink-soft);text-align:center;
   }
@@ -80,14 +77,13 @@
   .hint{text-align:center;color:var(--ink-faint);font-size:13px;margin:10px 0 0;}
 
   .prompt{
-    border:1px solid var(--edge);border-radius:14px;
-    background:var(--panel-2);
+    border:1px solid var(--edge);border-radius:14px;background:var(--panel-2);
     padding:24px 22px;margin-top:22px;
     white-space:pre-wrap;word-break:break-word;
     font-size:14.5px;line-height:2.05;
   }
   .prompt b{color:var(--cyan);font-weight:600;}
-  .prompt i{color:var(--gold);font-style:normal;}
+  .prompt .swap{color:var(--gold);}
 
   h2{
     font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;font-size:20px;
@@ -114,35 +110,43 @@
   }
 
   footer{
-    margin-top:56px;padding-top:20px;border-top:1px solid var(--edge);
-    text-align:center;color:var(--ink-faint);font-size:13px;
+    margin-top:56px;padding-top:22px;border-top:1px solid var(--edge);
+    text-align:center;
   }
+  footer .name{
+    font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;
+    color:var(--ink);font-size:15px;display:block;
+  }
+  footer .role{color:var(--ink-faint);font-size:13px;}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
 </style>
-
 </head>
 <body>
 <div class="wrap">
   <header class="head">
-    <div class="mark">نماء</div>
+    <div class="mark">⚡</div>
     <h1>ابنِ نظامك متصلًا بقاعدة بيانات</h1>
-    <p class="lede">نشاط عملي — من الأمر إلى نظام يحفظ بياناته فعلًا</p>
-    <p class="meta">معسكر تحليل الأعمال: من البيانات إلى القرار — جمعية نماء للاستشارات والأبحاث</p>
+    <p class="lede">أمر واحد كامل — من الفكرة إلى نظام يحفظ بياناته فعلًا</p>
     <span class="chip">الأمر الأول — البناء والربط</span>
   </header>
 
-  <div class="idea"><b>المفهوم:</b> ما لم يُحفظ في قاعدة بيانات، لم يحدث. الأمر أدناه يُلزم النموذج بأن يبني نظامًا يتذكّر، لا واجهة تنسى.</div>
+  <div class="idea"><b>المفهوم:</b> ما لم يُحفظ في قاعدة بيانات، لم يحدث. هذا الأمر يُلزم النموذج بأن يبني نظامًا يتذكّر، لا واجهة تنسى.</div>
 
   <button class="copy" id="copyMain" type="button">نسخ الأمر كاملًا</button>
-  <p class="hint">النص كامل وجاهز للّصق في أي نموذج لغوي — املأ الأقواس الملوّنة قبل الإرسال</p>
+  <p class="hint">الأمر مكتمل وجاهز للّصق مباشرة في أي نموذج لغوي</p>
 
   <div class="prompt" id="mainPrompt"><b>الدور:</b> تصرّف كمهندس برمجيات متخصص في بناء أنظمة ويب متصلة بقاعدة بيانات سحابية، تبني نماذج قابلة للتجربة الفعلية لا للعرض فقط.
 
-<b>المهمة:</b> ابنِ نسخة أولى كاملة من نظام <i>[اسم النظام]</i> تعمل من أول نقرة إلى آخرها، وتحفظ بياناتها في قاعدة بيانات حقيقية لا في متغيرات داخل الكود.
+<b>المهمة:</b> ابنِ نسخة أولى كاملة من النظام الموصوف أدناه، تعمل من أول نقرة إلى آخرها، وتحفظ بياناتها في قاعدة بيانات حقيقية لا في متغيرات داخل الكود.
 
-<b>المشروع:</b> <i>[اكتب هنا سطرًا واحدًا عن نظام تعرفه من عملك: من يستخدمه، وما الرحلة التي يقطعها فيه من أولها إلى آخرها]</i>
+<b>المشروع:</b> <span class="swap">نظام تسجيل المستفيدين في برنامج تدريبي: المستفيد يقدّم طلب تسجيل في دورة، وموظف القبول يراجع الطلب فيقبله أو يرفضه مع ذكر السبب، والمشرف يتابع الأعداد ونسب إشغال المقاعد حتى إغلاق التسجيل.</span>
 
-<b>السياق:</b> الجهة <i>[اسمها ونوع نشاطها]</i>. المستخدمون وأدوارهم <i>[مثال: موظف استقبال يسجّل الطلب، مشرف يعتمده، مستفيد يتابع حالته]</i>. البيانات التي يتعامل معها النظام <i>[من أربعة إلى ستة أنواع]</i>. الوضع اليوم <i>[ورق أم واتساب أم إكسل]</i>. الحالات الحدّية التي تحدث فعلًا <i>[اذكر اثنتين]</i>.
+<b>السياق:</b>
+الجهة: مركز تدريب يقدّم دورات قصيرة، وينفّذ في الفصل الواحد نحو اثنتي عشرة دورة.
+المستخدمون وأدوارهم: مستفيد يقدّم طلبًا ويتابع حالته؛ وموظف قبول يراجع الطلبات ويقبل أو يرفض مع ذكر السبب؛ ومشرف يرى لوحة الأعداد ونسب الإشغال ويغلق التسجيل على أي دورة.
+البيانات التي يتعامل معها النظام: الدورات (الاسم، المدرب، عدد المقاعد، تاريخ البداية)، وطلبات التسجيل (المستفيد، الدورة، الحالة، سبب الرفض)، والمستفيدون (الاسم، الجوال، البريد، جهة العمل)، والمستخدمون بأدوارهم.
+الوضع اليوم: الطلبات تصل عبر نموذج إلكتروني، ثم تُنسخ يدويًا إلى ملف إكسل، ولا يعرف المستفيد حالة طلبه إلا إذا اتصل بالمركز.
+الحالات الحدّية التي تحدث فعلًا: تمتلئ مقاعد الدورة بينما هناك طلبات ما زالت قيد المراجعة؛ ويعتذر مستفيد بعد قبوله فيجب أن يعود مقعده متاحًا.
 
 <b>آلية العمل:</b> ابدأ رسالتك بالنظام نفسه مباشرة، بلا مقدمة ولا خطة بناء، ولا تسألني أي سؤال قبل أن تنتج النسخة الأولى كاملة. وإن احتجت افتراضًا فاذكره في سطر واحد في آخر ردك ثم امضِ.
 
@@ -152,18 +156,23 @@
 
 <b>معايير القبول:</b> يُكمل شخص لم يرَ النظام الرحلة كاملة دون أن أشرح له. وإذا فتحته في متصفحين وغيّرت شيئًا في أحدهما ظهر في الآخر خلال ثانية. وإذا أغلقت المتصفح وفتحته من جديد بقيت البيانات كما تركتها. ولا يوجد زر لا يعمل، ولا شاشة فارغة، ولا بيانات مكتوبة داخل الكود.</div>
 
+  <div class="idea" style="margin-top:18px">السطر الملوّن هو <b>المشروع</b> وحده. انسخ الأمر كما هو لتجربته فورًا، أو بدّل ذلك السطر بسطر واحد عن نظام تعرفه من عملك، ثم عدّل السياق تحته بما يناسبه.</div>
+
   <h2>الأمر الثاني — بعد أن تصل النسخة الأولى</h2>
-  <p class="sub">لا تعِد الشرح من البداية. أضف ما لا يعرفه النموذج عن واقع جهتك، واطلب النسخة الثانية.</p>
+  <p class="sub">لا تعِد الشرح من البداية. أضف ما لا يعرفه النموذج عن الواقع، واطلب النسخة الثانية.</p>
 
   <button class="copy" id="copySecond" type="button" style="margin-top:18px">نسخ أمر السياق</button>
   <p class="hint">أرسله في المحادثة نفسها، لا في محادثة جديدة</p>
 
   <div class="prompt" id="secondPrompt">لا تسألني عن المشروع ولا عن القيود ولا عن الرحلة، فكلها في هذه المحادثة. أضف إلى ما بنيته هذا السياق الذي لم تكن تعرفه:
 
-<b>الحجم الحقيقي:</b> <i>[كم مستخدمًا، كم طلبًا في اليوم، متى يزداد الضغط]</i>
-<b>القواعد التي تحكم العمل:</b> <i>[مثال: لا يُقبل الطلب قبل ثمان وأربعين ساعة، ولا يُلغى بعد الاعتماد]</i>
-<b>الحالات الحدّية:</b> <i>[اذكر ثلاثًا تحدث فعلًا اليوم]</i>
-<b>الهوية البصرية:</b> <i>[اللون الأساسي، والخط، واسم الجهة كما يُكتب]</i>
+<b>الحجم الحقيقي:</b> نحو ثلاثمئة طلب في الفصل الواحد، ويتضاعف العدد في الأسبوع الأول من فتح التسجيل، ثم يهدأ.
+
+<b>القواعد التي تحكم العمل:</b> لا يُقبل طلب على دورة امتلأت مقاعدها. ولا يُعدَّل الطلب بعد قبوله. واعتذار المستفيد يعيد مقعده متاحًا في اللحظة نفسها. والرفض لا يُقبل بلا سبب مكتوب.
+
+<b>الحالات الحدّية:</b> طلب مقدَّم على دورة أُلغيت بعد تقديمه. ومستفيد يسجّل في دورتين يتعارض وقتهما. وموظف قبول في إجازة فتتراكم الطلبات بلا مراجعة.
+
+<b>الهوية البصرية:</b> اللون الأساسي أخضر داكن، والخط عربي واضح، واسم الجهة يُكتب «مركز التدريب».
 
 ثم نفّذ ثلاثة أشياء بالترتيب: اذكر في ثلاثة أسطر ما الذي تغيّر في فهمك للنظام بعد هذا السياق. ثم أخرج النسخة الثانية التي تعالج ما تغيّر، دون توسيع النطاق وبلا إضافة أي شاشة جديدة. ثم اذكر ثلاث نقاط بقيت ضعيفة في النموذج، وما يعجز عن إثباته.</div>
 
@@ -184,7 +193,10 @@
     <span>Claude</span><span>ChatGPT</span><span>Gemini</span><span>Claude داخل VS Code</span><span>Lovable</span><span>Base44</span>
   </div>
 
-  <footer>معسكر تحليل الأعمال — من البيانات إلى القرار · جمعية نماء للاستشارات والأبحاث</footer>
+  <footer>
+    <span class="name">المثنى الفهيد</span>
+    <span class="role">بناء الأنظمة بالذكاء الاصطناعي — من الواجهة إلى الباك اند</span>
+  </footer>
 </div>
 
 <script>
@@ -218,6 +230,5 @@
   wire("copyMain","mainPrompt","نسخ الأمر كاملًا");
   wire("copySecond","secondPrompt","نسخ أمر السياق");
 </script>
-
 </body>
 </html>
