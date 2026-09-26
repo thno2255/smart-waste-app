@@ -1,223 +1,281 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="الأمر الجاهز لنشاط معسكر تحليل الأعمال — بناء نظام متصل بقاعدة بيانات حقيقية.">
-<meta name="theme-color" content="#0a2731">
-<meta property="og:title" content="ابنِ نظامك متصلًا بقاعدة بيانات">
-<meta property="og:description" content="نشاط عملي — معسكر تحليل الأعمال، جمعية نماء للاستشارات والأبحاث.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230f3642'/%3E%3Ctext y='68' x='50' font-size='52' text-anchor='middle' fill='%234fc98d' font-family='sans-serif'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
-<title>أمر بناء نظام متصل</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@400;700;900&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap">
+<meta name="theme-color" content="#072B34">
+<title>أمر بناء النموذج — معسكر تحليل الأعمال</title>
 <style>
   :root{
-    --bg:#0a2731;
-    --panel:#0f3642;
-    --panel-2:#123f4d;
-    --edge:#1c5566;
-    --ink:#e8f2f2;
-    --ink-soft:#a5c4cb;
-    --ink-faint:#7ca3ad;
-    --green:#4fc98d;
-    --green-deep:#052a1d;
-    --cyan:#5cc8e0;
-    --gold:#e3b95c;
-    --rose:#e88f7a;
+    --deep:#072B34; --panel:#134C58; --edge:#1C5A67; --emph:#1A6270;
+    --emphEdge:#2A7E8E; --text:#FFFFFF; --muted:#A8C2C8; --light:#CFE2E5;
+    --green:#4E9F3D; --greenHi:#73B84A; --warn:#E08878;
   }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
   body{
-    direction:rtl;
-    margin:0;
-    background:var(--bg);
-    color:var(--ink);
-    font-family:"IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif;
-    font-size:16px;
-    line-height:1.9;
+    background:var(--deep); color:var(--text);
+    font-family:"SF Arabic","Geeza Pro","Segoe UI",Tahoma,Arial,sans-serif;
+    line-height:1.75; padding:20px 16px 64px; font-size:16px;
   }
-  .wrap{max-width:780px;margin:0 auto;padding-inline:20px;padding-block:34px 70px;}
-
-  .head{text-align:center;margin-bottom:30px;}
-  .mark{
-    width:72px;height:72px;margin:0 auto 18px;border-radius:20px;
-    background:linear-gradient(150deg,#14505f,#1b7a72);
-    display:flex;align-items:center;justify-content:center;
-    font-family:"Noto Kufi Arabic",sans-serif;font-weight:900;font-size:26px;color:#dff5ee;
-    border:1px solid var(--edge);
+  .wrap{max-width:780px;margin:0 auto}
+  header{padding:8px 0 18px;border-bottom:1px solid var(--edge);margin-bottom:22px}
+  .kicker{color:var(--greenHi);font-size:13px;letter-spacing:.02em;margin:0 0 6px}
+  h1{font-size:26px;line-height:1.35;margin:0 0 8px;font-weight:700}
+  .lede{color:var(--muted);font-size:15px;margin:0}
+  h2{font-size:18px;margin:26px 0 10px;font-weight:700}
+  .step{display:flex;align-items:center;gap:10px;margin:26px 0 12px}
+  .num{
+    flex:0 0 auto;width:30px;height:30px;border-radius:9px;background:var(--emph);
+    border:1px solid var(--emphEdge);display:grid;place-items:center;
+    font-size:14px;font-weight:700
   }
-  h1{
-    font-family:"Noto Kufi Arabic",sans-serif;font-weight:900;
-    font-size:clamp(26px,6vw,38px);margin:0 0 10px;color:#fff;text-wrap:balance;
+  .step h2{margin:0}
+  .field{margin:0 0 14px}
+  label{display:block;font-size:14px;font-weight:700;margin:0 0 5px}
+  .hint{display:block;font-size:12.5px;color:var(--muted);font-weight:400;margin:2px 0 6px}
+  input[type=text],textarea{
+    width:100%;background:var(--panel);color:var(--text);
+    border:1px solid var(--edge);border-radius:11px;padding:11px 13px;
+    font:inherit;font-size:15px;outline:none;resize:vertical
   }
-  .head .lede{margin:0 0 6px;color:var(--ink-soft);font-size:15.5px;}
-  .head .meta{margin:0;color:var(--ink-faint);font-size:13px;}
-  .chip{
-    display:inline-block;margin-top:16px;padding:6px 18px;border-radius:999px;
-    background:rgba(79,201,141,.12);border:1px solid rgba(79,201,141,.45);
-    color:var(--green);font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;font-size:13px;
+  input[type=text]:focus,textarea:focus{border-color:var(--emphEdge);background:#16535F}
+  input.empty,textarea.empty{border-color:var(--warn)}
+  .row{display:grid;gap:9px}
+  .btns{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0 6px}
+  button{
+    font:inherit;font-size:15px;font-weight:700;cursor:pointer;
+    border-radius:11px;padding:12px 20px;border:1px solid var(--emphEdge);
+    background:var(--emph);color:var(--text)
   }
-
-  .idea{
-    border:1px solid var(--edge);border-radius:12px;
-    background:var(--panel);
-    padding:16px 20px;margin:26px 0 22px;
-    font-size:15px;color:var(--ink-soft);text-align:center;
+  button.primary{background:var(--green);border-color:var(--greenHi);color:#07231A}
+  button.ghost{background:transparent;color:var(--light)}
+  button:active{transform:translateY(1px)}
+  #status{min-height:22px;font-size:13.5px;margin:4px 0 0;color:var(--greenHi)}
+  #status.warn{color:var(--warn)}
+  pre{
+    background:var(--panel);border:1px solid var(--edge);border-radius:14px;
+    padding:16px;white-space:pre-wrap;word-wrap:break-word;
+    font-family:inherit;font-size:14px;color:var(--light);margin:0;
+    max-height:340px;overflow:auto
   }
-  .idea b{color:var(--green);font-weight:600;}
-
-  .copy{
-    display:block;width:100%;box-sizing:border-box;
-    font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;font-size:18px;
-    background:var(--green);color:var(--green-deep);
-    border:0;border-radius:12px;padding:18px 20px;cursor:pointer;
-    transition:background .2s ease,transform .1s ease;
-  }
-  .copy:hover{background:#63d79b;}
-  .copy:active{transform:translateY(1px);}
-  .copy:focus-visible{outline:3px solid var(--gold);outline-offset:3px;}
-  .copy[data-done="1"]{background:var(--gold);color:#2a1e00;}
-  .hint{text-align:center;color:var(--ink-faint);font-size:13px;margin:10px 0 0;}
-
-  .prompt{
-    border:1px solid var(--edge);border-radius:14px;
-    background:var(--panel-2);
-    padding:24px 22px;margin-top:22px;
-    white-space:pre-wrap;word-break:break-word;
-    font-size:14.5px;line-height:2.05;
-  }
-  .prompt b{color:var(--cyan);font-weight:600;}
-  .prompt i{color:var(--gold);font-style:normal;}
-
-  h2{
-    font-family:"Noto Kufi Arabic",sans-serif;font-weight:700;font-size:20px;
-    color:#fff;margin:52px 0 6px;text-wrap:balance;
-  }
-  h2 + p.sub{margin:0 0 4px;color:var(--ink-soft);font-size:14.5px;}
-
-  .checks{list-style:none;margin:20px 0 0;padding:0;display:grid;gap:12px;}
-  .checks li{
-    display:grid;grid-template-columns:20px 1fr;gap:12px;align-items:start;
-    background:var(--panel);border:1px solid var(--edge);border-radius:10px;
-    padding:12px 16px;font-size:14.5px;color:var(--ink-soft);
-  }
-  .checks li::before{
-    content:"";width:15px;height:15px;margin-top:8px;border-radius:4px;
-    border:2px solid var(--green);
-  }
-
-  .tools{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:18px;}
-  .tools span{
-    font-size:13px;font-family:"Noto Kufi Arabic",sans-serif;
-    background:var(--panel);border:1px solid var(--edge);color:var(--ink-soft);
-    border-radius:999px;padding:6px 16px;
-  }
-
-  footer{
-    margin-top:56px;padding-top:20px;border-top:1px solid var(--edge);
-    text-align:center;color:var(--ink-faint);font-size:13px;
-  }
-  @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
+  details{border:1px solid var(--edge);border-radius:12px;padding:12px 14px;margin:18px 0 0;background:#0D3A45}
+  summary{cursor:pointer;font-weight:700;font-size:15px}
+  details p,details li{color:var(--muted);font-size:14px}
+  ol.crit{padding-inline-start:20px;margin:8px 0 0}
+  ol.crit li{margin:0 0 6px;color:var(--light);font-size:14.5px}
+  footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--edge);
+    color:var(--muted);font-size:13px}
+  footer a{color:var(--greenHi)}
 </style>
-
 </head>
 <body>
 <div class="wrap">
-  <header class="head">
-    <div class="mark">نماء</div>
-    <h1>ابنِ نظامك متصلًا بقاعدة بيانات</h1>
-    <p class="lede">نشاط عملي — من الأمر إلى نظام يحفظ بياناته فعلًا</p>
-    <p class="meta">معسكر تحليل الأعمال: من البيانات إلى القرار — جمعية نماء للاستشارات والأبحاث</p>
-    <span class="chip">الأمر الأول — البناء والربط</span>
+
+  <header>
+    <p class="kicker">معسكر تحليل الأعمال — الورشة السادسة</p>
+    <h1>من المشكلة إلى نظام</h1>
+    <p class="lede">لا تبدأ بالأمر، ابدأ بالمشكلة. املأ تحليلك في الحقول أدناه، فيُبنى لك الأمر كاملًا.</p>
   </header>
 
-  <div class="idea"><b>المفهوم:</b> ما لم يُحفظ في قاعدة بيانات، لم يحدث. الأمر أدناه يُلزم النموذج بأن يبني نظامًا يتذكّر، لا واجهة تنسى.</div>
+  <div class="step"><span class="num">١</span><h2>اكتب تحليلك</h2></div>
 
-  <button class="copy" id="copyMain" type="button">نسخ الأمر كاملًا</button>
-  <p class="hint">النص كامل وجاهز للّصق في أي نموذج لغوي — املأ الأقواس الملوّنة قبل الإرسال</p>
-
-  <div class="prompt" id="mainPrompt"><b>الدور:</b> تصرّف كمهندس برمجيات متخصص في بناء أنظمة ويب متصلة بقاعدة بيانات سحابية، تبني نماذج قابلة للتجربة الفعلية لا للعرض فقط.
-
-<b>المهمة:</b> ابنِ نسخة أولى كاملة من نظام <i>[اسم النظام]</i> تعمل من أول نقرة إلى آخرها، وتحفظ بياناتها في قاعدة بيانات حقيقية لا في متغيرات داخل الكود.
-
-<b>المشروع:</b> <i>[اكتب هنا سطرًا واحدًا عن نظام تعرفه من عملك: من يستخدمه، وما الرحلة التي يقطعها فيه من أولها إلى آخرها]</i>
-
-<b>السياق:</b> الجهة <i>[اسمها ونوع نشاطها]</i>. المستخدمون وأدوارهم <i>[مثال: موظف استقبال يسجّل الطلب، مشرف يعتمده، مستفيد يتابع حالته]</i>. البيانات التي يتعامل معها النظام <i>[من أربعة إلى ستة أنواع]</i>. الوضع اليوم <i>[ورق أم واتساب أم إكسل]</i>. الحالات الحدّية التي تحدث فعلًا <i>[اذكر اثنتين]</i>.
-
-<b>آلية العمل:</b> ابدأ رسالتك بالنظام نفسه مباشرة، بلا مقدمة ولا خطة بناء، ولا تسألني أي سؤال قبل أن تنتج النسخة الأولى كاملة. وإن احتجت افتراضًا فاذكره في سطر واحد في آخر ردك ثم امضِ.
-
-<b>القيود:</b> استخدم React مع Vite للواجهة، و Firebase بخدمتَي Authentication و Cloud Firestore للباك اند. لا تخزّن أي بيانات في متغيرات داخل الكود ولا في ذاكرة المتصفح؛ كل قراءة وكتابة تمر عبر قاعدة البيانات. استخدم القراءة اللحظية عبر onSnapshot حتى يظهر أي تغيير عند بقية المستخدمين دون تحديث الصفحة. اجمع كل عمليات قاعدة البيانات في ملف خدمة واحد باسم firestoreService.js ولا تكررها داخل ملفات الواجهة. أضف تسجيل دخول بالبريد وكلمة المرور، واحفظ لكل مستخدم حقل دور، واجعل الشاشات تتغير بحسب الدور. اكتب ملف قواعد أمان باسم firestore.rules يمنع المستخدم من تعديل دوره ومن قراءة بيانات غيره. الواجهة بالعربية واتجاهها من اليمين إلى اليسار، والبيانات التجريبية واقعية وموسومة بوضوح بأنها تجريبية.
-
-<b>المخرجات:</b> هيكل المشروع وقائمة الملفات ودور كل ملف في سطر. ثم الكود كاملًا ملفًا ملفًا جاهزًا للّصق. ثم ملف firestore.rules. ثم شكل البيانات: اسم كل مجموعة والحقول داخلها. ثم خطوات التشغيل من الصفر في نقاط مرقّمة بما فيها إنشاء مشروع Firebase.
-
-<b>معايير القبول:</b> يُكمل شخص لم يرَ النظام الرحلة كاملة دون أن أشرح له. وإذا فتحته في متصفحين وغيّرت شيئًا في أحدهما ظهر في الآخر خلال ثانية. وإذا أغلقت المتصفح وفتحته من جديد بقيت البيانات كما تركتها. ولا يوجد زر لا يعمل، ولا شاشة فارغة، ولا بيانات مكتوبة داخل الكود.</div>
-
-  <h2>الأمر الثاني — بعد أن تصل النسخة الأولى</h2>
-  <p class="sub">لا تعِد الشرح من البداية. أضف ما لا يعرفه النموذج عن واقع جهتك، واطلب النسخة الثانية.</p>
-
-  <button class="copy" id="copySecond" type="button" style="margin-top:18px">نسخ أمر السياق</button>
-  <p class="hint">أرسله في المحادثة نفسها، لا في محادثة جديدة</p>
-
-  <div class="prompt" id="secondPrompt">لا تسألني عن المشروع ولا عن القيود ولا عن الرحلة، فكلها في هذه المحادثة. أضف إلى ما بنيته هذا السياق الذي لم تكن تعرفه:
-
-<b>الحجم الحقيقي:</b> <i>[كم مستخدمًا، كم طلبًا في اليوم، متى يزداد الضغط]</i>
-<b>القواعد التي تحكم العمل:</b> <i>[مثال: لا يُقبل الطلب قبل ثمان وأربعين ساعة، ولا يُلغى بعد الاعتماد]</i>
-<b>الحالات الحدّية:</b> <i>[اذكر ثلاثًا تحدث فعلًا اليوم]</i>
-<b>الهوية البصرية:</b> <i>[اللون الأساسي، والخط، واسم الجهة كما يُكتب]</i>
-
-ثم نفّذ ثلاثة أشياء بالترتيب: اذكر في ثلاثة أسطر ما الذي تغيّر في فهمك للنظام بعد هذا السياق. ثم أخرج النسخة الثانية التي تعالج ما تغيّر، دون توسيع النطاق وبلا إضافة أي شاشة جديدة. ثم اذكر ثلاث نقاط بقيت ضعيفة في النموذج، وما يعجز عن إثباته.</div>
-
-  <h2>افحص ناتجك بهذه المعايير</h2>
-  <p class="sub">كل بند يُجاب عنه بنعم أو لا. لا يوجد «تقريبًا».</p>
-  <ul class="checks">
-    <li>البيانات تبقى بعد إغلاق المتصفح وفتحه من جديد.</li>
-    <li>التغيير في متصفح يظهر في متصفح آخر دون تحديث الصفحة.</li>
-    <li>يوجد تسجيل دخول، والشاشات تختلف باختلاف الدور.</li>
-    <li>يوجد ملف قواعد أمان يمنع المستخدم من رفع صلاحيته.</li>
-    <li>رحلة واحدة كاملة تعمل من أولها إلى آخرها بلا زر معطّل.</li>
-    <li>تستطيع أن تشرح لماذا اخترت هذا الشكل، لا أن تعرضه فقط.</li>
-  </ul>
-
-  <h2>أين تلصق الأمر</h2>
-  <p class="sub">أي أداة من هذه تكفي. الأمر واحد، والنتيجة تختلف قليلًا.</p>
-  <div class="tools">
-    <span>Claude</span><span>ChatGPT</span><span>Gemini</span><span>Claude داخل VS Code</span><span>Lovable</span><span>Base44</span>
+  <div class="field">
+    <label for="f_problem">المشكلة</label>
+    <span class="hint">مشكلة تشغيلية حقيقية من عملك، بجملة واحدة واضحة.</span>
+    <input type="text" id="f_problem" placeholder="مثال: الحاويات تمتلئ وتفيض قبل موعد جولة الشاحنة">
   </div>
 
-  <footer>معسكر تحليل الأعمال — من البيانات إلى القرار · جمعية نماء للاستشارات والأبحاث</footer>
+  <div class="field">
+    <label for="f_user">صاحب المصلحة / المستخدم الأساسي</label>
+    <span class="hint">من يتأثر بالمشكلة؟ ومن سيستخدم الحل كل يوم؟</span>
+    <input type="text" id="f_user" placeholder="مثال: موظف ميداني في بلدية، ومواطن يبلّغ، وإدارة تتابع">
+  </div>
+
+  <div class="field">
+    <label for="f_decision">القرار المراد تحسينه</label>
+    <span class="hint">أي قرار أو إجراء سيتغيّر بوجود الحل؟ إن لم يتغيّر قرار، لا داعي للبناء.</span>
+    <input type="text" id="f_decision" placeholder="مثال: أي محطة تُزار أولًا اليوم، ومتى تخرج الجولة">
+  </div>
+
+  <div class="field">
+    <label>ثلاثة متطلبات</label>
+    <span class="hint">ماذا يجب أن يفعل الحل؟ ثلاثة فقط، كل واحد مرتبط بالمشكلة مباشرة.</span>
+    <div class="row">
+      <input type="text" id="f_r1" placeholder="المتطلب الأول">
+      <input type="text" id="f_r2" placeholder="المتطلب الثاني">
+      <input type="text" id="f_r3" placeholder="المتطلب الثالث">
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="f_kpi">مؤشر قياس النجاح</label>
+    <span class="hint">مؤشر واحد على الأقل يمكن قياسه، لتعرف لاحقًا أن الحل نجح.</span>
+    <input type="text" id="f_kpi" placeholder="مثال: متوسط زمن إغلاق البلاغ، ونسبة الحاويات التي تصل للحالة الحرجة">
+  </div>
+
+  <div class="btns">
+    <button class="ghost" id="btnExample" type="button">املأ بمثال جاهز</button>
+    <button class="ghost" id="btnClear" type="button">تفريغ الحقول</button>
+  </div>
+
+  <div class="step"><span class="num">٢</span><h2>انسخ الأمر</h2></div>
+  <pre id="out"></pre>
+  <div class="btns">
+    <button class="primary" id="btnCopy" type="button">نسخ الأمر كاملًا</button>
+  </div>
+  <p id="status"></p>
+
+  <div class="step"><span class="num">٣</span><h2>الصقه، ثم افحص الناتج</h2></div>
+  <p class="lede">الصق الأمر في كلود أو ChatGPT أو Gemini — أيّها توفّر لديك. ثم احكم على الناتج بهذه المعايير، بنعم أو لا، لا بالانطباع.</p>
+  <ol class="crit">
+    <li>هل المشكلة محددة بوضوح في جملة واحدة؟</li>
+    <li>هل المستخدم أو صاحب المصلحة معروف؟</li>
+    <li>هل المتطلبات الثلاثة مرتبطة بالمشكلة مباشرة؟</li>
+    <li>هل يوجد مؤشر واحد يمكن قياس نجاح الحل به؟</li>
+    <li>هل توجد رحلة واحدة كاملة تعمل من أولها إلى آخرها؟</li>
+    <li>هل تبقى البيانات محفوظة بعد إغلاق الصفحة وفتحها؟</li>
+    <li>هل تختلف الصلاحيات باختلاف الدور عند الحاجة؟</li>
+    <li>هل تستطيع تفسير لماذا بُني الحل بهذه الطريقة؟</li>
+  </ol>
+
+  <details>
+    <summary>لماذا حقول وليس أمرًا جاهزًا؟</summary>
+    <p>لأن الأمر الجاهز يُنتج نظامًا جاهزًا — نظام شخص آخر. قيمة المحلل ليست في نسخ أمر، بل في معرفة ما الذي يستحق البناء ولمن ولماذا. الحقول أعلاه هي تحليلك، والأمر مجرد وعاء ينقله إلى الأداة.</p>
+  </details>
+
+  <footer>
+    أعدّها <strong>المثنى الفهيد</strong> — معسكر تحليل الأعمال، جمعية نماء.
+  </footer>
 </div>
 
 <script>
-  function wire(btnId, boxId, label){
-    var btn = document.getElementById(btnId);
-    var box = document.getElementById(boxId);
-    btn.addEventListener("click", function(){
-      var text = box.innerText;
-      var done = function(){
-        btn.textContent = "تم النسخ ✓";
-        btn.setAttribute("data-done","1");
-        setTimeout(function(){
-          btn.textContent = label;
-          btn.removeAttribute("data-done");
-        }, 2200);
-      };
-      if (navigator.clipboard && navigator.clipboard.writeText){
-        navigator.clipboard.writeText(text).then(done, function(){ fallback(text, done); });
-      } else { fallback(text, done); }
+(function () {
+  var F = ['f_problem','f_user','f_decision','f_r1','f_r2','f_r3','f_kpi'];
+  var BLANK = '__________';
+
+  var EXAMPLE = {
+    f_problem : 'الحاويات تمتلئ وتفيض قبل موعد جولة الشاحنة، والجولات تخرج بجدول ثابت لا يعبّر عن الواقع',
+    f_user    : 'المواطن الذي يبلّغ، والموظف الميداني الذي ينفّذ، وإدارة النظافة التي تخطط',
+    f_decision: 'أي محطة تُزار أولًا اليوم، وهل تخرج الجولة أصلًا',
+    f_r1      : 'عرض حالة كل محطة ومستوى امتلائها لحظيًا',
+    f_r2      : 'استقبال بلاغات المواطنين وتتبّعها حتى إغلاقها',
+    f_r3      : 'لوحة متابعة للإدارة بمؤشرات تدعم قرار الجولة',
+    f_kpi     : 'متوسط زمن إغلاق البلاغ، ونسبة المحطات التي تصل للحالة الحرجة قبل الجولة'
+  };
+
+  function val(id) {
+    var v = (document.getElementById(id).value || '').trim();
+    return v || BLANK;
+  }
+
+  function build() {
+    return [
+      'أنت مهندس برمجيات كامل الخبرة، متخصص في بناء أنظمة ويب عربية تعمل من اليمين إلى اليسار.',
+      '',
+      'المهمة: ابنِ نسخة أولى كاملة من النظام الموصوف أدناه، تعمل من أول نقرة إلى آخرها،',
+      'وتحفظ بياناتها في قاعدة بيانات حقيقية لا في متغيرات داخل الكود.',
+      '',
+      'السياق:',
+      '- المشكلة: ' + val('f_problem'),
+      '- المستخدم الأساسي: ' + val('f_user'),
+      '- القرار الذي يجب أن يتحسن: ' + val('f_decision'),
+      '- مؤشر نجاح الحل: ' + val('f_kpi'),
+      '',
+      'المتطلبات — ابنِ هذه الثلاثة ولا تضف غيرها:',
+      '1. ' + val('f_r1'),
+      '2. ' + val('f_r2'),
+      '3. ' + val('f_r3'),
+      '',
+      'القيود:',
+      '- واجهة عربية من اليمين إلى اليسار، بأسماء ومصطلحات واقعية لا أسماء وهمية.',
+      '- البيانات تبقى بعد إغلاق الصفحة وإعادة فتحها.',
+      '- تسجيل دخول، وصلاحيات تختلف باختلاف الدور إن كان للنظام أكثر من دور.',
+      '- لا تضف شاشات ولا خصائص لم أطلبها.',
+      '',
+      'المخرجات:',
+      '- مشروع يعمل، فيه رحلة واحدة كاملة قابلة للتجربة من أولها إلى آخرها.',
+      '- ملف قصير يشرح كيف يُشغَّل المشروع من الصفر.',
+      '',
+      'معايير القبول — لا تعتبر المهمة منتهية قبل أن تتحقق كلها:',
+      '1. رحلة واحدة كاملة تعمل بلا زر معطّل.',
+      '2. البيانات تبقى محفوظة بعد إغلاق الصفحة وفتحها.',
+      '3. الصلاحيات تختلف باختلاف الدور عند الحاجة.',
+      '4. كل متطلب من الثلاثة ظاهر في النظام ويمكن تجربته.',
+      '5. يمكن استخراج البيانات اللازمة لحساب مؤشر النجاح أعلاه.',
+      '',
+      'قبل أن تبدأ: اسألني عن أي شيء ناقص أو غامض في السياق أو المتطلبات.'
+    ].join('\n');
+  }
+
+  function render() {
+    document.getElementById('out').textContent = build();
+  }
+
+  function missing() {
+    return F.filter(function (id) {
+      return !(document.getElementById(id).value || '').trim();
     });
   }
-  function fallback(text, done){
-    try{
-      var ta = document.createElement("textarea");
-      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-      document.body.appendChild(ta); ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta); done();
-    } catch(e){ window.prompt("انسخ الأمر يدويًا:", text); }
-  }
-  wire("copyMain","mainPrompt","نسخ الأمر كاملًا");
-  wire("copySecond","secondPrompt","نسخ أمر السياق");
-</script>
 
+  function mark() {
+    var m = missing();
+    F.forEach(function (id) {
+      document.getElementById(id).classList.toggle('empty', m.indexOf(id) !== -1);
+    });
+    return m;
+  }
+
+  F.forEach(function (id) {
+    document.getElementById(id).addEventListener('input', render);
+  });
+
+  document.getElementById('btnExample').addEventListener('click', function () {
+    F.forEach(function (id) { document.getElementById(id).value = EXAMPLE[id]; });
+    render(); mark();
+    say('امتلأت الحقول بمثال نظام إدارة النفايات — بدّلها بتحليلك أنت.', false);
+  });
+
+  document.getElementById('btnClear').addEventListener('click', function () {
+    F.forEach(function (id) {
+      var e = document.getElementById(id); e.value = ''; e.classList.remove('empty');
+    });
+    render(); say('', false);
+  });
+
+  function say(msg, warn) {
+    var s = document.getElementById('status');
+    s.textContent = msg;
+    s.className = warn ? 'warn' : '';
+  }
+
+  document.getElementById('btnCopy').addEventListener('click', function () {
+    var m = mark();
+    var text = build();
+    var done = function () {
+      if (m.length) {
+        say('نُسخ الأمر، لكن بقيت ' + m.length + ' خانة فارغة — املأها أولًا، فالتحليل هو قيمة الأمر.', true);
+      } else {
+        say('نُسخ الأمر كاملًا. الصقه الآن في الأداة التي تستخدمها.', false);
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else { fallback(); }
+
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.top = '-1000px';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); }
+      catch (e) { say('تعذّر النسخ تلقائيًا — حدّد نص الأمر أعلاه وانسخه يدويًا.', true); }
+      document.body.removeChild(ta);
+    }
+  });
+
+  render();
+})();
+</script>
 </body>
 </html>
