@@ -98,14 +98,14 @@
 <header>
   <p class="kicker">معسكر تحليل الأعمال — جمعية نماء</p>
   <h1>بطاقة المحلل: من المشكلة إلى نظام</h1>
-  <p class="lede">املأها وأنت تجهّز عرضك الختامي. ما تكتبه يُحفظ في جهازك تلقائيًا، ويمكنك طباعته أو نسخه في أي وقت.</p>
+  <p class="lede">املأها في النشاط، ثم استخدمها على أي فكرة تريد بناءها بعد الجلسة. ما تكتبه يُحفظ في جهازك تلقائيًا، ويمكنك طباعته أو نسخه في أي وقت.</p>
 </header>
 
 <section>
-  <div class="head"><span class="num">٠</span><h2>مشروعك</h2></div>
+  <div class="head"><span class="num">٠</span><h2>ابدأ من هنا</h2></div>
   <div class="f">
-    <label for="p_name">اسم المشروع أو الجهة</label>
-    <input type="text" id="p_name" data-k="p_name" placeholder="مثال: بلدية بريدة — إدارة النفايات">
+    <label for="p_name">الجهة أو المجال</label>
+    <input type="text" id="p_name" data-k="p_name" placeholder="مثال: إدارة النفايات في بلدية">
   </div>
   <div class="f">
     <label for="p_prob">المشكلة في جملة واحدة</label>
@@ -171,7 +171,7 @@
 
 <section>
   <div class="head"><span class="num">٤</span><h2>نقد أدلتك</h2></div>
-  <p class="why">وجّه هذه الأسئلة إلى كل رقم في عرضك، قبل أن يوجّهها المحكّم إليك. علّم ما أجبت عنه.</p>
+  <p class="why">وجّه هذه الأسئلة إلى كل رقم قبل أن تبني عليه قرارًا، أو قبل أن تضعه أمام من يسألك عنه. علّم ما أجبت عنه.</p>
   <label class="chk"><input type="checkbox" data-k="e1"><span><b>ما مصدر الرقم؟</b><span>من أين جاء، ومتى جُمع، ومن جمعه. رقم بلا مصدر ليس دليلًا.</span></span></label>
   <label class="chk"><input type="checkbox" data-k="e2"><span><b>حقيقي أم تجريبي؟</b><span>قُلها قبل أن يسألك أحد. الشفافية أقوى من رقم مُدّعى.</span></span></label>
   <label class="chk"><input type="checkbox" data-k="e3"><span><b>هل يقيس ما نزعم؟</b><span>عدد البلاغات يقيس الإبلاغ، لا المشكلة.</span></span></label>
@@ -262,7 +262,7 @@
     function done(k){ var e = document.querySelector('[data-k="' + k + '"]'); return e && e.checked ? '[✓]' : '[ ]'; }
     var L = [];
     L.push('بطاقة المحلل — من المشكلة إلى نظام');
-    L.push('المشروع: ' + v('p_name'));
+    L.push('الجهة أو المجال: ' + v('p_name'));
     L.push('المشكلة: ' + v('p_prob'));
     L.push('', 'الأسئلة الخمسة للقرار');
     L.push('١) ما القرار الذي يُتخذ؟ ' + v('q1'));
