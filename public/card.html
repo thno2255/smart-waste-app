@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>بطاقة المحلل — من المشكلة إلى نظام</title>
+<meta name="description" content="بطاقة عمل تُملأ — ورشة «من المشكلة إلى نظام»، معسكر تحليل الأعمال، جمعية نماء.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --deep:#072B34; --panel:#0F3F4A; --edge:#1C5A67; --emph:#1A6270;
+    --muted:#A8C2C8; --light:#CFE2E5; --white:#F2F8F9; --green:#73B84A;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--deep); color:var(--light);
+    font-family:"IBM Plex Sans Arabic",system-ui,"Segoe UI",Tahoma,sans-serif;
+    line-height:1.8; font-size:16px;
+  }
+  .wrap{max-width:820px; margin:0 auto; padding:26px 16px 120px}
+  header{padding:10px 0 22px; border-bottom:1px solid var(--edge); margin-bottom:22px}
+  .kicker{color:var(--green); font-size:13px; font-weight:600; margin:0 0 8px}
+  h1{margin:0 0 10px; font-size:clamp(22px,5.4vw,31px); font-weight:700; color:var(--white); line-height:1.4}
+  .lede{margin:0; color:var(--muted); font-size:14.5px}
+
+  section{background:var(--panel); border:1px solid var(--edge); border-radius:14px; padding:18px 15px; margin:0 0 14px}
+  .head{display:flex; align-items:center; gap:10px; margin-bottom:6px}
+  .num{flex:0 0 auto; width:28px; height:28px; border-radius:8px; background:var(--emph);
+       color:var(--white); font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:center}
+  h2{margin:0; font-size:17.5px; font-weight:700; color:var(--white)}
+  .why{margin:0 0 14px; color:var(--muted); font-size:13.5px}
+
+  .f{margin:0 0 12px}
+  .f:last-child{margin-bottom:0}
+  label{display:block; color:var(--white); font-size:14.5px; font-weight:600; margin:0 0 3px}
+  .hint{display:block; color:var(--muted); font-size:12.5px; font-weight:400; margin:0 0 6px}
+  input[type=text], textarea{
+    width:100%; background:rgba(255,255,255,.05); color:var(--white);
+    border:1px solid var(--edge); border-radius:9px; padding:8px 11px;
+    font-family:inherit; font-size:15px; line-height:1.6; resize:none; overflow:hidden;
+  }
+  input[type=text]::placeholder, textarea::placeholder{color:#6E939C}
+  input[type=text]:focus, textarea:focus{outline:none; border-color:var(--green); background:rgba(255,255,255,.08)}
+
+  .chk{display:flex; align-items:flex-start; gap:10px; padding:9px 11px; margin:0 0 7px;
+       border-radius:9px; background:rgba(255,255,255,.035); border-inline-start:3px solid var(--emph); cursor:pointer}
+  .chk:last-of-type{margin-bottom:0}
+  .chk input{flex:0 0 auto; width:19px; height:19px; margin:4px 0 0; accent-color:var(--green)}
+  .chk b{display:block; color:var(--white); font-weight:600; font-size:14.5px}
+  .chk span{display:block; color:var(--muted); font-size:13px}
+  .chk.on{background:rgba(115,184,74,.10); border-inline-start-color:var(--green)}
+
+  table{width:100%; border-collapse:collapse; margin-top:4px; font-size:13.5px}
+  th,td{padding:5px 4px; text-align:right; vertical-align:top}
+  th{color:var(--white); font-weight:600; font-size:12.5px; padding-bottom:7px}
+  td input{padding:7px 8px; font-size:13.5px}
+
+  .note{margin-top:14px; padding:11px 13px; border-radius:10px; background:var(--emph);
+        color:var(--white); font-size:14px; font-weight:600}
+  .rule{margin:24px 0 0; padding:18px; border-radius:14px; text-align:center;
+        background:var(--emph); color:var(--white); font-size:15.5px; font-weight:600}
+
+  .bar{position:fixed; inset-inline:0; bottom:0; background:rgba(7,43,52,.96);
+       border-top:1px solid var(--edge); padding:10px 16px calc(10px + env(safe-area-inset-bottom));
+       display:flex; gap:8px; justify-content:center; flex-wrap:wrap; backdrop-filter:blur(8px); z-index:9}
+  button{font-family:inherit; font-size:14px; font-weight:600; border-radius:10px; padding:10px 14px;
+         border:1px solid var(--edge); background:var(--panel); color:var(--light); cursor:pointer}
+  button.primary{background:var(--green); border-color:var(--green); color:#08242B}
+  button:active{transform:translateY(1px)}
+  .saved{color:var(--muted); font-size:12.5px; align-self:center; min-width:96px; text-align:center}
+
+  footer{margin-top:26px; color:var(--muted); font-size:13px; text-align:center; line-height:2}
+  footer a{color:var(--green); text-decoration:none}
+
+  @media print{
+    @page{margin:14mm}
+    body{background:#fff; color:#111; font-size:12pt}
+    .wrap{padding:0; max-width:none}
+    .bar{display:none}
+    section{background:#fff; border-color:#bbb; break-inside:avoid; padding:12px 10px; margin-bottom:10px}
+    h1,h2,label,.chk b{color:#000}
+    .why,.hint,.lede,.chk span,footer{color:#444}
+    .num{background:#e4e4e4; color:#000; border:1px solid #bbb}
+    .note,.rule{background:#f0f0f0; color:#000; border:1px solid #ccc}
+    input[type=text], textarea{background:#fff; color:#000; border:0; border-bottom:1px solid #999; border-radius:0; padding:2px 0}
+    .chk{background:#fff; border-inline-start-color:#999}
+    .chk.on{background:#f4f4f4}
+    *{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="kicker">معسكر تحليل الأعمال — جمعية نماء</p>
+  <h1>بطاقة المحلل: من المشكلة إلى نظام</h1>
+  <p class="lede">املأها وأنت تجهّز عرضك الختامي. ما تكتبه يُحفظ في جهازك تلقائيًا، ويمكنك طباعته أو نسخه في أي وقت.</p>
+</header>
+
+<section>
+  <div class="head"><span class="num">٠</span><h2>مشروعك</h2></div>
+  <div class="f">
+    <label for="p_name">اسم المشروع أو الجهة</label>
+    <input type="text" id="p_name" data-k="p_name" placeholder="مثال: بلدية بريدة — إدارة النفايات">
+  </div>
+  <div class="f">
+    <label for="p_prob">المشكلة في جملة واحدة</label>
+    <span class="hint">مشكلة تشغيلية حقيقية بنطاق محدد، لا وصف عام.</span>
+    <textarea id="p_prob" data-k="p_prob" rows="2"></textarea>
+  </div>
+</section>
+
+<section>
+  <div class="head"><span class="num">١</span><h2>الأسئلة الخمسة للقرار</h2></div>
+  <p class="why">تُطرح على القرار لا على النظام. إن لم يتغيّر قرار، فالخاصية تكلفة لا قيمة.</p>
+  <div class="f"><label for="q1">ما القرار الذي يُتخذ؟</label>
+    <span class="hint">قرار واحد محدد يتكرر، لا هدف عام.</span>
+    <textarea id="q1" data-k="q1" rows="2"></textarea></div>
+  <div class="f"><label for="q2">على أي معلومة كان يُتخذ؟</label>
+    <span class="hint">ما المتاح اليوم فعلًا، حتى لو كان انطباعًا.</span>
+    <textarea id="q2" data-k="q2" rows="2"></textarea></div>
+  <div class="f"><label for="q3">ما الذي صار متاحًا بعد الحل؟</label>
+    <span class="hint">المعلومة الجديدة التي لم تكن موجودة.</span>
+    <textarea id="q3" data-k="q3" rows="2"></textarea></div>
+  <div class="f"><label for="q4">كيف يُفترض أن يتغيّر القرار؟</label>
+    <span class="hint">صف التغيّر بجملة، لا بأمنية.</span>
+    <textarea id="q4" data-k="q4" rows="2"></textarea></div>
+  <div class="f"><label for="q5">كيف نعرف أنه تحسّن؟</label>
+    <span class="hint">مؤشر واحد قابل للقياس — اكتبه في الجدول رقم ٥ أيضًا.</span>
+    <textarea id="q5" data-k="q5" rows="2"></textarea></div>
+</section>
+
+<section>
+  <div class="head"><span class="num">٢</span><h2>أركان مواصفتك الستة</h2></div>
+  <p class="why">هذه ليست «هندسة أوامر» — هي مواصفة يكتبها المحلل أصلًا، والجديد أن متلقّيها صار نموذجًا لا فريقًا.</p>
+  <div class="f"><label for="s1">الدور</label><span class="hint">من ينفّذ، وبأي خبرة.</span>
+    <textarea id="s1" data-k="s1" rows="2"></textarea></div>
+  <div class="f"><label for="s2">المهمة</label><span class="hint">نطاق العمل ومخرج واحد.</span>
+    <textarea id="s2" data-k="s2" rows="2"></textarea></div>
+  <div class="f"><label for="s3">السياق</label><span class="hint">الجهة والمستخدمون والواقع.</span>
+    <textarea id="s3" data-k="s3" rows="2"></textarea></div>
+  <div class="f"><label for="s4">القيود</label><span class="hint">المتطلبات غير الوظيفية والحدود صراحةً.</span>
+    <textarea id="s4" data-k="s4" rows="2"></textarea></div>
+  <div class="f"><label for="s5">المخرجات</label><span class="hint">شكل التسليم بصيغة محددة.</span>
+    <textarea id="s5" data-k="s5" rows="2"></textarea></div>
+  <div class="f"><label for="s6">معايير القبول</label>
+    <span class="hint">شرط يُفحص بنعم أو لا — وهو الركن الذي يمنعك من قبول ناتج رديء.</span>
+    <textarea id="s6" data-k="s6" rows="2"></textarea></div>
+</section>
+
+<section>
+  <div class="head"><span class="num">٣</span><h2>الخطوات الست للبناء</h2></div>
+  <p class="why">علّم ما أنجزته. لا يُبنى النظام دفعة واحدة، وكل خطوة تأتي من سؤال لا من رغبة في إضافة خاصية.</p>
+  <label class="chk"><input type="checkbox" data-k="b1"><span><b>واجهة واحدة تعمل</b><span>شاشة واحدة بلا حفظ، لترى الشكل قبل أن تبني الأساس.</span></span></label>
+  <label class="chk"><input type="checkbox" data-k="b2"><span><b>قاعدة بيانات</b><span>ما يُكتب يبقى بعد إغلاق المتصفح. هنا صار للموقع خلفية، لا واجهة فقط.</span></span></label>
+  <label class="chk"><input type="checkbox" data-k="b3"><span><b>حسابات ودخول</b><span>لأن السجل بلا صاحب لا يُتابَع.</span></span></label>
+  <label class="chk"><input type="checkbox" data-k="b4"><span><b>أدوار وصلاحيات</b><span>قواعد في الخادم لا في المتصفح — كلٌّ يرى ما يخصّه.</span></span></label>
+  <label class="chk"><input type="checkbox" data-k="b5"><span><b>لوحة النظام</b><span>مؤشرات من البيانات نفسها، ليُقرَّر بالأرقام لا بالانطباع.</span></span></label>
+  <label class="chk"><input type="checkbox" data-k="b6"><span><b>النشر</b><span>رابط واحد يفتحه أي جهاز بلا تنصيب.</span></span></label>
+  <div class="f" style="margin-top:12px">
+    <label for="b_gap">النقص الذي اكتشفته حين اختبرت نموذجك</label>
+    <span class="hint">من لم يكتشف نقصًا، لم يختبر بعد. اكتبه، وما فعلته به.</span>
+    <textarea id="b_gap" data-k="b_gap" rows="3"></textarea>
+  </div>
+  <p class="note">كل خطوة تمرّ بدورتها: ابنِ، ثم جرّب بنفسك، ثم اطلب تعديلًا واحدًا — لا قائمة تعديلات.</p>
+</section>
+
+<section>
+  <div class="head"><span class="num">٤</span><h2>نقد أدلتك</h2></div>
+  <p class="why">وجّه هذه الأسئلة إلى كل رقم في عرضك، قبل أن يوجّهها المحكّم إليك. علّم ما أجبت عنه.</p>
+  <label class="chk"><input type="checkbox" data-k="e1"><span><b>ما مصدر الرقم؟</b><span>من أين جاء، ومتى جُمع، ومن جمعه. رقم بلا مصدر ليس دليلًا.</span></span></label>
+  <label class="chk"><input type="checkbox" data-k="e2"><span><b>حقيقي أم تجريبي؟</b><span>قُلها قبل أن يسألك أحد. الشفافية أقوى من رقم مُدّعى.</span></span></label>
+  <label class="chk"><input type="checkbox" data-k="e3"><span><b>هل يقيس ما نزعم؟</b><span>عدد البلاغات يقيس الإبلاغ، لا المشكلة.</span></span></label>
+  <label class="chk"><input type="checkbox" data-k="e4"><span><b>ارتباط أم سببية؟</b><span>تحسّن بعد الحل — وربما بعد شيء آخر في الشهر نفسه.</span></span></label>
+  <label class="chk"><input type="checkbox" data-k="e5"><span><b>ما البديل الذي قارنّاه؟</b><span>حل بلا بديل مرفوض ليس قرارًا، بل أول ما خطر.</span></span></label>
+  <label class="chk"><input type="checkbox" data-k="e6"><span><b>ما الذي يُكذّبنا؟</b><span>إن لم يوجد رقم يُثبت خطأك، فليست فرضية.</span></span></label>
+</section>
+
+<section>
+  <div class="head"><span class="num">٥</span><h2>جدول مؤشراتك</h2></div>
+  <p class="why">المؤشر بلا خط أساس ليس مؤشرًا، بل أمنية كُتبت برقم.</p>
+  <table>
+    <thead><tr><th style="width:34%">المؤشر</th><th style="width:24%">خط الأساس</th><th style="width:20%">المستهدف</th><th style="width:22%">النتيجة الفعلية</th></tr></thead>
+    <tbody id="kpi"></tbody>
+  </table>
+  <p class="note">إن لم تقِس بعد، فاكتب «لم يُقس بعد». هذا أقوى من رقم لا تملك مصدره.</p>
+</section>
+
+<p class="rule">لا تبدأ بالحل — ابدأ بالمشكلة والقرار.<br>الأداة تنفّذ ما تعطيها، فأعطها تحليلًا لا أمنية.</p>
+
+<footer>
+  ورشة «من المشكلة إلى نظام» — المثنى الفهيد<br>
+  <a href="https://smart-waste-app-psi.vercel.app">النظام الحي</a> ·
+  <a href="https://smart-waste-app-psi.vercel.app/prompt.html">صفحة بناء الأمر</a> ·
+  <a href="https://www.linkedin.com/in/almathna-alfehaid-1794aa374">لينكدإن</a>
+</footer>
+</div>
+
+<div class="bar">
+  <button class="primary" id="copy">نسخ البطاقة كنص</button>
+  <button id="print">طباعة أو حفظ PDF</button>
+  <button id="clear">تفريغ</button>
+  <span class="saved" id="saved"></span>
+</div>
+
+<script>
+(function(){
+  var KEY = 'bataqat_almuhallil_v1';
+  var kpiBody = document.getElementById('kpi');
+  for (var r = 0; r < 4; r++){
+    var tr = document.createElement('tr');
+    ['m','a','t','r'].forEach(function(c){
+      var td = document.createElement('td'), i = document.createElement('input');
+      i.type = 'text'; i.setAttribute('data-k', 'k_' + r + '_' + c);
+      td.appendChild(i); tr.appendChild(td);
+    });
+    kpiBody.appendChild(tr);
+  }
+
+  var fields = Array.prototype.slice.call(document.querySelectorAll('[data-k]'));
+
+  function grow(t){ if (t.tagName === 'TEXTAREA'){ t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; } }
+  function mark(box){ var w = box.closest('.chk'); if (w) w.classList.toggle('on', box.checked); }
+
+  function read(){
+    var d = {};
+    fields.forEach(function(f){ d[f.getAttribute('data-k')] = (f.type === 'checkbox') ? f.checked : f.value; });
+    return d;
+  }
+  var t = null, flash = document.getElementById('saved');
+  function save(){
+    clearTimeout(t);
+    t = setTimeout(function(){
+      try { localStorage.setItem(KEY, JSON.stringify(read())); flash.textContent = 'حُفظ في جهازك'; }
+      catch(e){ flash.textContent = 'الحفظ غير متاح هنا'; }
+      setTimeout(function(){ flash.textContent = ''; }, 1800);
+    }, 400);
+  }
+  function load(){
+    var d = null;
+    try { d = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch(e){}
+    if (!d) return;
+    fields.forEach(function(f){
+      var k = f.getAttribute('data-k');
+      if (!(k in d)) return;
+      if (f.type === 'checkbox'){ f.checked = !!d[k]; mark(f); } else { f.value = d[k] || ''; grow(f); }
+    });
+  }
+
+  fields.forEach(function(f){
+    f.addEventListener('input', function(){ grow(f); save(); });
+    f.addEventListener('change', function(){ if (f.type === 'checkbox') mark(f); save(); });
+  });
+  load();
+
+  function txt(){
+    function v(id){ var e = document.getElementById(id); return (e && e.value.trim()) || '—'; }
+    function done(k){ var e = document.querySelector('[data-k="' + k + '"]'); return e && e.checked ? '[✓]' : '[ ]'; }
+    var L = [];
+    L.push('بطاقة المحلل — من المشكلة إلى نظام');
+    L.push('المشروع: ' + v('p_name'));
+    L.push('المشكلة: ' + v('p_prob'));
+    L.push('', 'الأسئلة الخمسة للقرار');
+    L.push('١) ما القرار الذي يُتخذ؟ ' + v('q1'));
+    L.push('٢) على أي معلومة كان يُتخذ؟ ' + v('q2'));
+    L.push('٣) ما الذي صار متاحًا بعد الحل؟ ' + v('q3'));
+    L.push('٤) كيف يُفترض أن يتغيّر القرار؟ ' + v('q4'));
+    L.push('٥) كيف نعرف أنه تحسّن؟ ' + v('q5'));
+    L.push('', 'أركان المواصفة');
+    [['الدور','s1'],['المهمة','s2'],['السياق','s3'],['القيود','s4'],['المخرجات','s5'],['معايير القبول','s6']]
+      .forEach(function(p){ L.push(p[0] + ': ' + v(p[1])); });
+    L.push('', 'خطوات البناء المنجزة');
+    [['واجهة تعمل','b1'],['قاعدة بيانات','b2'],['حسابات ودخول','b3'],
+     ['أدوار وصلاحيات','b4'],['لوحة النظام','b5'],['النشر','b6']]
+      .forEach(function(p){ L.push(done(p[1]) + ' ' + p[0]); });
+    L.push('النقص الذي اكتُشف: ' + v('b_gap'));
+    L.push('', 'نقد الأدلة');
+    [['ما مصدر الرقم؟','e1'],['حقيقي أم تجريبي؟','e2'],['هل يقيس ما نزعم؟','e3'],
+     ['ارتباط أم سببية؟','e4'],['ما البديل الذي قارنّاه؟','e5'],['ما الذي يُكذّبنا؟','e6']]
+      .forEach(function(p){ L.push(done(p[1]) + ' ' + p[0]); });
+    L.push('', 'المؤشرات (المؤشر | خط الأساس | المستهدف | النتيجة الفعلية)');
+    for (var r = 0; r < 4; r++){
+      var row = ['m','a','t','r'].map(function(c){
+        var e = document.querySelector('[data-k="k_' + r + '_' + c + '"]');
+        return (e && e.value.trim()) || '—';
+      });
+      if (row.join('') !== '————') L.push(row.join(' | '));
+    }
+    return L.join('\n');
+  }
+
+  document.getElementById('copy').addEventListener('click', function(){
+    var s = txt(), b = this, old = b.textContent;
+    function ok(){ b.textContent = 'تم النسخ ✓'; setTimeout(function(){ b.textContent = old; }, 1600); }
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(s).then(ok, fallback);
+    } else { fallback(); }
+    function fallback(){
+      var a = document.createElement('textarea');
+      a.value = s; a.style.position = 'fixed'; a.style.opacity = '0';
+      document.body.appendChild(a); a.select();
+      try { document.execCommand('copy'); ok(); } catch(e){ b.textContent = 'تعذّر النسخ'; setTimeout(function(){ b.textContent = old; }, 1600); }
+      document.body.removeChild(a);
+    }
+  });
+
+  document.getElementById('print').addEventListener('click', function(){
+    fields.forEach(grow); window.print();
+  });
+
+  document.getElementById('clear').addEventListener('click', function(){
+    if (!confirm('سيُمسح كل ما كتبته في هذه البطاقة. متأكد؟')) return;
+    fields.forEach(function(f){
+      if (f.type === 'checkbox'){ f.checked = false; mark(f); } else { f.value = ''; grow(f); }
+    });
+    try { localStorage.removeItem(KEY); } catch(e){}
+  });
+})();
+</script>
+</body>
+</html>
