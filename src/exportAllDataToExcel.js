@@ -12,6 +12,10 @@ import * as XLSX from "xlsx";
 import { db } from "./firebase";
 
 // ── Collections to export ─────────────────────────────────────────────
+// "stations"/"containers"/"districts"/"suctionJobs" are the old suction-model
+// collections — kept here since they're still live until later redesign
+// phases retire them. "neighborhoods"/"bins"/"iot_devices"/"sensor_readings"
+// are the new smart-bin model.
 const EXPORT_COLLECTIONS = [
   "stations",
   "containers",
@@ -23,6 +27,10 @@ const EXPORT_COLLECTIONS = [
   "users",
   "districts",
   "suctionJobs",
+  "neighborhoods",
+  "bins",
+  "iot_devices",
+  "sensor_readings",
 ];
 
 // ── Flatten one Firestore document ────────────────────────────────────

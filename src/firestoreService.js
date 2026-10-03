@@ -14,17 +14,33 @@ import { useState, useEffect } from "react";
 import {
   collection, addDoc, updateDoc, deleteDoc,
   doc, onSnapshot, query, where, orderBy,
-  getDoc, getDocs, setDoc,
+  getDoc, getDocs, setDoc, writeBatch,
 } from "firebase/firestore";
 import { db } from "./firebase";
+import { getStatus, getStatusColor, getBinStatus, THRESHOLDS } from "./config";
 
 // ══════════════════════════════════════════════════════════════════════
 // 1. Collection Names
+//
+// ⚠️ SECURITY GAP (documented, not yet resolved): there is no firestore.rules
+// file anywhere in this repository — Firestore security rules exist only in
+// the Firebase console and are entirely unmanaged/unversioned by this
+// codebase. IOT_DEVICES, BINS, and SENSOR_READINGS below therefore inherit
+// whatever the console's current (unknown-to-this-repo) rules allow.
+// DO NOT implement the ESP32-facing write endpoint (planned /api/iot/readings)
+// against these collections until: (1) current console rules are pulled into
+// a versioned firestore.rules file in this repo, and (2) explicit rules are
+// written for these collections (e.g. denying direct client writes to
+// sensor_readings/bins status fields, since those must only be written
+// server-side after device-key validation). This is a hard prerequisite for
+// that phase, not a nice-to-have.
 // ══════════════════════════════════════════════════════════════════════
 export const COLLECTIONS = {
-  STATIONS:        "stations",
-  DISTRICTS:       "districts",
-  CONTAINERS:      "containers",
+  STATIONS:        "stations",     // deprecated — retired in Phase 3, still read live by several pages
+  NEIGHBORHOODS:   "neighborhoods", // replaces the old unused "districts" collection
+  BINS:            "bins",          // replaces embedded stations[].containers[]
+  IOT_DEVICES:     "iot_devices",
+  SENSOR_READINGS: "sensor_readings",
   SENSORS:         "sensors",
   ALERTS:          "alerts",
   FIRE_ALERTS:     "fire_alerts",
@@ -32,25 +48,15 @@ export const COLLECTIONS = {
   REQUESTS:        "requests",
   CITIZEN_REPORTS: "citizen_reports",
   USERS:           "users",
-  SUCTION_JOBS:    "suctionJobs",
+  SUCTION_JOBS:    "suctionJobs", // deprecated — retired in Phase 3
 };
 
 // ══════════════════════════════════════════════════════════════════════
-// 2. Status Logic  (single source of truth — never store status in DB)
+// 2. Status Logic  (single source of truth — re-exported from config.js,
+//    which both App.jsx and this file import from, instead of each
+//    keeping its own separate copy of the same thresholds)
 // ══════════════════════════════════════════════════════════════════════
-export const getStatus = (fillLevel) => {
-  const v = Number(fillLevel) || 0;
-  if (v >= 85) return "حرج";
-  if (v >= 60) return "تحذير";
-  return "طبيعي";
-};
-
-export const getStatusColor = (fillLevel) => {
-  const v = Number(fillLevel) || 0;
-  if (v >= 85) return "#ef4444";
-  if (v >= 60) return "#f59e0b";
-  return "#10b981";
-};
+export { getStatus, getStatusColor, getBinStatus };
 
 // ══════════════════════════════════════════════════════════════════════
 // 3. Generic Hooks
@@ -214,66 +220,105 @@ export const deleteStation = (id) =>
   deleteItem(COLLECTIONS.STATIONS, id);
 
 // ══════════════════════════════════════════════════════════════════════
-// 6. Containers  (standalone collection — also lives inside station doc)
+// 6. Bins  (smart bins — top-level collection, replaces the embedded
+//    stations[].containers[] array so each bin can be independently
+//    geocoded, linked to a device, and joined against sensor_readings)
+// ══════════════════════════════════════════════════════════════════════
+export const addBin = (data) =>
+  addItem(COLLECTIONS.BINS, {
+    name:                 data.name                 || "",
+    neighborhoodId:       data.neighborhoodId       || "",
+    lat:                  data.lat                  ?? null,
+    lng:                  data.lng                  ?? null,
+    wasteType:            data.wasteType            || "مختلط",
+    capacityLiters:       Number(data.capacityLiters) || 1100,
+    deviceId:             data.deviceId             || null,
+    status:               data.status               || "normal", // normal | warning | critical | offline | fault
+    lastFillLevelPercent: data.lastFillLevelPercent ?? null,
+    lastTemperatureCelsius: data.lastTemperatureCelsius ?? null,
+    lastReadingAt:        data.lastReadingAt        ?? null,
+  });
+
+export const updateBin = (id, data) =>
+  updateItem(COLLECTIONS.BINS, id, data);
+
+export const deleteBin = (id) =>
+  deleteItem(COLLECTIONS.BINS, id);
+
+// ══════════════════════════════════════════════════════════════════════
+// 7. Neighborhoods  (replaces the old unused "districts" collection)
+// ══════════════════════════════════════════════════════════════════════
+export const addNeighborhood = (data) =>
+  addItem(COLLECTIONS.NEIGHBORHOODS, {
+    name:      data.name      || "",
+    city:      data.city      || "بريدة",
+    boundary:  data.boundary  ?? null, // GeoJSON.Polygon, filled in by the map phase
+    centerLat: data.centerLat ?? null,
+    centerLng: data.centerLng ?? null,
+  });
+
+export const updateNeighborhood = (id, data) =>
+  updateItem(COLLECTIONS.NEIGHBORHOODS, id, data);
+
+export const deleteNeighborhood = (id) =>
+  deleteItem(COLLECTIONS.NEIGHBORHOODS, id);
+
+// ══════════════════════════════════════════════════════════════════════
+// 8. Sensor readings  (append-only time-series, one doc per reading —
+//    also updates the parent bin's denormalized latest-reading fields so
+//    the dashboard/map never has to query sensor_readings directly)
 // ══════════════════════════════════════════════════════════════════════
 /**
- * Standalone container document (for sensor linking etc.)
- * stationId links back to the parent station.
+ * Validates and records one sensor reading, atomically:
+ *  - appends it to sensor_readings (historical record)
+ *  - updates the parent bin's denormalized latest-reading fields + status
+ * Both writes happen in a single batch — either both succeed or neither does,
+ * so a bin can never end up referencing a reading that was never actually saved.
+ *
+ * Throws (does not write anything) if fill_level_percent/temperature_celsius
+ * are missing or outside the configured plausible bounds — callers (including
+ * the future ESP32 API route) are expected to reject/report the error rather
+ * than have garbage values silently recorded as valid data.
  */
-export const addContainer = (data) =>
-  addItem(COLLECTIONS.CONTAINERS, {
-    name:      data.name      || "",
-    fillLevel: Number(data.fillLevel) || 0,
-    stationId: data.stationId || "",
-    district:  data.district  || "",
+export const recordSensorReading = async (binId, deviceId, reading) => {
+  const bounds = THRESHOLDS.faultReadingBounds;
+  const fill = Number(reading?.fill_level_percent);
+  if (Number.isNaN(fill) || fill < bounds.fillMin || fill > bounds.fillMax) {
+    throw new Error(`recordSensorReading: fill_level_percent out of range/missing: ${reading?.fill_level_percent}`);
+  }
+
+  const hasTemp = reading?.temperature_celsius != null;
+  const temp = hasTemp ? Number(reading.temperature_celsius) : null;
+  if (hasTemp && (Number.isNaN(temp) || temp < bounds.tempMin || temp > bounds.tempMax)) {
+    throw new Error(`recordSensorReading: temperature_celsius out of range: ${reading.temperature_celsius}`);
+  }
+
+  const data = {
+    bin_id:               binId,
+    device_id:            deviceId || "",
+    fill_level_percent:   fill,
+    temperature_celsius:  temp,
+    battery_level:        reading?.battery_level ?? null,
+    signal:               reading?.signal ?? null,
+    timestamp:            reading?.timestamp || ts(),
+    receivedAt:           ts(),
+  };
+  const status = getBinStatus({ deviceId }, data);
+
+  const readingRef = doc(collection(db, COLLECTIONS.SENSOR_READINGS));
+  const binRef = doc(db, COLLECTIONS.BINS, binId);
+  const batch = writeBatch(db);
+  batch.set(readingRef, data);
+  batch.update(binRef, {
+    lastFillLevelPercent:   data.fill_level_percent,
+    lastTemperatureCelsius: data.temperature_celsius,
+    lastReadingAt:          data.timestamp,
+    status,
   });
+  await batch.commit();
 
-export const updateContainer = (id, data) =>
-  updateItem(COLLECTIONS.CONTAINERS, id, {
-    name:      data.name,
-    fillLevel: Number(data.fillLevel) || 0,
-  });
-
-export const deleteContainer = (id) =>
-  deleteItem(COLLECTIONS.CONTAINERS, id);
-
-// ══════════════════════════════════════════════════════════════════════
-// 7. Districts
-// ══════════════════════════════════════════════════════════════════════
-export const addDistrict = (data) =>
-  addItem(COLLECTIONS.DISTRICTS, {
-    name:        data.name        || "",
-    city:        data.city        || "بريدة",
-    fillLevel:   Number(data.fillLevel)   || 0,
-    wasteTotal:  Number(data.wasteTotal)  || 0,
-    performance: Number(data.performance) || 0,
-    stationCount: Number(data.stationCount) || 0,
-  });
-
-export const updateDistrict = (id, data) =>
-  updateItem(COLLECTIONS.DISTRICTS, id, data);
-
-export const deleteDistrict = (id) =>
-  deleteItem(COLLECTIONS.DISTRICTS, id);
-
-// ══════════════════════════════════════════════════════════════════════
-// 8. Sensors
-// ══════════════════════════════════════════════════════════════════════
-export const addSensor = (data) =>
-  addItem(COLLECTIONS.SENSORS, {
-    containerId:  data.containerId  || "",
-    stationId:    data.stationId    || "",
-    type:         data.type         || "fill_level", // fill_level | temperature | gas | humidity
-    value:        Number(data.value) || 0,
-    unit:         data.unit         || "%",
-    lastReading:  ts(),
-  });
-
-export const updateSensorReading = (id, value) =>
-  updateItem(COLLECTIONS.SENSORS, id, { value: Number(value) || 0, lastReading: ts() });
-
-export const deleteSensor = (id) =>
-  deleteItem(COLLECTIONS.SENSORS, id);
+  return data;
+};
 
 // ══════════════════════════════════════════════════════════════════════
 // 9. Alerts
@@ -404,6 +449,22 @@ export const syncAlertsFromStations = async (stations = []) => {
 
 // ══════════════════════════════════════════════════════════════════════
 // 15. Auto-sync districts performance from real stations data
+//
+// ⚠️ TECH DEBT (tracked, deliberate — do not "clean up" in isolation):
+// This function + recordDailyStationHistory() below, and the two analytics
+// docs they write (analytics/districts_perf, analytics/station_history),
+// are NOT yet renamed/moved to the new bins/neighborhoods model. They were
+// deliberately left reading "stations" grouped by station.district, because
+// Phase 1 (smart-bin data-model introduction) does not wire bins into any
+// page's live state yet — there is no live `bins` array to group here until
+// a later phase cuts the UI over. Renaming this now would either require
+// prematurely wiring bins into the app (out of scope) or produce a
+// cosmetic-only rename that still groups by the old station.district field,
+// which would need to be redone anyway once bins are live.
+// MUST be closed out (grouped by bin.neighborhoodId, doc ids renamed to
+// analytics/neighborhoods_perf + analytics/neighborhood_history, field key
+// "المحطات" renamed to "الحاويات") once bins are wired into the app's live
+// state — i.e. by the end of Phase 2/3 of the smart-bin redesign, not later.
 // ══════════════════════════════════════════════════════════════════════
 /**
  * Derives district performance metrics from live station data

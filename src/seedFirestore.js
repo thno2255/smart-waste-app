@@ -14,6 +14,7 @@
 
 import { collection, addDoc, getDocs, query, limit, doc, setDoc, getDoc } from "firebase/firestore";
 import { db } from "./firebase";
+import { COLLECTIONS } from "./firestoreService";
 
 const ts = () => new Date().toISOString();
 
@@ -50,17 +51,39 @@ async function setAnalyticsDoc(docId, data) {
 export async function seedAllCollections() {
   const results = {};
 
-  // ── districts ──────────────────────────────────────────────────────
-  results.districts = await seedOnce("districts", {
-    name:         "حي الخليج",
-    city:         "بريدة",
-    fillLevel:    45,
-    wasteTotal:   1200,
-    performance:  88,
-    stationCount: 3,
+  // ── neighborhoods (replaces the old unused "districts" collection) ──
+  results.neighborhoods = await seedOnce(COLLECTIONS.NEIGHBORHOODS, {
+    name:      "حي الخليج",
+    city:      "بريدة",
+    boundary:  null, // GeoJSON.Polygon — filled in by the map phase
+    centerLat: null,
+    centerLng: null,
   });
 
-  // ── sensors ────────────────────────────────────────────────────────
+  // ── bins (replaces the old embedded stations[].containers[]) ────────
+  results.bins = await seedOnce(COLLECTIONS.BINS, {
+    name:                   "حاوية تجريبية 1",
+    neighborhoodId:         "sample-neighborhood-1",
+    lat:                    null,
+    lng:                    null,
+    wasteType:              "مختلط",
+    capacityLiters:         1100,
+    deviceId:               null,
+    status:                 "normal",
+    lastFillLevelPercent:   42,
+    lastTemperatureCelsius: 28,
+    lastReadingAt:          null,
+  });
+
+  // ── iot_devices ───────────────────────────────────────────────────
+  results.iot_devices = await seedOnce(COLLECTIONS.IOT_DEVICES, {
+    binId:      "sample-bin-1",
+    deviceKey:  "demo-key-change-me",
+    label:      "ESP32-DEMO-01",
+    lastSeenAt: null,
+  });
+
+  // ── sensors (legacy/unused collection — left as-is) ──────────────────
   results.sensors = await seedOnce("sensors", {
     containerId:  "sample-container-1",
     stationId:    "sample-station-1",
@@ -371,4 +394,104 @@ export async function seedAllCollections() {
   console.log("[seed] analytics/* — all 12 docs written ✓");
 
   return results;
+}
+
+/**
+ * migrateStationsToBinsAndNeighborhoods()
+ * ─────────────────────────────────────────────────────────────────────
+ * One-time, NON-DESTRUCTIVE migration from the old suction-model data
+ * (stations + embedded containers[]) to the new smart-bin model
+ * (neighborhoods + bins).
+ *
+ * - Reads every "stations" doc.
+ * - Creates one "neighborhoods" doc per distinct station.district value
+ *   (skips districts that already have a neighborhoods doc with the same
+ *   name, so it's safe to run more than once).
+ * - Creates one "bins" doc per embedded containers[] entry, carrying
+ *   fillLevel over as lastFillLevelPercent (pressure has no bin analog
+ *   and is dropped, not carried over). Each created bin is tagged with
+ *   _migratedFromContainerId (the source container's id, or a composite
+ *   station-id+name fallback for legacy containers with no id) — already-
+ *   migrated containers are skipped on a re-run, so re-running this never
+ *   creates duplicate bins.
+ * - Does NOT delete or modify "stations" or their embedded containers —
+ *   fully additive/reversible, so it can be reviewed in the Firebase
+ *   console before any page is switched over to reading bins/neighborhoods.
+ *
+ * Usage: call once from SettingsPage (same manual-trigger pattern as
+ * seedAllCollections()).
+ */
+export async function migrateStationsToBinsAndNeighborhoods() {
+  const stationsSnap = await getDocs(collection(db, "stations"));
+  const stations = stationsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // Existing neighborhoods, keyed by name, so re-running this is idempotent.
+  const neighborhoodsSnap = await getDocs(collection(db, COLLECTIONS.NEIGHBORHOODS));
+  const neighborhoodIdByName = {};
+  neighborhoodsSnap.docs.forEach(d => {
+    neighborhoodIdByName[d.data().name] = d.id;
+  });
+
+  // Bins already created by a previous run of this migration, keyed by the
+  // source container's id (or a station-id+name fallback) — so a re-run
+  // skips containers it has already migrated instead of duplicating them.
+  const binsSnap = await getDocs(collection(db, COLLECTIONS.BINS));
+  const migratedContainerKeys = new Set(
+    binsSnap.docs.map(d => d.data()._migratedFromContainerId).filter(Boolean)
+  );
+
+  let neighborhoodsCreated = 0;
+  let binsCreated = 0;
+  let binsSkipped = 0;
+
+  for (const station of stations) {
+    const districtName = station.district || "غير محدد";
+
+    let neighborhoodId = neighborhoodIdByName[districtName];
+    if (!neighborhoodId) {
+      const ref = await addDoc(collection(db, COLLECTIONS.NEIGHBORHOODS), {
+        name:      districtName,
+        city:      "بريدة",
+        boundary:  null,
+        centerLat: null,
+        centerLng: null,
+        createdAt: ts(),
+        _migratedFrom: "stations",
+      });
+      neighborhoodId = ref.id;
+      neighborhoodIdByName[districtName] = neighborhoodId;
+      neighborhoodsCreated += 1;
+    }
+
+    const containers = Array.isArray(station.containers) ? station.containers : [];
+    for (const container of containers) {
+      const containerKey = container.id || `${station.id}::${container.name || ""}`;
+      if (migratedContainerKeys.has(containerKey)) {
+        binsSkipped += 1;
+        continue;
+      }
+
+      await addDoc(collection(db, COLLECTIONS.BINS), {
+        name:                   container.name || `حاوية ${station.name || ""}`.trim(),
+        neighborhoodId,
+        lat:                    null,
+        lng:                    null,
+        wasteType:              station.wasteType || "مختلط",
+        capacityLiters:         1100,
+        deviceId:               null,
+        status:                 "normal",
+        lastFillLevelPercent:   Number(container.fillLevel) || 0,
+        lastTemperatureCelsius: null,
+        lastReadingAt:          null,
+        createdAt:              ts(),
+        _migratedFrom:          `stations/${station.id}`,
+        _migratedFromContainerId: containerKey,
+      });
+      migratedContainerKeys.add(containerKey); // guard against dup containerKeys within this same run
+      binsCreated += 1;
+    }
+  }
+
+  console.log(`[migrate] ${neighborhoodsCreated} neighborhoods + ${binsCreated} bins created (${binsSkipped} skipped, already migrated) from ${stations.length} stations ✓`);
+  return { stationsRead: stations.length, neighborhoodsCreated, binsCreated, binsSkipped };
 }

@@ -76,7 +76,8 @@ import {
   recordDailyStationHistory,
   COLLECTIONS,
 } from "./firestoreService";
-import { seedAllCollections } from "./seedFirestore";
+import { getStatus } from "./config";
+import { seedAllCollections, migrateStationsToBinsAndNeighborhoods } from "./seedFirestore";
 import { exportAllDataToExcel } from "./exportAllDataToExcel";
 // ============================================================
 // 🔐 AUTH CONTEXT
@@ -893,15 +894,17 @@ const StatCard = ({ title, value, unit, icon, gradient, trend }) => (
   </div>
 );
 
-// ✅ دالة موحدة لحساب الحالة بناءً على نسبة الامتلاء فقط
-const getStatus = (fillLevel) => {
-  if (fillLevel >= 85) return "حرج";
-  if (fillLevel >= 60) return "تحذير";
-  return "طبيعي";
-};
+// getStatus is now imported from ./config — single source of truth,
+// replacing this file's previous local copy (and firestoreService.js's
+// separate copy, which now just re-exports the same function).
 
 const StatusBadge = ({ status }) => {
-  const m = { طبيعي: { bg: "#065f4620", c: "#10b981", b: "#10b98140" }, تحذير: { bg: "#92400e20", c: "#f59e0b", b: "#f59e0b40" }, حرج: { bg: "#7f1d1d20", c: "#ef4444", b: "#ef444440" } };
+  const m = {
+    طبيعي:   { bg: "#065f4620", c: "#10b981", b: "#10b98140" },
+    تحذير:   { bg: "#92400e20", c: "#f59e0b", b: "#f59e0b40" },
+    حرج:     { bg: "#7f1d1d20", c: "#ef4444", b: "#ef444440" },
+    offline: { bg: "#64748b20", c: "#64748b", b: "#64748b40" }, // reserved for the bin/offline model, unused until bins carry live sensor data
+  };
   const s = m[status] || m["طبيعي"];
   return <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: s.bg, color: s.c, border: `1px solid ${s.b}` }}>{status}</span>;
 };
@@ -3344,6 +3347,8 @@ const SettingsPage = () => {
   const [threshold, setThreshold] = useState(85);
   const [seedStatus, setSeedStatus] = useState(null);    // null | "running" | "done" | "error"
   const [exportStatus, setExportStatus] = useState(null); // null | "running" | "done" | "error"
+  const [migrateStatus, setMigrateStatus] = useState(null); // null | "running" | "done" | "error"
+  const [migrateResult, setMigrateResult] = useState(null);
 
   const Toggle = ({ value, onChange }) => (
     <div onClick={() => onChange(!value)} style={{ width: 48, height: 26, borderRadius: 13, background: value ? C.accent : C.border, cursor: "pointer", position: "relative", transition: "background 0.3s" }}>
@@ -3429,6 +3434,53 @@ const SettingsPage = () => {
           }}
         >
           {seedStatus === "running" ? "جاري التهيئة…" : "🚀 تهيئة Collections الناقصة"}
+        </button>
+      </Card>
+
+      <Card title="ترحيل البيانات إلى نموذج الحاويات الذكية" icon={<Database size={16} color="#94a3b8" />}>
+        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
+          ينشئ هذا الإجراء مستندات "neighborhoods" و"bins" من بيانات "stations" والحاويات
+          المضمّنة بداخلها الموجودة حاليًا. إجراء إضافي بالكامل — لا يحذف ولا يعدّل
+          أي بيانات موجودة في stations، ويمكن تشغيله أكثر من مرة بأمان.
+        </p>
+        {migrateStatus === "done" && (
+          <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.accent }}>
+            ✅ تم الترحيل — {migrateResult?.neighborhoodsCreated ?? 0} حي جديد، {migrateResult?.binsCreated ?? 0} حاوية جديدة،
+            {" "}{migrateResult?.binsSkipped ?? 0} حاوية تم تجاوزها (مرحّلة مسبقًا)، من أصل {migrateResult?.stationsRead ?? 0} محطة. تحقق من Firebase Console.
+          </div>
+        )}
+        {migrateStatus === "error" && (
+          <div style={{ background: C.danger + "15", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.danger }}>
+            ❌ حدث خطأ أثناء الترحيل — تحقق من Console.
+          </div>
+        )}
+        <button
+          disabled={migrateStatus === "running"}
+          onClick={async () => {
+            const confirmed = window.confirm(
+              "سيتم إنشاء مستندات neighborhoods وbins جديدة من بيانات stations الحالية. " +
+              "لن يُحذف أو يُعدَّل أي شيء في stations، والتشغيل أكثر من مرة آمن (لن يكرر ما تم ترحيله). متابعة؟"
+            );
+            if (!confirmed) return;
+            setMigrateStatus("running");
+            try {
+              const result = await migrateStationsToBinsAndNeighborhoods();
+              setMigrateResult(result);
+              setMigrateStatus("done");
+            } catch (e) {
+              console.error("[migrate]", e);
+              setMigrateStatus("error");
+            }
+          }}
+          style={{
+            padding: "11px 24px", borderRadius: 10, border: "none",
+            background: migrateStatus === "running" ? C.border : C.g2,
+            color: migrateStatus === "running" ? C.dim : "#fff",
+            fontWeight: 700, cursor: migrateStatus === "running" ? "not-allowed" : "pointer",
+            fontSize: 13, fontFamily: ARABIC_FONT,
+          }}
+        >
+          {migrateStatus === "running" ? "جاري الترحيل…" : "🔄 ترحيل المحطات إلى أحياء وحاويات ذكية"}
         </button>
       </Card>
 
