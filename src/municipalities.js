@@ -57,8 +57,11 @@ export function isOfficialNeighborhoodName(name) {
 }
 
 // ── Roles & scope ─────────────────────────────────────────────────────
-export const CANONICAL_ROLES = { executive: "PLATFORM_ADMIN", manager: "MUNICIPALITY_MANAGER", employee: "OPERATIONS_EMPLOYEE", driver: "DRIVER", citizen: "CITIZEN" };
-export const ROLE_LABELS_AR = { PLATFORM_ADMIN: "مدير المنصة", MUNICIPALITY_MANAGER: "مدير بلدية", OPERATIONS_EMPLOYEE: "موظف تشغيلي", DRIVER: "سائق", CITIZEN: "مواطن" };
+// Stored values stay (executive/manager/employee/driver/citizen); the canonical names are what the UI shows.
+export const CANONICAL_ROLES = { executive: "AMANAH_DECISION_MAKER", manager: "MUNICIPALITY_MANAGER", employee: "OPERATIONS_EMPLOYEE", driver: "DRIVER", citizen: "CITIZEN" };
+export const ROLE_LABELS_AR = { AMANAH_DECISION_MAKER: "متخذ قرار — الأمانة", MUNICIPALITY_MANAGER: "مدير بلدية", OPERATIONS_EMPLOYEE: "موظف عمليات", DRIVER: "سائق / فريق ميداني", CITIZEN: "مواطن" };
+export const PORTAL_FOR_ROLE = { executive: "amanah", manager: "municipality", employee: "operations", driver: "driver", citizen: "citizen" };
+export const PORTAL_LABELS_AR = { amanah: "بوابة متخذي القرار — الأمانة", municipality: "بوابة متخذي القرار — البلدية", operations: "بوابة موظفي العمليات", driver: "بوابة الأفراد — البلدية (السائقون والفرق الميدانية)", citizen: "بوابة المواطنين" };
 export const canonicalRole = (legacyRole) => CANONICAL_ROLES[legacyRole] || "CITIZEN";
 export const isStaffRole = (legacyRole) => ["executive", "manager", "employee"].includes(legacyRole);
 

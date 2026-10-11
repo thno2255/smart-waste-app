@@ -47,6 +47,13 @@ const MATRIX = {
   "municipalities.manage": (r) => r === "executive",           // seed/backfill + neighborhood ↔ municipality overrides
   "municipalities.viewAll":(r) => r === "executive",           // the city-wide view across all six
   "simulation.control":    (r) => MGMT(r),                     // demo simulator (never touches real sensor readings)
+  "plan.create":           (r) => r === "employee" || r === "manager" || r === "executive", // smart collection plan for a municipality
+  "support.request":       (r) => r === "manager" || r === "employee",   // municipality asks the Amanah for support
+  "support.review":        (r) => r === "executive",                      // Amanah reviews support requests
+  "transfers.propose":     (r) => r === "executive",                      // inter-municipality resource transfer proposals
+  "transfers.approve":     (r) => r === "executive",                      // only the Amanah decision maker approves/executes a transfer
+  "decisions.simulate":    (r) => r === "executive" || r === "manager",   // what-if simulations (isolated copies only)
+  "intelligence.view":     (r) => MGMT(r),                                 // "العقل التشغيلي للمدينة"
 };
 export function can(role, action, ctx = {}) {
   const rule = MATRIX[action];

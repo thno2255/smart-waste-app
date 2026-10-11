@@ -63,6 +63,25 @@ service cloud.firestore {
     match /simulation_state/{id} { allow read: if isStaff(); allow write: if isEmployee(); }
     match /demo_sessions/{id}    { allow read: if isStaff(); allow write: if isEmployee(); }
 
+    // ── Amanah-level entities ──
+    // Support requests: a municipality (manager/employee, scoped) files one; the Amanah reviews; no deletes.
+    match /support_requests/{id} {
+      allow read: if isEmployee() && sameMun(resource.data);
+      allow create: if isEmployee() && role() != "executive" && sameMun(request.resource.data) && request.resource.data.status == "open";
+      allow update: if isAdmin() || (isEmployee() && sameMun(resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["note", "updatedAt", "withdrawnAt", "status"]) && request.resource.data.status in ["open", "withdrawn"]);
+      allow delete: if false;
+    }
+    // Resource transfers between municipalities: proposed/approved/executed/rejected ONLY by the Amanah decision maker; managers of both sides may read.
+    match /resource_transfers/{id} {
+      allow read: if isAdmin() || (isEmployee() && (resource.data.fromMunicipalityId == me().municipalityId || resource.data.toMunicipalityId == me().municipalityId));
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+    // Planner runs, decision simulations and recommendations: written by the role that ran them (scoped), readable by scoped staff; immutable afterwards.
+    match /optimization_runs/{id}      { allow read: if isEmployee() && sameMun(resource.data); allow create: if isEmployee() && sameMun(request.resource.data); allow update, delete: if isAdmin() && resource.data.get("demo", false) == true; }
+    match /simulation_scenarios/{id}   { allow read: if isEmployee(); allow create: if isEmployee() && role() in ["executive", "manager"]; allow update, delete: if isAdmin(); }
+    match /decision_recommendations/{id} { allow read: if isEmployee() && sameMun(resource.data); allow create, update: if isEmployee() && sameMun(request.resource.data); allow delete: if false; }
+
     match /bins/{id} {
       allow read: if (signedIn() && !scoped() && role() != "manager") || (isStaff() && sameMun(resource.data));
       allow create: if isEmployee() && managerOk() && sameMun(request.resource.data);

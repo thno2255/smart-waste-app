@@ -44,7 +44,7 @@ describe("municipality data (provenance-tagged)", () => {
 
 describe("roles & scope", () => {
   it("maps legacy roles to canonical ones", () => {
-    expect(canonicalRole("executive")).toBe("PLATFORM_ADMIN");
+    expect(canonicalRole("executive")).toBe("AMANAH_DECISION_MAKER");
     expect(canonicalRole("manager")).toBe("MUNICIPALITY_MANAGER");
     expect(canonicalRole("employee")).toBe("OPERATIONS_EMPLOYEE");
     expect(canonicalRole("driver")).toBe("DRIVER");

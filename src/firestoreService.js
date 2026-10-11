@@ -1180,3 +1180,118 @@ export async function setUserMunicipality(uid, municipalityId, actor, role = nul
   batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "user_municipality_set", actorId: actor?.uid || "", actorName: actor?.name || "", details: { uid, municipalityId, role }, createdAt: ts() });
   await batch.commit();
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// 27. Amanah level — support requests, inter-municipality transfers,
+//     planner runs, decision simulations, recommendations.
+// ══════════════════════════════════════════════════════════════════════
+COLLECTIONS.SUPPORT_REQUESTS = "support_requests";
+COLLECTIONS.RESOURCE_TRANSFERS = "resource_transfers";
+COLLECTIONS.OPTIMIZATION_RUNS = "optimization_runs";
+COLLECTIONS.SIMULATION_SCENARIOS = "simulation_scenarios";
+COLLECTIONS.DECISION_RECOMMENDATIONS = "decision_recommendations";
+
+export function useSupportRequests(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.SUPPORT_REQUESTS, { enabled, municipalityId });
+  return { supportRequests: data, loading, error };
+}
+/**
+ * Resource transfers. The Amanah (no municipalityId) reads them all; a scoped manager/employee only
+ * sees transfers whose sending OR receiving side is their municipality — two constrained queries
+ * (what the rules allow for a list) merged client-side.
+ */
+export function useResourceTransfers(enabled = true, municipalityId = null) {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(!!enabled);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const base = collection(db, COLLECTIONS.RESOURCE_TRANSFERS);
+    const queries = municipalityId ? [query(base, where("fromMunicipalityId", "==", municipalityId)), query(base, where("toMunicipalityId", "==", municipalityId))] : [base];
+    const parts = queries.map(() => []);
+    const publish = () => { const byId = {}; for (const rows of parts) for (const r of rows) byId[r.id] = r; setData(Object.values(byId).sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")))); setLoading(false); };
+    const unsubs = queries.map((q, i) => onSnapshot(q, (snap) => { parts[i] = snap.docs.map((d) => ({ id: d.id, ...d.data() })); publish(); }, (err) => { console.error("[useResourceTransfers]", err); setError(err); setLoading(false); }));
+    return () => unsubs.forEach((u) => u());
+  }, [enabled, municipalityId]);
+  return { transfers: data, loading, error };
+}
+export function useOptimizationRuns(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.OPTIMIZATION_RUNS, { enabled, municipalityId });
+  return { runs: data, loading, error };
+}
+export function useSimulationScenarios(enabled = true) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.SIMULATION_SCENARIOS, { enabled });
+  return { scenarios: data, loading, error };
+}
+
+/** A municipality asks the Amanah for support (vehicles/drivers/hours) with the pressure evidence attached. */
+export const createSupportRequest = (data, actor) =>
+  addItem(COLLECTIONS.SUPPORT_REQUESTS, { ...data, status: "open", requestedBy: actor?.uid || "", requestedByName: actor?.name || "", reviewedBy: null, reviewedAt: null, resolution: "" });
+export const reviewSupportRequest = (id, actor, status, resolution = "", transferId = null) =>
+  updateItem(COLLECTIONS.SUPPORT_REQUESTS, id, { status, reviewedBy: actor?.uid || "", reviewedByName: actor?.name || "", reviewedAt: ts(), resolution, transferId });
+
+/**
+ * Transfer lifecycle: proposed → approved → executed (resource temporarily re-homed) → returned, or rejected.
+ * Nothing moves until an Amanah decision maker approves; execution and return are explicit and audited.
+ */
+/** Demo-scene housekeeping: closes every OPEN support request (Amanah only — rules allow any update for the admin). Returns the count. */
+export const withdrawOpenSupportRequests = async (actor, note = "") => {
+  const snap = await getDocs(query(collection(db, COLLECTIONS.SUPPORT_REQUESTS), where("status", "==", "open")));
+  if (snap.empty) return 0;
+  const batch = writeBatch(db);
+  snap.docs.forEach((d) => batch.update(d.ref, { status: "withdrawn", withdrawnAt: ts(), withdrawnBy: actor?.uid || "", resolution: note, updatedAt: ts() }));
+  await batch.commit();
+  return snap.size;
+};
+export const proposeResourceTransfer = (data, actor) =>
+  addItem(COLLECTIONS.RESOURCE_TRANSFERS, { ...data, status: "proposed", proposedBy: actor?.uid || "", proposedByName: actor?.name || "" });
+export const decideResourceTransfer = async (transfer, actor, decision, note = "") => {
+  const batch = writeBatch(db);
+  const ref = doc(db, COLLECTIONS.RESOURCE_TRANSFERS, transfer.id);
+  batch.update(ref, { status: decision, decidedBy: actor?.uid || "", decidedByName: actor?.name || "", decidedAt: ts(), decisionNote: note, updatedAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: decision === "approved" ? "transfer_approved" : "transfer_rejected", actorId: actor?.uid || "", actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId, from: transfer.fromMunicipalityId, to: transfer.toMunicipalityId, note }, createdAt: ts() });
+  await batch.commit();
+};
+/** Resource documents touched by a transfer: vehicle, driver profile (+ its user doc), or both for a crew. */
+const transferTargets = (transfer) => {
+  const t = [];
+  const vehicleId = transfer.resourceType === "vehicle" ? transfer.resourceId : transfer.vehicleId;
+  const driverId = transfer.resourceType === "driver" ? transfer.resourceId : transfer.driverId;
+  if (transfer.resourceType !== "driver" && vehicleId) t.push({ col: COLLECTIONS.VEHICLES, id: vehicleId });
+  if (transfer.resourceType !== "vehicle" && driverId) { t.push({ col: COLLECTIONS.DRIVER_PROFILES, id: driverId }); t.push({ col: COLLECTIONS.USERS, id: driverId, optional: true }); }
+  return t;
+};
+/** Executes an APPROVED transfer: the vehicle / driver / crew is temporarily re-homed (homeMunicipalityId kept for the return). */
+export const executeResourceTransfer = async (transfer, actor) => {
+  if (transfer.status !== "approved") throw new Error("النقل غير معتمد");
+  const targets = transferTargets(transfer);
+  if (targets.length === 0) throw new Error("لا مورد محدد في النقل");
+  const batch = writeBatch(db);
+  for (const { col, id, optional } of targets) {
+    const snap = await getDoc(doc(db, col, id));
+    if (!snap.exists()) { if (optional) continue; throw new Error("المورد غير موجود"); }
+    const d = snap.data();
+    batch.update(snap.ref, { municipalityId: transfer.toMunicipalityId, homeMunicipalityId: d.homeMunicipalityId || d.municipalityId || transfer.fromMunicipalityId, transferId: transfer.id, transferUntil: transfer.until || null, updatedAt: ts() });
+  }
+  batch.update(doc(db, COLLECTIONS.RESOURCE_TRANSFERS, transfer.id), { status: "executed", executedBy: actor?.uid || "", executedAt: ts(), updatedAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "transfer_executed", actorId: actor?.uid || "", actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId, from: transfer.fromMunicipalityId, to: transfer.toMunicipalityId }, createdAt: ts() });
+  await batch.commit();
+};
+/** Returns an EXECUTED transfer's resource(s) to the home municipality. */
+export const returnResourceTransfer = async (transfer, actor) => {
+  if (transfer.status !== "executed") throw new Error("النقل غير منفَّذ");
+  const batch = writeBatch(db);
+  for (const { col, id, optional } of transferTargets(transfer)) {
+    const snap = await getDoc(doc(db, col, id));
+    if (!snap.exists()) { if (optional) continue; throw new Error("المورد غير موجود"); }
+    batch.update(snap.ref, { municipalityId: snap.data().homeMunicipalityId || transfer.fromMunicipalityId, transferId: null, transferUntil: null, updatedAt: ts() });
+  }
+  batch.update(doc(db, COLLECTIONS.RESOURCE_TRANSFERS, transfer.id), { status: "returned", returnedBy: actor?.uid || "", returnedAt: ts(), updatedAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "transfer_returned", actorId: actor?.uid || "", actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId }, createdAt: ts() });
+  await batch.commit();
+};
+
+/** Planner / simulation records (immutable history of what the engines computed and why). */
+export const saveOptimizationRun = (data, actor) => addItem(COLLECTIONS.OPTIMIZATION_RUNS, { ...data, createdBy: actor?.uid || "", createdByName: actor?.name || "" });
+export const saveSimulationScenario = (data, actor) => addItem(COLLECTIONS.SIMULATION_SCENARIOS, { ...data, createdBy: actor?.uid || "", createdByName: actor?.name || "" });
+export const saveDecisionRecommendation = (data, actor) => addItem(COLLECTIONS.DECISION_RECOMMENDATIONS, { ...data, createdBy: actor?.uid || "", status: "open" });

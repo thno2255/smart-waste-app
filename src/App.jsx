@@ -124,6 +124,20 @@ import {
   persistDriverLocation,
   useRouteIncidents,
   useMunicipalities,
+  useOptimizationRuns,
+  saveOptimizationRun,
+  useSimulationScenarios,
+  saveSimulationScenario,
+  setVehicleStatusWithHistory,
+  withdrawOpenSupportRequests,
+  useSupportRequests,
+  useResourceTransfers,
+  createSupportRequest,
+  reviewSupportRequest,
+  proposeResourceTransfer,
+  decideResourceTransfer,
+  executeResourceTransfer,
+  returnResourceTransfer,
   seedMunicipalitiesAndBackfill,
   setNeighborhoodMunicipality,
   setUserMunicipality,
@@ -155,16 +169,19 @@ import {
   rankNeighborhoodsForCollection,
   reconcileRecommendations,
 } from "./decisionEngine";
-import { predictFutureState, computeFillRate } from "./prediction";
+import { predictFutureState, computeFillRate, predictFullTime } from "./prediction";
 import { generateAlertCandidates, ALERT_TYPE_LABELS, ALERT_TYPE_ICONS } from "./alertsEngine";
 import { useRoadRoute, useRoadLegs, fetchRoadMatrix, fetchRoadRoute } from "./roadRouting";
 import { rankDriverCandidates, driverOrigin } from "./assignmentEngine";
 import { optimizeRoute, evaluateOrder } from "./routeOptimizer";
-import { MUNICIPALITIES, municipalityById, municipalityForNeighborhood, defaultAssignmentFor, scopeFor, isStaffRole, ROLE_LABELS_AR, computeMunicipalityStats, operationalZones, DATA_PROVENANCE, NEIGHBORHOOD_ASSIGNMENT_PROVENANCE, OFFICIAL_NAMES_SOURCE, isOfficialNeighborhoodName } from "./municipalities";
+import { MUNICIPALITIES, municipalityById, municipalityForNeighborhood, defaultAssignmentFor, scopeFor, isStaffRole, canonicalRole, ROLE_LABELS_AR, computeMunicipalityStats, operationalZones, DATA_PROVENANCE, NEIGHBORHOOD_ASSIGNMENT_PROVENANCE, OFFICIAL_NAMES_SOURCE, isOfficialNeighborhoodName } from "./municipalities";
 import { parseSteps, projectOnRoute, nextManeuver, offRouteDecision, arrivedAtStop, fixQuality, formatDistanceAr, distanceM, shouldPersistLocation } from "./navigation";
 import { INCIDENT_TYPES, canConfirmCollection, routeProgress, nextStopFor, reinstateSkippedStop, buildConfirmation } from "./executionEngine";
 import { createOfflineQueue } from "./offlineQueue";
 import { DEFAULT_SIM_CONFIG, SIM_EVENTS } from "./simulation/simulationEngine";
+import { buildCollectionPlan, explainRoute, suggestAdditions } from "./collectionPlanner";
+import { simulateDecision, SCENARIO_TYPES } from "./decisionSimulator";
+import { municipalityPressure, recommendTransfers, compareMunicipalities, CREW_BINS_PER_HOUR } from "./interMunicipalEngine";
 import { installSimulation, subscribeSimState, tickSimulation, setSimulationStatus, fireSimulationEvent, realIntervalMs, resetSimulation } from "./simulation/simulationRunner";
 import { DEMO_STEPS, DEFAULT_DEMO_MUNICIPALITY, evaluateDemo, nextStepIndex } from "./demoScenario";
 import { can, validateDriverProfile, findVehicleAssignmentConflicts, findRouteAssignmentConflicts, activeAssignmentFor, vehicleHolderAt, coverageMatrix, driverCodeFor, locationFreshness, SHIFT_STATUS_LABELS, AVAILABILITY_LABELS } from "./fleetEngine";
@@ -172,6 +189,36 @@ import { getBinMapState, computeNeighborhoodMapStats, binMatchesFilter, neighbor
 import { computeImpactMetrics, computeFleetPerformance } from "./impact";
 import { seedAllCollections, migrateStationsToBinsAndNeighborhoods, seedCityDemoData } from "./seedFirestore";
 import { exportAllDataToExcel } from "./exportAllDataToExcel";
+
+// ── Theme tokens (Phase 2: government-style light identity by default; dark optional) ──
+// The palette is resolved ONCE at load from localStorage (swm_theme) because the
+// tokens are plain strings composed with alpha suffixes all over the UI
+// (e.g. C.accent + "20"); switching reloads the page.
+const THEMES = {
+  light: {
+    name: "light",
+    bg: "#f3f6f4", card: "#ffffff", cardHover: "#eef4f0", border: "#dde5e0",
+    accent: "#2f9e5f", warning: "#c77700", danger: "#d12f2f", info: "#1f5fbf", purple: "#6d4bd6",
+    text: "#1e2b24", muted: "#55665d", dim: "#7e8c85",
+    brand: "#0b3d2e", brandSoft: "#13553f", onBrand: "#ffffff", brandText: "#dbeee4",
+    g1: "linear-gradient(135deg, #2f9e5f, #1c7a46)", g2: "linear-gradient(135deg, #1f5fbf, #174a93)",
+    g3: "linear-gradient(135deg, #c77700, #9a5c00)", g4: "linear-gradient(135deg, #6d4bd6, #5235a8)",
+  },
+  dark: {
+    name: "dark",
+    bg: "#0a0e1a", card: "#111827", cardHover: "#1a2337", border: "#1e293b",
+    accent: "#10b981", warning: "#f59e0b", danger: "#ef4444", info: "#3b82f6", purple: "#8b5cf6",
+    text: "#f1f5f9", muted: "#94a3b8", dim: "#64748b",
+    brand: "#0b3d2e", brandSoft: "#13553f", onBrand: "#ffffff", brandText: "#dbeee4",
+    g1: "linear-gradient(135deg, #10b981, #059669)", g2: "linear-gradient(135deg, #3b82f6, #1d4ed8)",
+    g3: "linear-gradient(135deg, #f59e0b, #d97706)", g4: "linear-gradient(135deg, #8b5cf6, #6d28d9)",
+  },
+};
+const THEME_NAME = (() => { try { return localStorage.getItem("swm_theme") === "dark" ? "dark" : "light"; } catch { return "light"; } })();
+const C = THEMES[THEME_NAME];
+const setTheme = (name) => { try { localStorage.setItem("swm_theme", name); } catch { /* ignore */ } window.location.reload(); };
+const BRAND = { ar: "منصة الإدارة الذكية للنفايات البلدية", en: "Smart Waste MIS", city: "بريدة — منطقة القصيم", engine: "العقل التشغيلي للمدينة", engineEn: "Smart Municipal Waste Intelligence Engine",
+  description: "منصة ذكية لإدارة النفايات البلدية، تجمع بين التنبؤ الاستباقي بامتلاء الحاويات، والتحسين الآلي لجولات الجمع، والتوزيع الذكي للموارد بين البلديات، مع محاكاة أثر القرارات قبل تنفيذها وقياس نتائجها الفعلية." };
 // ============================================================
 // 🔐 AUTH CONTEXT
 // ============================================================
@@ -327,11 +374,11 @@ const AuthProvider = ({ children }) => {
 // ============================================================
 const DISTRICTS = ["حي الخليج","حي الفايزية","حي الإسكان","حي الريان","حي السالمية","حي الحمر","حي المنتزه","حي الأفق","حي النقع","حي الضاحي","حي الهلالية","حي البصيرة"];
 const ROLES_LIST = [
-  { value: "citizen",   label: "الأفراد",    icon: <Home size={22} />,       desc: "طلب حاويات ومتابعة الخدمات", color: "#10b981" },
-  { value: "employee",  label: "موظف",       icon: <HardHat size={22} />,    desc: "إدارة الأحياء والعمليات",    color: "#3b82f6" },
-  { value: "driver",    label: "سائق ميداني", icon: <Truck size={22} />,     desc: "تنفيذ جولات الجمع ميدانيًا",  color: "#8b5cf6" },
+  { value: "citizen",   label: "الأفراد",    icon: <Home size={22} />,       desc: "طلب حاويات ومتابعة الخدمات", color: C.accent },
+  { value: "employee",  label: "موظف",       icon: <HardHat size={22} />,    desc: "إدارة الأحياء والعمليات",    color: C.info },
+  { value: "driver",    label: "سائق ميداني", icon: <Truck size={22} />,     desc: "تنفيذ جولات الجمع ميدانيًا",  color: C.purple },
   { value: "manager",   label: "مدير بلدية", icon: <Landmark size={22} />,   desc: "إدارة بلدية فرعية واحدة",     color: "#06b6d4" },
-  { value: "executive", label: "إدارة عليا", icon: <Landmark size={22} />,   desc: "لوحة متخذي القرار",          color: "#f59e0b" },
+  { value: "executive", label: "إدارة عليا", icon: <Landmark size={22} />,   desc: "لوحة متخذي القرار",          color: C.warning },
 ];
 const isMgmtRole = (r) => r === "employee" || r === "manager" || r === "executive";
 
@@ -412,14 +459,14 @@ const AuthPage = () => {
   };
 
   const F = "'Noto Kufi Arabic',sans-serif";
-  const govGreen = "#10b981";
+  const govGreen = C.accent;
   const govDark  = "#071628";
   const govCard  = "#0c1f35";
   const govBorder = "#1e3a5f";
 
   const fieldWrap = { position:"relative", display:"flex", flexDirection:"column", gap:6 };
-  const labelSt   = { fontSize:12, color:"#94a3b8", fontWeight:600 };
-  const iconWrap   = { position:"absolute", left:14, bottom:13, color:"#64748b", display:"flex", alignItems:"center" };
+  const labelSt   = { fontSize:12, color:C.muted, fontWeight:600 };
+  const iconWrap   = { position:"absolute", left:14, bottom:13, color:C.dim, display:"flex", alignItems:"center" };
 
   return (
     <div dir="rtl" style={{ minHeight:"100vh", background:govDark, fontFamily:F, display:"flex", flexDirection:"column" }}>
@@ -431,7 +478,7 @@ const AuthPage = () => {
           <div style={{ width:30, height:30, borderRadius:7, background:"linear-gradient(135deg,#10b981,#065f3a)", display:"flex", alignItems:"center", justifyContent:"center" }}>
             <ShieldCheck size={15} color="#fff" />
           </div>
-          <span style={{ fontSize:12, fontWeight:800, color:"#f1f5f9" }}>المملكة العربية السعودية</span>
+          <span style={{ fontSize:12, fontWeight:800, color:C.text }}>المملكة العربية السعودية</span>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:6, background:"#10b98115", border:"1px solid #10b98130", padding:"4px 10px", borderRadius:20 }}>
           <Lock size={10} color={govGreen} />
@@ -455,8 +502,8 @@ const AuthPage = () => {
               <AppLogo size={100} />
               <div style={{ marginTop:28, marginBottom:8 }}>
                 <div style={{ fontSize:11, color:govGreen, fontWeight:700, letterSpacing:2, textTransform:"uppercase", marginBottom:10 }}>SMART WASTE MIS</div>
-                <h2 style={{ fontSize:26, fontWeight:900, color:"#f1f5f9", margin:"0 0 8px 0", lineHeight:1.3 }}>نظام إدارة النفايات الذكي</h2>
-                <p style={{ fontSize:13, color:"#64748b", fontWeight:600, margin:0 }}>مدينة بريدة • منطقة القصيم</p>
+                <h2 style={{ fontSize:26, fontWeight:900, color:C.text, margin:"0 0 8px 0", lineHeight:1.3 }}>نظام إدارة النفايات الذكي</h2>
+                <p style={{ fontSize:13, color:C.dim, fontWeight:600, margin:0 }}>مدينة بريدة • منطقة القصيم</p>
               </div>
 
               {/* فاصل */}
@@ -467,7 +514,7 @@ const AuthPage = () => {
               </div>
 
               {/* شرح التطبيق */}
-              <p style={{ fontSize:13, color:"#94a3b8", lineHeight:1.9, marginBottom:24, textAlign:"right" }}>
+              <p style={{ fontSize:13, color:C.muted, lineHeight:1.9, marginBottom:24, textAlign:"right" }}>
                 منصة رقمية ذكية لإدارة النفايات وتحسين جودة البيئة الحضرية، تُسهم في تحقيق أهداف رؤية المملكة 2030 نحو مدن مستدامة ونظيفة.
               </p>
 
@@ -480,7 +527,7 @@ const AuthPage = () => {
               ].map((f, i) => (
                 <div key={i} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, background:"#0a1e3820", border:"1px solid #1e3a5f40", borderRadius:8, padding:"8px 12px" }}>
                   <div style={{ color:govGreen, flexShrink:0 }}>{f.icon}</div>
-                  <span style={{ fontSize:12, color:"#94a3b8", textAlign:"right" }}>{f.text}</span>
+                  <span style={{ fontSize:12, color:C.muted, textAlign:"right" }}>{f.text}</span>
                 </div>
               ))}
 
@@ -504,8 +551,8 @@ const AuthPage = () => {
               <AppLogo size={80} />
               <div style={{ marginTop:14 }}>
                 <div style={{ fontSize:11, color:govGreen, fontWeight:700, letterSpacing:1 }}>SMART WASTE MIS</div>
-                <h2 style={{ fontSize:20, fontWeight:900, color:"#f1f5f9", margin:"6px 0 4px" }}>نظام إدارة النفايات الذكي</h2>
-                <p style={{ fontSize:12, color:"#64748b", margin:0 }}>مدينة بريدة • منطقة القصيم</p>
+                <h2 style={{ fontSize:20, fontWeight:900, color:C.text, margin:"6px 0 4px" }}>نظام إدارة النفايات الذكي</h2>
+                <p style={{ fontSize:12, color:C.dim, margin:0 }}>مدينة بريدة • منطقة القصيم</p>
               </div>
             </div>
           )}
@@ -515,10 +562,10 @@ const AuthPage = () => {
             {/* عنوان الكارد */}
             {mode !== "forgot" && (
               <div style={{ marginBottom:24 }}>
-                <h3 style={{ fontSize:18, fontWeight:800, color:"#f1f5f9", margin:"0 0 4px" }}>
+                <h3 style={{ fontSize:18, fontWeight:800, color:C.text, margin:"0 0 4px" }}>
                   {mode === "login" ? "تسجيل الدخول" : "إنشاء حساب جديد"}
                 </h3>
-                <p style={{ fontSize:12, color:"#64748b", margin:0 }}>
+                <p style={{ fontSize:12, color:C.dim, margin:0 }}>
                   {mode === "login" ? "أدخل بياناتك للوصول إلى المنظومة" : "أنشئ حسابك للانضمام إلى المنظومة"}
                 </p>
               </div>
@@ -528,7 +575,7 @@ const AuthPage = () => {
             {mode !== "forgot" && (
               <div style={{ display:"flex", gap:0, marginBottom:24, background:"#051020", borderRadius:10, padding:4, border:`1px solid ${govBorder}` }}>
                 {[{key:"login",label:"تسجيل دخول"},{key:"register",label:"إنشاء حساب"}].map(tab=>(
-                  <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"9px 0", borderRadius:8, border:"none", background:mode===tab.key?govGreen:"transparent", color:mode===tab.key?"#000":"#64748b", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.25s" }}>{tab.label}</button>
+                  <button key={tab.key} onClick={()=>{setMode(tab.key);resetForm();}} style={{ flex:1, padding:"9px 0", borderRadius:8, border:"none", background:mode===tab.key?govGreen:"transparent", color:mode===tab.key?"#000":C.dim, fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.25s" }}>{tab.label}</button>
                 ))}
               </div>
             )}
@@ -537,21 +584,21 @@ const AuthPage = () => {
             {mode === "forgot" && (
               <div style={{ textAlign:"center", marginBottom:24 }}>
                 <div style={{ width:56, height:56, borderRadius:14, background:"linear-gradient(135deg,#10b981,#059669)", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 14px" }}><KeyRound size={26} color="#fff" /></div>
-                <div style={{ fontSize:17, fontWeight:800, color:"#f1f5f9", marginBottom:6 }}>استعادة كلمة المرور</div>
-                <div style={{ fontSize:12, color:"#64748b" }}>أدخل بريدك الإلكتروني وسنرسل لك رابط إعادة التعيين</div>
+                <div style={{ fontSize:17, fontWeight:800, color:C.text, marginBottom:6 }}>استعادة كلمة المرور</div>
+                <div style={{ fontSize:12, color:C.dim }}>أدخل بريدك الإلكتروني وسنرسل لك رابط إعادة التعيين</div>
               </div>
             )}
 
             {/* رسائل */}
             {error && (
-              <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#ef4444", background:"#ef444412", padding:"10px 14px", borderRadius:10, marginBottom:16, border:"1px solid #ef444430" }}>
-                <ShieldAlert size={14} color="#ef4444" style={{ flexShrink:0 }} />
+              <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:C.danger, background:"#ef444412", padding:"10px 14px", borderRadius:10, marginBottom:16, border:"1px solid #ef444430" }}>
+                <ShieldAlert size={14} color={C.danger} style={{ flexShrink:0 }} />
                 {error}
               </div>
             )}
             {success && (
-              <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#10b981", background:"#10b98112", padding:"10px 14px", borderRadius:10, marginBottom:16, border:"1px solid #10b98130" }}>
-                <CheckCircle size={14} color="#10b981" style={{ flexShrink:0 }} />
+              <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:C.accent, background:"#10b98112", padding:"10px 14px", borderRadius:10, marginBottom:16, border:"1px solid #10b98130" }}>
+                <CheckCircle size={14} color={C.accent} style={{ flexShrink:0 }} />
                 {success}
               </div>
             )}
@@ -568,14 +615,14 @@ const AuthPage = () => {
                   <label style={labelSt}>كلمة المرور</label>
                   <input type={showPass?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="أدخل كلمة المرور" style={{ ...inputStyle, paddingLeft:40 }} onKeyDown={e=>e.key==="Enter"&&handleLogin(e)} />
                   <span style={iconWrap}><KeyRound size={15} /></span>
-                  <button onClick={()=>setShowPass(v=>!v)} style={{ position:"absolute", left:40, bottom:13, background:"none", border:"none", color:"#64748b", cursor:"pointer", padding:0, display:"flex" }}>{showPass?<EyeOff size={15}/>:<Eye size={15}/>}</button>
+                  <button onClick={()=>setShowPass(v=>!v)} style={{ position:"absolute", left:40, bottom:13, background:"none", border:"none", color:C.dim, cursor:"pointer", padding:0, display:"flex" }}>{showPass?<EyeOff size={15}/>:<Eye size={15}/>}</button>
                 </div>
                 <div style={{ textAlign:"left" }}>
                   <button onClick={()=>{setMode("forgot");resetForm();}} style={{ background:"none", border:"none", color:govGreen, fontSize:12, cursor:"pointer", fontFamily:F, padding:0, display:"inline-flex", alignItems:"center", gap:4 }}>
                     <KeyRound size={11} /> نسيت كلمة المرور؟
                   </button>
                 </div>
-                <button onClick={handleLogin} disabled={loading} style={{ padding:"13px 0", borderRadius:10, border:"none", background:loading?"#1e3a5f":"linear-gradient(135deg,#10b981,#059669)", color:loading?"#64748b":"#fff", fontSize:14, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:8, transition:"all 0.2s" }}>
+                <button onClick={handleLogin} disabled={loading} style={{ padding:"13px 0", borderRadius:10, border:"none", background:loading?"#1e3a5f":"linear-gradient(135deg,#10b981,#059669)", color:loading?C.dim:"#fff", fontSize:14, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:8, transition:"all 0.2s" }}>
                   {loading ? <><Clock size={15}/> جاري التحقق...</> : <><ChevronRight size={15}/> دخول إلى المنظومة</>}
                 </button>
               </div>
@@ -589,10 +636,10 @@ const AuthPage = () => {
                   <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="example@email.com" style={{ ...inputStyle, paddingLeft:40 }} onKeyDown={e=>e.key==="Enter"&&handleResetPassword(e)} />
                   <span style={iconWrap}><Mail size={15} /></span>
                 </div>
-                <button onClick={handleResetPassword} disabled={loading} style={{ padding:"13px 0", borderRadius:10, border:"none", background:loading?"#1e3a5f":"linear-gradient(135deg,#10b981,#059669)", color:loading?"#64748b":"#fff", fontSize:14, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                <button onClick={handleResetPassword} disabled={loading} style={{ padding:"13px 0", borderRadius:10, border:"none", background:loading?"#1e3a5f":"linear-gradient(135deg,#10b981,#059669)", color:loading?C.dim:"#fff", fontSize:14, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
                   {loading ? <><Clock size={15}/> جاري الإرسال...</> : <><Mail size={15}/> إرسال رابط الاستعادة</>}
                 </button>
-                <button onClick={()=>{setMode("login");resetForm();}} style={{ padding:"10px 0", borderRadius:10, border:`1px solid ${govBorder}`, background:"transparent", color:"#94a3b8", fontSize:13, cursor:"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                <button onClick={()=>{setMode("login");resetForm();}} style={{ padding:"10px 0", borderRadius:10, border:`1px solid ${govBorder}`, background:"transparent", color:C.muted, fontSize:13, cursor:"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
                   <ChevronRight size={13} style={{ transform:"rotate(180deg)" }} /> العودة لتسجيل الدخول
                 </button>
               </div>
@@ -607,8 +654,8 @@ const AuthPage = () => {
                   <div style={{ display:"flex", gap:8 }}>
                     {ROLES_LIST.map(r=>(
                       <button key={r.value} onClick={()=>setRole(r.value)} style={{ flex:1, padding:"12px 6px", borderRadius:10, border:`2px solid ${role===r.value?r.color:govBorder}`, background:role===r.value?r.color+"15":"transparent", cursor:"pointer", textAlign:"center", transition:"all 0.2s" }}>
-                        <div style={{ display:"flex", justifyContent:"center", marginBottom:6, color:role===r.value?r.color:"#64748b" }}>{r.icon}</div>
-                        <div style={{ fontSize:11, fontWeight:700, color:role===r.value?r.color:"#94a3b8", fontFamily:F }}>{r.label}</div>
+                        <div style={{ display:"flex", justifyContent:"center", marginBottom:6, color:role===r.value?r.color:C.dim }}>{r.icon}</div>
+                        <div style={{ fontSize:11, fontWeight:700, color:role===r.value?r.color:C.muted, fontFamily:F }}>{r.label}</div>
                         <div style={{ fontSize:9, color:"#475569", marginTop:2, fontFamily:F }}>{r.desc}</div>
                       </button>
                     ))}
@@ -629,13 +676,13 @@ const AuthPage = () => {
                     <label style={labelSt}>كلمة المرور *</label>
                     <input type={showPass?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="6 أحرف على الأقل" style={{ ...inputStyle, paddingLeft:40 }} />
                     <span style={iconWrap}><KeyRound size={15} /></span>
-                    <button onClick={()=>setShowPass(v=>!v)} style={{ position:"absolute", left:40, bottom:13, background:"none", border:"none", color:"#64748b", cursor:"pointer", padding:0, display:"flex" }}>{showPass?<EyeOff size={15}/>:<Eye size={15}/>}</button>
+                    <button onClick={()=>setShowPass(v=>!v)} style={{ position:"absolute", left:40, bottom:13, background:"none", border:"none", color:C.dim, cursor:"pointer", padding:0, display:"flex" }}>{showPass?<EyeOff size={15}/>:<Eye size={15}/>}</button>
                   </div>
                   <div style={fieldWrap}>
                     <label style={labelSt}>تأكيد كلمة المرور *</label>
                     <input type={showConfirmPass?"text":"password"} value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="أعد كتابة كلمة المرور" style={{ ...inputStyle, paddingLeft:40 }} />
                     <span style={iconWrap}><KeyRound size={15} /></span>
-                    <button onClick={()=>setShowConfirmPass(v=>!v)} style={{ position:"absolute", left:40, bottom:13, background:"none", border:"none", color:"#64748b", cursor:"pointer", padding:0, display:"flex" }}>{showConfirmPass?<EyeOff size={15}/>:<Eye size={15}/>}</button>
+                    <button onClick={()=>setShowConfirmPass(v=>!v)} style={{ position:"absolute", left:40, bottom:13, background:"none", border:"none", color:C.dim, cursor:"pointer", padding:0, display:"flex" }}>{showConfirmPass?<EyeOff size={15}/>:<Eye size={15}/>}</button>
                   </div>
                   <div style={fieldWrap}>
                     <label style={labelSt}>رقم الجوال</label>
@@ -659,7 +706,7 @@ const AuthPage = () => {
                     </div>
                   )}
                 </div>
-                <button onClick={handleRegister} disabled={loading} style={{ padding:"13px 0", borderRadius:10, border:"none", background:loading?"#1e3a5f":"linear-gradient(135deg,#10b981,#059669)", color:loading?"#64748b":"#fff", fontSize:14, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, marginTop:4, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                <button onClick={handleRegister} disabled={loading} style={{ padding:"13px 0", borderRadius:10, border:"none", background:loading?"#1e3a5f":"linear-gradient(135deg,#10b981,#059669)", color:loading?C.dim:"#fff", fontSize:14, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, marginTop:4, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
                   {loading ? <><Clock size={15}/> جاري إنشاء الحساب...</> : <><CheckCircle size={15}/> إنشاء الحساب</>}
                 </button>
               </div>
@@ -694,7 +741,7 @@ const AccountSettingsModal = ({ onClose }) => {
   const { userData, changePassword, updateUserProfile, user } = useAuth();
   const [activeTab, setActiveTab] = useState("profile");
   const F = "'Noto Kufi Arabic',sans-serif";
-  const inputSt = { width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" };
+  const inputSt = { width:"100%", padding:"12px 16px", borderRadius:12, border:"1px solid #1e293b", background:C.bg, color:C.text, fontSize:14, fontFamily:F, outline:"none", boxSizing:"border-box" };
 
   // Profile state
   const [fullName, setFullName] = useState(userData?.fullName || "");
@@ -735,27 +782,27 @@ const AccountSettingsModal = ({ onClose }) => {
     setPassLoading(false);
   };
 
-  const roleMap = { executive: { label: "إدارة عليا", color: "#f59e0b", icon: "🏛️" }, employee: { label: "موظف", color: "#3b82f6", icon: "👷" }, citizen: { label: "مواطن", color: "#10b981", icon: "🏠" } };
+  const roleMap = { executive: { label: "إدارة عليا", color: C.warning, icon: "🏛️" }, employee: { label: "موظف", color: C.info, icon: "👷" }, citizen: { label: "مواطن", color: C.accent, icon: "🏠" } };
   const r = roleMap[userData?.role] || roleMap.citizen;
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, direction:"rtl", fontFamily:F }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ width:"100%", maxWidth:500, maxHeight:"90vh", overflow:"auto", padding:"0", background:"#111827", borderRadius:20, border:"1px solid #1e293b" }}>
+      <div onClick={e => e.stopPropagation()} style={{ width:"100%", maxWidth:500, maxHeight:"90vh", overflow:"auto", padding:"0", background:C.card, borderRadius:20, border:"1px solid #1e293b" }}>
         {/* Header */}
         <div style={{ padding:"24px 28px 0", textAlign:"center" }}>
           <div style={{ width:60, height:60, borderRadius:16, background:`${r.color}15`, border:`2px solid ${r.color}30`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:30, margin:"0 auto 12px" }}>{r.icon}</div>
-          <h3 style={{ fontSize:18, fontWeight:900, color:"#f1f5f9", margin:"0 0 4px" }}>إعدادات الحساب</h3>
-          <p style={{ fontSize:12, color:"#64748b", margin:0 }}>{userData?.email}</p>
+          <h3 style={{ fontSize:18, fontWeight:900, color:C.text, margin:"0 0 4px" }}>إعدادات الحساب</h3>
+          <p style={{ fontSize:12, color:C.dim, margin:0 }}>{userData?.email}</p>
           <span style={{ display:"inline-block", marginTop:8, padding:"3px 12px", borderRadius:20, fontSize:11, fontWeight:600, background:`${r.color}20`, color:r.color }}>{r.label}</span>
         </div>
 
         {/* Tabs */}
-        <div style={{ display:"flex", gap:0, margin:"20px 28px 0", background:"#0a0e1a", borderRadius:12, padding:4 }}>
+        <div style={{ display:"flex", gap:0, margin:"20px 28px 0", background:C.bg, borderRadius:12, padding:4 }}>
           {[{ key:"profile", label:"👤 البيانات الشخصية" }, { key:"password", label:"🔐 كلمة المرور" }].map(tab => (
             <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
               flex:1, padding:"10px 0", borderRadius:10, border:"none",
-              background: activeTab === tab.key ? "#10b981" : "transparent",
-              color: activeTab === tab.key ? "#000" : "#94a3b8",
+              background: activeTab === tab.key ? C.accent : "transparent",
+              color: activeTab === tab.key ? "#000" : C.muted,
               fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:F, transition:"all 0.3s",
             }}>{tab.label}</button>
           ))}
@@ -765,27 +812,27 @@ const AccountSettingsModal = ({ onClose }) => {
           {/* ===== PROFILE TAB ===== */}
           {activeTab === "profile" && (
             <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-              {profileMsg && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{profileMsg}</div>}
-              {profileError && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {profileError}</div>}
+              {profileMsg && <div style={{ fontSize:12, color:C.accent, background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{profileMsg}</div>}
+              {profileError && <div style={{ fontSize:12, color:C.danger, background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {profileError}</div>}
 
               <div>
-                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>الاسم الكامل *</label>
+                <label style={{ fontSize:12, color:C.muted, marginBottom:6, display:"block" }}>الاسم الكامل *</label>
                 <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} placeholder="الاسم الثلاثي" style={inputSt} />
               </div>
 
               <div>
-                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>البريد الإلكتروني</label>
+                <label style={{ fontSize:12, color:C.muted, marginBottom:6, display:"block" }}>البريد الإلكتروني</label>
                 <input type="email" value={userData?.email || ""} disabled style={{ ...inputSt, opacity:0.5, cursor:"not-allowed" }} />
-                <span style={{ fontSize:10, color:"#64748b", marginTop:4, display:"block" }}>لا يمكن تغيير البريد الإلكتروني</span>
+                <span style={{ fontSize:10, color:C.dim, marginTop:4, display:"block" }}>لا يمكن تغيير البريد الإلكتروني</span>
               </div>
 
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:12 }}>
                 <div>
-                  <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>رقم الجوال</label>
+                  <label style={{ fontSize:12, color:C.muted, marginBottom:6, display:"block" }}>رقم الجوال</label>
                   <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="05XXXXXXXX" style={{ ...inputSt, direction:"ltr", textAlign:"right" }} />
                 </div>
                 <div>
-                  <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>الحي</label>
+                  <label style={{ fontSize:12, color:C.muted, marginBottom:6, display:"block" }}>الحي</label>
                   <select value={district} onChange={e => setDistrict(e.target.value)} style={{ ...inputSt, appearance:"auto" }}>
                     <option value="">اختر الحي</option>
                     {DISTRICTS.map(d => <option key={d} value={d}>{d}</option>)}
@@ -794,19 +841,19 @@ const AccountSettingsModal = ({ onClose }) => {
               </div>
 
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:12 }}>
-                <div style={{ background:"#0a0e1a", borderRadius:10, padding:12 }}>
-                  <div style={{ fontSize:10, color:"#64748b" }}>نوع الحساب</div>
+                <div style={{ background:C.bg, borderRadius:10, padding:12 }}>
+                  <div style={{ fontSize:10, color:C.dim }}>نوع الحساب</div>
                   <div style={{ fontSize:14, fontWeight:700, color:r.color, marginTop:4 }}>{r.icon} {r.label}</div>
                 </div>
-                <div style={{ background:"#0a0e1a", borderRadius:10, padding:12 }}>
-                  <div style={{ fontSize:10, color:"#64748b" }}>تاريخ التسجيل</div>
-                  <div style={{ fontSize:13, fontWeight:600, color:"#f1f5f9", marginTop:4 }}>{userData?.createdAt?.split("T")[0] || "-"}</div>
+                <div style={{ background:C.bg, borderRadius:10, padding:12 }}>
+                  <div style={{ fontSize:10, color:C.dim }}>تاريخ التسجيل</div>
+                  <div style={{ fontSize:13, fontWeight:600, color:C.text, marginTop:4 }}>{userData?.createdAt?.split("T")[0] || "-"}</div>
                 </div>
               </div>
 
               <div style={{ display:"flex", gap:10, marginTop:4 }}>
-                <button onClick={handleProfileSave} disabled={profileLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:profileLoading?"#64748b":"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:14, fontWeight:700, cursor:profileLoading?"not-allowed":"pointer", fontFamily:F }}>{profileLoading ? "جاري الحفظ..." : "💾 حفظ التغييرات"}</button>
-                <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
+                <button onClick={handleProfileSave} disabled={profileLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:profileLoading?C.dim:"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:14, fontWeight:700, cursor:profileLoading?"not-allowed":"pointer", fontFamily:F }}>{profileLoading ? "جاري الحفظ..." : "💾 حفظ التغييرات"}</button>
+                <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:C.muted, cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
               </div>
             </div>
           )}
@@ -814,31 +861,31 @@ const AccountSettingsModal = ({ onClose }) => {
           {/* ===== PASSWORD TAB ===== */}
           {activeTab === "password" && (
             <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-              {passMsg && <div style={{ fontSize:12, color:"#10b981", background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{passMsg}</div>}
-              {passError && <div style={{ fontSize:12, color:"#ef4444", background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {passError}</div>}
+              {passMsg && <div style={{ fontSize:12, color:C.accent, background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{passMsg}</div>}
+              {passError && <div style={{ fontSize:12, color:C.danger, background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {passError}</div>}
 
               <div>
-                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الحالية</label>
+                <label style={{ fontSize:12, color:C.muted, marginBottom:6, display:"block" }}>كلمة المرور الحالية</label>
                 <input type="password" value={currentPass} onChange={e => setCurrentPass(e.target.value)} placeholder="أدخل كلمة المرور الحالية" style={inputSt} />
               </div>
               <div>
-                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>كلمة المرور الجديدة</label>
+                <label style={{ fontSize:12, color:C.muted, marginBottom:6, display:"block" }}>كلمة المرور الجديدة</label>
                 <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="6 أحرف على الأقل" style={inputSt} />
               </div>
               <div>
-                <label style={{ fontSize:12, color:"#94a3b8", marginBottom:6, display:"block" }}>تأكيد كلمة المرور الجديدة</label>
+                <label style={{ fontSize:12, color:C.muted, marginBottom:6, display:"block" }}>تأكيد كلمة المرور الجديدة</label>
                 <input type="password" value={confirmPass} onChange={e => setConfirmPass(e.target.value)} placeholder="أعد كتابة كلمة المرور الجديدة" style={inputSt} onKeyDown={e => e.key === "Enter" && handlePassChange()} />
               </div>
 
-              <div style={{ background:"#0a0e1a", borderRadius:10, padding:12, fontSize:11, color:"#64748b", lineHeight:1.8 }}>
-                💡 <strong style={{ color:"#94a3b8" }}>شروط كلمة المرور:</strong><br/>
+              <div style={{ background:C.bg, borderRadius:10, padding:12, fontSize:11, color:C.dim, lineHeight:1.8 }}>
+                💡 <strong style={{ color:C.muted }}>شروط كلمة المرور:</strong><br/>
                 • يجب أن تكون 6 أحرف على الأقل<br/>
                 • يجب أن تكون مختلفة عن الحالية
               </div>
 
               <div style={{ display:"flex", gap:10, marginTop:4 }}>
-                <button onClick={handlePassChange} disabled={passLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:passLoading?"#64748b":"linear-gradient(135deg,#f59e0b,#d97706)", color:"#000", fontSize:14, fontWeight:700, cursor:passLoading?"not-allowed":"pointer", fontFamily:F }}>{passLoading ? "جاري التغيير..." : "🔐 تغيير كلمة المرور"}</button>
-                <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
+                <button onClick={handlePassChange} disabled={passLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:passLoading?C.dim:"linear-gradient(135deg,#f59e0b,#d97706)", color:"#000", fontSize:14, fontWeight:700, cursor:passLoading?"not-allowed":"pointer", fontFamily:F }}>{passLoading ? "جاري التغيير..." : "🔐 تغيير كلمة المرور"}</button>
+                <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:C.muted, cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
               </div>
             </div>
           )}
@@ -855,11 +902,11 @@ const ChangePasswordModal = AccountSettingsModal;
 // ⏳ LOADING SCREEN
 // ============================================================
 const LoadingScreen = () => (
-  <div dir="rtl" style={{ minHeight:"100vh", background:"#0a0e1a", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", fontFamily:"'Noto Kufi Arabic',sans-serif", gap:20 }}>
+  <div dir="rtl" style={{ minHeight:"100vh", background:C.bg, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", fontFamily:"'Noto Kufi Arabic',sans-serif", gap:20 }}>
     <style>{"@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}} @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}"}</style>
     <div style={{fontSize:48,animation:"spin 2s linear infinite"}}>♻️</div>
-    <div style={{fontSize:16,fontWeight:700,color:"#f1f5f9",animation:"pulse 1.5s ease infinite"}}>جاري التحميل...</div>
-    <div style={{fontSize:12,color:"#64748b"}}>نظام إدارة النفايات الذكي - بريدة</div>
+    <div style={{fontSize:16,fontWeight:700,color:C.text,animation:"pulse 1.5s ease infinite"}}>جاري التحميل...</div>
+    <div style={{fontSize:12,color:C.dim}}>نظام إدارة النفايات الذكي - بريدة</div>
   </div>
 );
 
@@ -920,20 +967,13 @@ const generateMonthlyTrend = () =>
   }));
 
 // --- Colors ---
-const C = {
-  bg: "#0a0e1a", card: "#111827", cardHover: "#1a2337", border: "#1e293b",
-  accent: "#10b981", warning: "#f59e0b", danger: "#ef4444", info: "#3b82f6", purple: "#8b5cf6",
-  text: "#f1f5f9", muted: "#94a3b8", dim: "#64748b",
-  g1: "linear-gradient(135deg, #10b981, #059669)", g2: "linear-gradient(135deg, #3b82f6, #1d4ed8)",
-  g3: "linear-gradient(135deg, #f59e0b, #d97706)", g4: "linear-gradient(135deg, #8b5cf6, #6d28d9)",
-};
-const WASTE_COLORS = { عضوية: "#10b981", بلاستيك: "#3b82f6", ورق: "#f59e0b", زجاج: "#8b5cf6", معادن: "#ef4444" };
+const WASTE_COLORS = { عضوية: C.accent, بلاستيك: C.info, ورق: C.warning, زجاج: C.purple, معادن: C.danger };
 
 // --- Custom Tooltip ---
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background: "#1e293b", border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", fontFamily: ARABIC_FONT, direction: "rtl" }}>
+    <div style={{ background: C.border, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", fontFamily: ARABIC_FONT, direction: "rtl" }}>
       <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>{label}</div>
       {payload.map((p, i) => (
         <div key={i} style={{ fontSize: 11, color: p.color, display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
@@ -986,10 +1026,10 @@ const StatCard = ({ title, value, unit, icon, gradient, trend }) => (
 
 const StatusBadge = ({ status }) => {
   const m = {
-    طبيعي:   { bg: "#065f4620", c: "#10b981", b: "#10b98140" },
-    تحذير:   { bg: "#92400e20", c: "#f59e0b", b: "#f59e0b40" },
-    حرج:     { bg: "#7f1d1d20", c: "#ef4444", b: "#ef444440" },
-    offline: { bg: "#64748b20", c: "#64748b", b: "#64748b40" }, // reserved for the bin/offline model, unused until bins carry live sensor data
+    طبيعي:   { bg: "#065f4620", c: C.accent, b: "#10b98140" },
+    تحذير:   { bg: "#92400e20", c: C.warning, b: "#f59e0b40" },
+    حرج:     { bg: "#7f1d1d20", c: C.danger, b: "#ef444440" },
+    offline: { bg: "#64748b20", c: C.dim, b: "#64748b40" }, // reserved for the bin/offline model, unused until bins carry live sensor data
   };
   const s = m[status] || m["طبيعي"];
   return <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: s.bg, color: s.c, border: `1px solid ${s.b}` }}>{status}</span>;
@@ -1037,7 +1077,7 @@ const StateBadge = ({ state }) => {
 
 /** §33 — every demo-tagged bin/neighborhood/route must carry a visible "تجريبي" marker, never blended silently with live data. */
 const DemoBadge = () => (
-  <span style={{ padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: "#8b5cf620", color: "#8b5cf6", border: "1px solid #8b5cf640", whiteSpace: "nowrap" }}>
+  <span style={{ padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: "#8b5cf620", color: C.purple, border: "1px solid #8b5cf640", whiteSpace: "nowrap" }}>
     تجريبي
   </span>
 );
@@ -1330,7 +1370,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                     <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 220 }}>
                       <b>{m?.nameAr}</b><br />
                       <span style={{ color: "#b45309", fontSize: 11 }}>{z.label}</span><br />
-                      {st && <>أحياء مُسندة: {st.neighborhoods.length} · حاويات: {st.bins} · حرجة: <b style={{ color: "#ef4444" }}>{st.critical}</b> · متصلة بالمحاكي: {st.connectedPct != null ? `${st.connectedPct}%` : "—"}<br />سائقون متاحون: {st.driversAvailable} · جولات جارية: {st.routesActive}</>}
+                      {st && <>أحياء مُسندة: {st.neighborhoods.length} · حاويات: {st.bins} · حرجة: <b style={{ color: C.danger }}>{st.critical}</b> · متصلة بالمحاكي: {st.connectedPct != null ? `${st.connectedPct}%` : "—"}<br />سائقون متاحون: {st.driversAvailable} · جولات جارية: {st.routesActive}</>}
                     </div>
                   </Popup>
                 </Polygon>
@@ -1347,12 +1387,12 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                 >
                   <Popup>
                     <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 200 }}>
-                      <b>{n.name}</b> — <span style={{ color: n.color, fontWeight: 700 }}>{MAP_STATE_LABELS[n.state]}</span>{horizon > 0 && n.predictedCount > 0 && <span style={{ color: "#3b82f6", fontSize: 11 }}> (متوقع {horizonLabel})</span>}<br />
+                      <b>{n.name}</b> — <span style={{ color: n.color, fontWeight: 700 }}>{MAP_STATE_LABELS[n.state]}</span>{horizon > 0 && n.predictedCount > 0 && <span style={{ color: C.info, fontSize: 11 }}> (متوقع {horizonLabel})</span>}<br />
                       عدد الحاويات: {n.total}<br />
                       متوسط الامتلاء: {n.avgFill != null ? `${n.avgFill}%` : "—"}{n.invalidCount > 0 && <span style={{ color: "#999", fontSize: 11 }}> (مستبعد {n.invalidCount})</span>}<br />
                       حرجة: <b style={{ color: MAP_STATE_COLORS.critical }}>{n.criticalCount}</b> · تحتاج تفريغًا: <b>{n.needsEmptyingCount}</b> · متابعة: {n.warningCount}<br />
                       غير متصلة/خلل: {n.offlineCount + n.faultCount} · بلا بيانات: {n.noDataCount}<br />
-                      {n.thermalAlert && <span style={{ color: "#ef4444" }}>🔥 تنبيه حراري نشط<br /></span>}
+                      {n.thermalAlert && <span style={{ color: C.danger }}>🔥 تنبيه حراري نشط<br /></span>}
                       {n.citizenReportCount > 0 && <span style={{ color: "#b45309" }}>📣 {n.citizenReportCount} بلاغ مواطن مفتوح<br /></span>}
                       {n.route ? (
                         <span>🧭 {n.route.routeName} ({routeStatusNote(n.route)}) — {n.route.binIds?.length || 0} حاوية<br /></span>
@@ -1360,7 +1400,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                         <span style={{ color: "#b45309" }}>لا توجد جولة مقترحة بعد لهذا الحي<br /></span>
                       ) : null}
                       {n.route && onOpenRoute && (
-                        <button onClick={() => onOpenRoute(n.route.id)} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 8, border: "1px solid #3b82f6", background: "#3b82f620", color: "#3b82f6", fontSize: 11, cursor: "pointer" }}>فتح الجولة</button>
+                        <button onClick={() => onOpenRoute(n.route.id)} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 8, border: "1px solid #3b82f6", background: "#3b82f620", color: C.info, fontSize: 11, cursor: "pointer" }}>فتح الجولة</button>
                       )}
                     </div>
                   </Popup>
@@ -1376,7 +1416,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
 
             {openRoutePaths.map(({ r, pts }) => (
               <Polyline key={`rp-${r.id}`} positions={pts} pathOptions={{ color: r.status === "in_progress" ? C.accent : r.status === "approved" ? C.info : C.warning, weight: r.status === "in_progress" ? 5 : 3, dashArray: r.status === "suggested" ? "6 6" : null, opacity: 0.85 }}>
-                <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}><b>{r.routeName}</b><br />{ROUTE_STATUS_LABELS[r.status] || r.status} · {r.binIds?.length || 0} حاوية{r.driverName ? ` · ${r.driverName}` : ""}{onOpenRoute && <><br /><button onClick={() => onOpenRoute(r.id)} style={{ marginTop: 4, padding: "3px 8px", borderRadius: 6, border: "1px solid #3b82f6", background: "#3b82f620", color: "#3b82f6", fontSize: 11, cursor: "pointer" }}>فتح الجولة</button></>}</div></Popup>
+                <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}><b>{r.routeName}</b><br />{ROUTE_STATUS_LABELS[r.status] || r.status} · {r.binIds?.length || 0} حاوية{r.driverName ? ` · ${r.driverName}` : ""}{onOpenRoute && <><br /><button onClick={() => onOpenRoute(r.id)} style={{ marginTop: 4, padding: "3px 8px", borderRadius: 6, border: "1px solid #3b82f6", background: "#3b82f620", color: C.info, fontSize: 11, cursor: "pointer" }}>فتح الجولة</button></>}</div></Popup>
               </Polyline>
             ))}
             {layer === "routes" && vehiclePositions.map(({ p, fresh }) => (
@@ -1394,9 +1434,9 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                     <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 190 }}>
                       <b>{b.name}</b>{approx && <span style={{ color: "#999", fontSize: 11 }}> (موقع تقريبي)</span>}<br />
                       الحي: {n?.name || "—"}<br />
-                      الحالة: <span style={{ color: vs.color, fontWeight: 700 }}>{MAP_STATE_LABELS[vs.state]}</span>{vs.hot && <span style={{ color: "#ef4444" }}> · 🔥 حرارة مرتفعة</span>}<br />
+                      الحالة: <span style={{ color: vs.color, fontWeight: 700 }}>{MAP_STATE_LABELS[vs.state]}</span>{vs.hot && <span style={{ color: C.danger }}> · 🔥 حرارة مرتفعة</span>}<br />
                       {vs.predicted ? (
-                        <span>الامتلاء الآن: {vs.actualFill != null ? `${vs.actualFill}%` : "—"} ← <b style={{ color: "#3b82f6" }}>متوقع {horizonLabel}: {vs.fill}%</b><br /></span>
+                        <span>الامتلاء الآن: {vs.actualFill != null ? `${vs.actualFill}%` : "—"} ← <b style={{ color: C.info }}>متوقع {horizonLabel}: {vs.fill}%</b><br /></span>
                       ) : (
                         <span>الامتلاء: {vs.actualFill != null ? `${vs.actualFill}%` : "—"}{horizon > 0 && vs.state === "no_data" && <span style={{ color: "#999", fontSize: 11 }}> — {vs.forecastReason}</span>}<br /></span>
                       )}
@@ -1407,10 +1447,10 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                       الجولة: {inRoute ? `${inRoute.route.routeName} — التوقف #${inRoute.order} (${routeStatusNote(inRoute.route)})` : "خارج أي جولة حاليًا"}<br />
                       <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
                         {inRoute && onOpenRoute && (
-                          <button onClick={() => onOpenRoute(inRoute.route.id)} style={{ padding: "4px 10px", borderRadius: 8, border: "1px solid #3b82f6", background: "#3b82f620", color: "#3b82f6", fontSize: 11, cursor: "pointer" }}>فتح الجولة</button>
+                          <button onClick={() => onOpenRoute(inRoute.route.id)} style={{ padding: "4px 10px", borderRadius: 8, border: "1px solid #3b82f6", background: "#3b82f620", color: C.info, fontSize: 11, cursor: "pointer" }}>فتح الجولة</button>
                         )}
                         {!inRoute && onAddToRoute && (
-                          <button onClick={() => onAddToRoute(b)} style={{ padding: "4px 10px", borderRadius: 8, border: "1px solid #10b981", background: "#10b98120", color: "#10b981", fontSize: 11, cursor: "pointer" }}>إضافة للجولة</button>
+                          <button onClick={() => onAddToRoute(b)} style={{ padding: "4px 10px", borderRadius: 8, border: "1px solid #10b981", background: "#10b98120", color: C.accent, fontSize: 11, cursor: "pointer" }}>إضافة للجولة</button>
                         )}
                       </div>
                     </div>
@@ -1532,7 +1572,7 @@ const sensorStateLabel = (bin, connectivity) => {
 const currentTimeMs = () => Date.now();
 
 const DemoEnvBanner = () => (
-  <div style={{ background: "linear-gradient(90deg, #7c3aed, #4c1d95)", color: "#fff", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "5px 12px", fontFamily: ARABIC_FONT, letterSpacing: 0.2 }}>
+  <div title="بيئة عرض تجريبية — بيانات المستشعرات محاكاة (مصدر كل قراءة: SIMULATED)" style={{ background: "linear-gradient(90deg, #7c3aed, #4c1d95)", color: "#fff", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "5px 12px", fontFamily: ARABIC_FONT, letterSpacing: 0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", height: 26, boxSizing: "border-box", lineHeight: "16px" }}>
     🧪 بيئة عرض تجريبية — بيانات المستشعرات محاكاة (مصدر كل قراءة: SIMULATED) · التقسيم البلدي من مصادر رسمية، وحدود النطاقات تشغيلية تجريبية
   </div>
 );
@@ -1564,8 +1604,12 @@ const MunicipalityCard = ({ s, onOpen }) => {
   );
 };
 
-const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], profiles = [], vehicles = [], incidents = [], loggedInUser, onBack, onOpenRoute, onViewBins, onAddToRoute }) => {
+const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], profiles = [], vehicles = [], incidents = [], supportRequests = [], loggedInUser, onBack, onOpenRoute, onViewBins, onAddToRoute }) => {
   const [tab, setTab] = useState("map");
+  const [supportBusy, setSupportBusy] = useState(false);
+  const [supportMsg, setSupportMsg] = useState("");
+  const cityPressure = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings });
+  const myPressure = cityPressure.pressures.find((p) => p.municipalityId === mid) || null;
   const m = municipalityById(mid);
   const s = stats.byMunicipality[mid];
   const munNeighborhoods = useMemo(() => neighborhoods.filter((n) => municipalityForNeighborhood(n) === mid), [neighborhoods, mid]);
@@ -1632,12 +1676,12 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
 
       {tab === "fleet" && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Card title={`السائقون (${munProfiles.length})`} icon={<Users size={16} color="#94a3b8" />}>
+          <Card title={`السائقون (${munProfiles.length})`} icon={<Users size={16} color={C.muted} />}>
             {munProfiles.length === 0 ? <EmptyState icon="🧑‍✈️" title="لا سائقين مرتبطين بهذه البلدية" desc="يُربط السائق ببلديته من إدارة المستخدمين، وبمركبته ونطاقه من صفحة السائقون والأسطول." /> : munProfiles.map((p) => (
               <div key={p.uid} style={{ padding: "8px 10px", background: C.bg, borderRadius: 8, marginBottom: 6, fontSize: 12 }}><b style={{ color: C.text }}>{p.fullName}</b> · {SHIFT_STATUS_LABELS[p.shiftStatus] || p.shiftStatus} · {AVAILABILITY_LABELS[p.availability] || "—"} · {munVehicles.find((v) => v.id === p.vehicleId)?.vehicleNumber || vehicles.find((v) => v.id === p.vehicleId)?.vehicleNumber || "بلا مركبة"}<div style={{ color: C.dim, fontSize: 11 }}>النطاق: {(p.neighborhoodKeys || []).map((k) => `حي ${k}`).join("، ") || "غير محدد"}</div></div>
             ))}
           </Card>
-          <Card title={`المركبات (${munVehicles.length})`} icon={<Truck size={16} color="#94a3b8" />}>
+          <Card title={`المركبات (${munVehicles.length})`} icon={<Truck size={16} color={C.muted} />}>
             {munVehicles.length === 0 ? <EmptyState icon="🚛" title="لا مركبات مرتبطة بهذه البلدية" /> : munVehicles.map((v) => (
               <div key={v.id} style={{ padding: "8px 10px", background: C.bg, borderRadius: 8, marginBottom: 6, fontSize: 12 }}><b style={{ color: C.text }}>{v.vehicleNumber}</b> · {VEHICLE_STATUS_LABELS[v.status] || v.status} · {v.capacityLiters} لتر · {v.driverName || "بلا سائق"}</div>
             ))}
@@ -1674,13 +1718,23 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
             ))}
           </div>
           <ImpactCard impact={impact} compact accent={m.color} />
+          {myPressure && (() => { const [lab, col] = PRESSURE_LABEL[myPressure.level]; const open = supportRequests.filter((r) => r.municipalityId === mid && r.status === "open"); return (
+            <Card title="🆘 الضغط التشغيلي وطلب الدعم من الأمانة" icon={<AlertTriangle size={16} color={C.muted} />}>
+              <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>مؤشر الضغط الآن: <b style={{ color: col }}>{myPressure.index} ({lab})</b> — {myPressure.reasons.join(" · ")}</div>
+              {supportMsg && <div style={{ fontSize: 12, color: C.text, marginTop: 6 }}>{supportMsg}</div>}
+              {open.length > 0 && <div style={{ fontSize: 12, color: C.info, marginTop: 6 }}>طلب دعم مفتوح لدى الأمانة: {open.map((r) => r.need).join("، ")}</div>}
+              {can(loggedInUser?.role, "support.request") && open.length === 0 && (
+                <button disabled={supportBusy} onClick={async () => { const need = window.prompt("ما المطلوب من الأمانة؟ (مثال: مركبة إضافية لمناوبة اليوم)", "مركبة إضافية مع سائق"); if (!need) return; setSupportBusy(true); try { await createSupportRequest({ municipalityId: mid, need, note: "", pressureIndex: myPressure.index, pressureLevel: myPressure.level, evidence: myPressure.reasons, critical: myPressure.critical, readyDrivers: myPressure.readyDrivers, usableVehicles: myPressure.usableVehicles }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); await writeAuditLog("support_request_created", loggedInUser?.uid, loggedInUser?.name, { municipalityId: mid, need, pressureIndex: myPressure.index }); setSupportMsg("📨 أُرسل طلب الدعم إلى الأمانة مع أدلة الضغط التشغيلي"); } catch (e) { setSupportMsg("❌ " + (e?.message || e)); } finally { setSupportBusy(false); } }} style={{ ...smallBtn(C.warning, true), color: "#fff", marginTop: 8 }}>📨 طلب دعم من الأمانة</button>
+              )}
+            </Card>
+          ); })()}
         </div>
       )}
     </div>
   );
 };
 
-const MunicipalitiesPage = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], profiles = [], vehicles = [], incidents = [], loggedInUser, onOpenRoute, onViewBins, onAddToRoute, initialMunicipalityId = null }) => {
+const MunicipalitiesPage = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], profiles = [], vehicles = [], incidents = [], supportRequests = [], loggedInUser, onOpenRoute, onViewBins, onAddToRoute, initialMunicipalityId = null }) => {
   const scope = scopeFor(loggedInUser);
   const [selected, setSelected] = useState(initialMunicipalityId || (scope.all ? null : scope.municipalityId));
   const thermalFor = useMemo(() => makeThermalAlertFor(fireSensors), [fireSensors]);
@@ -1690,7 +1744,7 @@ const MunicipalitiesPage = ({ neighborhoods = [], bins = [], fireSensors = [], r
     const binStateById = Object.fromEntries(bins.map((b) => [b.id, getBinMapState(b, { now })]));
     return computeMunicipalityStats({ groups, neighborhoods, bins, binStateById, profiles, vehicles, routes, incidents, thermalFor, now });
   }, [neighborhoods, bins, profiles, vehicles, routes, incidents, thermalFor]);
-  const common = { stats, neighborhoods, bins, fireSensors, recentReadings, routes, citizenReports, profiles, vehicles, incidents, loggedInUser, onOpenRoute, onViewBins, onAddToRoute };
+  const common = { stats, neighborhoods, bins, fireSensors, recentReadings, routes, citizenReports, profiles, vehicles, incidents, supportRequests, loggedInUser, onOpenRoute, onViewBins, onAddToRoute };
   if (selected) return <MunicipalityDashboard mid={selected} {...common} onBack={scope.all ? () => setSelected(null) : null} />;
   const totals = Object.values(stats.byMunicipality).reduce((a, s) => ({ bins: a.bins + s.bins, critical: a.critical + s.critical, routesActive: a.routesActive + s.routesActive, assigned: a.assigned + s.neighborhoods.length }), { bins: 0, critical: 0, routesActive: 0, assigned: 0 });
   return (
@@ -1873,7 +1927,7 @@ const ImpactCard = ({ impact, compact = false, accent = C.accent }) => {
     { label: "فيضانات مُنعت (حاويات حرجة مغطاة بجولة)", value: impact.overflowsPrevented, unit: "حاوية", color: C.danger },
   ];
   return (
-    <Card title="💡 ماذا وفّرنا اليوم؟ — الجمع بالبيانات مقابل الجدول الثابت" icon={<Leaf size={16} color="#94a3b8" />}>
+    <Card title="💡 ماذا وفّرنا اليوم؟ — الجمع بالبيانات مقابل الجدول الثابت" icon={<Leaf size={16} color={C.muted} />}>
       <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${compact ? 150 : 180}px, 1fr))`, gap: 10 }}>
         {tiles.map((t) => (
           <div key={t.label} style={{ background: C.bg, border: `1px solid ${t.color}30`, borderRadius: 12, padding: "12px 14px" }}>
@@ -1999,7 +2053,7 @@ const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], b
         </div>
       )}
 
-      <Card title="🗺️ الخريطة التشغيلية لمدينة بريدة" icon={<MapGlyph size={16} color="#94a3b8" />}>
+      <Card title="🗺️ الخريطة التشغيلية لمدينة بريدة" icon={<MapGlyph size={16} color={C.muted} />}>
         {loading ? (
           <EmptyState icon="⏳" title="جاري تحميل بيانات الأحياء والحاويات…" />
         ) : neighborhoods.length === 0 ? (
@@ -2009,7 +2063,7 @@ const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], b
         )}
       </Card>
 
-      <Card title="🎯 أولويات التشغيل الآن — ماذا نبدأ به؟" icon={<Target size={16} color="#94a3b8" />}>
+      <Card title="🎯 أولويات التشغيل الآن — ماذا نبدأ به؟" icon={<Target size={16} color={C.muted} />}>
         {nowPriorities.length === 0 ? (
           <EmptyState icon="✅" title="لا توجد أولويات تشغيلية عاجلة الآن" />
         ) : (
@@ -2023,7 +2077,7 @@ const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], b
         )}
       </Card>
 
-      <Card title="🧭 الجولات المقترحة الآن — وما الحاويات التي تغطيها" icon={<RouteIcon size={16} color="#94a3b8" />}>
+      <Card title="🧭 الجولات المقترحة الآن — وما الحاويات التي تغطيها" icon={<RouteIcon size={16} color={C.muted} />}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: suggestedRoutes.length > 0 ? 12 : 0 }}>
           <div style={{ fontSize: 13, color: C.muted }}>
             مقترحة: <b style={{ color: C.text }}>{suggestedRoutes.length}</b> · معتمدة بانتظار البدء: <b style={{ color: C.text }}>{approvedRoutesCount}</b> · نشطة: <b style={{ color: C.text }}>{activeRoutesCount}</b>
@@ -2066,7 +2120,7 @@ const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], b
 
       {!loading && totalBins > 0 && <ImpactCard impact={impact} />}
 
-      <Card title="أبرز الحاويات الحرجة الآن" icon={<AlertTriangle size={16} color="#94a3b8" />}>
+      <Card title="أبرز الحاويات الحرجة الآن" icon={<AlertTriangle size={16} color={C.muted} />}>
         {criticalList.length === 0 ? (
           <EmptyState icon="✅" title="لا توجد حاويات بأولوية حرجة أو مرتفعة حاليًا" />
         ) : (
@@ -2089,7 +2143,7 @@ const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], b
       </Card>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-        <Card title="توزيع النفايات الأسبوعي (كجم)" icon={<BarChart2 size={16} color="#94a3b8" />}>
+        <Card title="توزيع النفايات الأسبوعي (كجم)" icon={<BarChart2 size={16} color={C.muted} />}>
           <ChartBox height={280}><ResponsiveContainer>
             <BarChart data={weeklyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -2104,7 +2158,7 @@ const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], b
           </ResponsiveContainer></ChartBox>
         </Card>
 
-        <Card title="توزيع مستويات الامتلاء (الحاويات)" icon={<Target size={16} color="#94a3b8" />}>
+        <Card title="توزيع مستويات الامتلاء (الحاويات)" icon={<Target size={16} color={C.muted} />}>
           {totalBins === 0 ? <EmptyState icon="📦" title="لا توجد حاويات بعد" /> : (
             <>
               <ChartBox height={220}><ResponsiveContainer>
@@ -2129,7 +2183,7 @@ const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], b
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-        <Card title="الاتجاه الشهري - الجمع والكفاءة" icon={<TrendingUp size={16} color="#94a3b8" />}>
+        <Card title="الاتجاه الشهري - الجمع والكفاءة" icon={<TrendingUp size={16} color={C.muted} />}>
           <ChartBox height={260}><ResponsiveContainer>
             <ComposedChart data={monthlyTrend} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -2144,7 +2198,7 @@ const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], b
           </ResponsiveContainer></ChartBox>
         </Card>
 
-        <Card title="نشاط عمليات الجمع على مدار الساعة" icon={<Clock size={16} color="#94a3b8" />}>
+        <Card title="نشاط عمليات الجمع على مدار الساعة" icon={<Clock size={16} color={C.muted} />}>
           {/* لا توجد بعد بيانات collection_events حقيقية (تأتي في مرحلة إدارة الجولات) —
               عُرض Empty State بدل اختلاق رقم إنتاجي، بدلاً من إعادة تسمية الرسم القديم "نشاط الشفط" فقط. */}
           <EmptyState icon="🚚" title="لا تتوفر بيانات عمليات جمع حقيقية بعد" desc="سيظهر هذا الرسم بمجرد تفعيل تتبع الجولات والجمع في مرحلة إدارة الجولات." />
@@ -2152,7 +2206,7 @@ const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], b
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-        <Card title="متوسط الامتلاء حسب الحي" icon={<Target size={16} color="#94a3b8" />}>
+        <Card title="متوسط الامتلاء حسب الحي" icon={<Target size={16} color={C.muted} />}>
           {neighborhoodFillBars.length === 0 ? <EmptyState icon="🏘️" title="لا توجد أحياء بعد" /> : (
             <ChartBox height={300}><ResponsiveContainer>
               <BarChart data={neighborhoodFillBars} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
@@ -2170,7 +2224,7 @@ const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], b
           )}
         </Card>
 
-        <Card title="التنبيهات" icon={<Bell size={16} color="#94a3b8" />}>
+        <Card title="التنبيهات" icon={<Bell size={16} color={C.muted} />}>
           {criticalBins.length > 0 && (
             <span style={{ background: C.danger + "30", color: C.danger, fontSize: 11, padding: "2px 8px", borderRadius: 10, fontWeight: 600, marginBottom: 12, display: "inline-block" }}>
               {criticalBins.length} حرج
@@ -2661,7 +2715,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
               </div>
             ))}
           </div>
-          <Card title="مقارنة امتلاء الأحياء - بريدة" icon={<BarChart2 size={16} color="#94a3b8" />}>
+          <Card title="مقارنة امتلاء الأحياء - بريدة" icon={<BarChart2 size={16} color={C.muted} />}>
             <ChartBox height={350}><ResponsiveContainer>
               <BarChart data={stationFillData} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -2716,24 +2770,24 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
-              <Card title="متوسط زمن الاستجابة (اعتماد → إنهاء)" icon={<Clock size={16} color="#94a3b8" />}>
+              <Card title="متوسط زمن الاستجابة (اعتماد → إنهاء)" icon={<Clock size={16} color={C.muted} />}>
                 {avgResponseHours != null ? (
                   <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{avgResponseHours.toFixed(1)} <span style={{ fontSize: 14, color: C.muted }}>ساعة</span></div>
                 ) : <EmptyState icon="⏱️" title="لا توجد جولات مكتملة بعد لحساب المتوسط" />}
               </Card>
-              <Card title="متوسط نسبة الامتلاء عند الجمع" icon={<Trash2 size={16} color="#94a3b8" />}>
+              <Card title="متوسط نسبة الامتلاء عند الجمع" icon={<Trash2 size={16} color={C.muted} />}>
                 {avgFillAtCollection != null ? (
                   <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{avgFillAtCollection}%</div>
                 ) : <EmptyState icon="📦" title="لا توجد عمليات جمع مسجّلة بعد" />}
               </Card>
-              <Card title="متوسط أولوية الجولات" icon={<Target size={16} color="#94a3b8" />}>
+              <Card title="متوسط أولوية الجولات" icon={<Target size={16} color={C.muted} />}>
                 {avgRoutePriority != null ? (
                   <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{avgRoutePriority}<span style={{ fontSize: 14, color: C.muted }}> / 100</span></div>
                 ) : <EmptyState icon="🧭" title="لا توجد جولات بعد" />}
               </Card>
             </div>
 
-            <Card title="الأحياء الأعلى طلبًا للجمع" icon={<Home size={16} color="#94a3b8" />}>
+            <Card title="الأحياء الأعلى طلبًا للجمع" icon={<Home size={16} color={C.muted} />}>
               {demandByNeighborhood.length === 0 ? <EmptyState icon="🏘️" title="لا توجد بيانات جولات كافية بعد" /> : (
                 <ChartBox height={260}><ResponsiveContainer>
                   <BarChart data={demandByNeighborhood} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
@@ -2747,7 +2801,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
               )}
             </Card>
 
-            <Card title="المركبات" icon={<Truck size={16} color="#94a3b8" />}>
+            <Card title="المركبات" icon={<Truck size={16} color={C.muted} />}>
               {vehicles.length === 0 ? <EmptyState icon="🚛" title="لا توجد مركبات مسجّلة بعد" /> : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {vehicles.map((v) => (
@@ -2789,13 +2843,13 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
             <EmptyState icon="🚛" title="لا توجد جولات مكتملة بعد" desc="تُحسب هذه المؤشرات من الجولات التي بدأها السائق وأنهاها، وأحداث الجمع، وسجل التخطي/الأعطال." />
           ) : (
             <>
-              <Card title="أداء المركبات" icon={<Truck size={16} color="#94a3b8" />}>
+              <Card title="أداء المركبات" icon={<Truck size={16} color={C.muted} />}>
                 <PerfTable rows={fleet.vehicles} firstCol="المركبة" />
               </Card>
-              <Card title="أداء السائقين" icon={<Users size={16} color="#94a3b8" />}>
+              <Card title="أداء السائقين" icon={<Users size={16} color={C.muted} />}>
                 <PerfTable rows={fleet.drivers} firstCol="السائق" />
               </Card>
-              <Card title="آخر الجولات المكتملة" icon={<ClipboardList size={16} color="#94a3b8" />}>
+              <Card title="آخر الجولات المكتملة" icon={<ClipboardList size={16} color={C.muted} />}>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: ARABIC_FONT }}>
                     <thead><tr style={{ color: C.muted, textAlign: "right" }}>
@@ -2827,7 +2881,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
 
       {tab === "waste" && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-          <Card title="توزيع النفايات حسب النوع" icon={<Trash2 size={16} color="#94a3b8" />}>
+          <Card title="توزيع النفايات حسب النوع" icon={<Trash2 size={16} color={C.muted} />}>
             <ChartBox height={280}><ResponsiveContainer>
               <PieChart>
                 <Pie data={wasteByType} cx="50%" cy="50%" outerRadius={100} innerRadius={55} dataKey="value" paddingAngle={3}
@@ -2839,7 +2893,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
             </ResponsiveContainer></ChartBox>
             <div style={{ textAlign: "center", fontSize: 14, fontWeight: 700, color: C.text }}>الإجمالي: {totalWaste.toLocaleString()} كجم</div>
           </Card>
-          <Card title="النفايات اليومية حسب النوع" icon={<TrendingUp size={16} color="#94a3b8" />}>
+          <Card title="النفايات اليومية حسب النوع" icon={<TrendingUp size={16} color={C.muted} />}>
             <ChartBox height={300}><ResponsiveContainer>
               <AreaChart data={weeklyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -2863,7 +2917,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
             <StatCard title="متوسط التكلفة الشهرية" value={Math.round(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12).toLocaleString()} unit="ر.س" icon={<Calendar size={22} color="#fff" />} gradient={C.g2} trend={-8.5} />
             <StatCard title="تكلفة الكيلوغرام" value={(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12 / (totalWaste * 4.3)).toFixed(2)} unit="ر.س" icon={<Scale size={22} color="#fff" />} gradient={C.g1} />
           </div>
-          <Card title="التكاليف الشهرية مقابل عمليات الجمع" icon={<Banknote size={16} color="#94a3b8" />}>
+          <Card title="التكاليف الشهرية مقابل عمليات الجمع" icon={<Banknote size={16} color={C.muted} />}>
             <ChartBox height={300}><ResponsiveContainer>
               <ComposedChart data={monthlyTrend} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -2892,7 +2946,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
               </div>
             ))}
           </div>
-          <Card title="أهداف الاستدامة - بريدة" icon={<Leaf size={16} color="#94a3b8" />}>
+          <Card title="أهداف الاستدامة - بريدة" icon={<Leaf size={16} color={C.muted} />}>
             {sustainGoals.map((item, i) => (
               <div key={i} style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
@@ -2914,19 +2968,19 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
 // ======================== PREDICTIONS ========================
 const EVENTS_DB = [
   // --- المناسبات الدينية ---
-  { id: "ramadan", name: "شهر رمضان", type: "دينية", icon: "🌙", month: 3, duration: 30, wasteMultiplier: 1.85, peakType: "عضوية", description: "زيادة كبيرة في النفايات الغذائية بسبب الإفطار والسحور والولائم", color: "#8b5cf6", seasonTag: "رمضان" },
+  { id: "ramadan", name: "شهر رمضان", type: "دينية", icon: "🌙", month: 3, duration: 30, wasteMultiplier: 1.85, peakType: "عضوية", description: "زيادة كبيرة في النفايات الغذائية بسبب الإفطار والسحور والولائم", color: C.purple, seasonTag: "رمضان" },
   { id: "eid_fitr", name: "عيد الفطر", type: "دينية", icon: "🎉", month: 4, duration: 6, wasteMultiplier: 2.4, peakType: "مختلطة", description: "ذروة النفايات من الاحتفالات والهدايا والولائم العائلية", color: "#ec4899", seasonTag: "أعياد" },
-  { id: "eid_adha", name: "عيد الأضحى", type: "دينية", icon: "🐑", month: 6, duration: 5, wasteMultiplier: 2.7, peakType: "عضوية", description: "أعلى ذروة سنوية بسبب الأضاحي والولائم الكبيرة", color: "#ef4444", seasonTag: "أعياد" },
-  { id: "hajj", name: "موسم الحج", type: "دينية", icon: "🕋", month: 6, duration: 10, wasteMultiplier: 1.5, peakType: "مختلطة", description: "زيادة متوسطة من التجمعات والسفر", color: "#f59e0b", seasonTag: "مواسم" },
+  { id: "eid_adha", name: "عيد الأضحى", type: "دينية", icon: "🐑", month: 6, duration: 5, wasteMultiplier: 2.7, peakType: "عضوية", description: "أعلى ذروة سنوية بسبب الأضاحي والولائم الكبيرة", color: C.danger, seasonTag: "أعياد" },
+  { id: "hajj", name: "موسم الحج", type: "دينية", icon: "🕋", month: 6, duration: 10, wasteMultiplier: 1.5, peakType: "مختلطة", description: "زيادة متوسطة من التجمعات والسفر", color: C.warning, seasonTag: "مواسم" },
   // --- الرواتب ---
-  { id: "salary_gov", name: "رواتب القطاع الحكومي", type: "رواتب", icon: "💰", month: -1, duration: 5, wasteMultiplier: 1.45, peakType: "بلاستيك", description: "زيادة الاستهلاك والتسوق بعد صرف الرواتب مباشرة", color: "#10b981", seasonTag: "رواتب", recurring: "monthly", dayOfMonth: 27 },
-  { id: "salary_pvt", name: "رواتب القطاع الخاص", type: "رواتب", icon: "💳", month: -1, duration: 5, wasteMultiplier: 1.35, peakType: "بلاستيك", description: "زيادة في نفايات التغليف والمواد الاستهلاكية", color: "#3b82f6", seasonTag: "رواتب", recurring: "monthly", dayOfMonth: 1 },
+  { id: "salary_gov", name: "رواتب القطاع الحكومي", type: "رواتب", icon: "💰", month: -1, duration: 5, wasteMultiplier: 1.45, peakType: "بلاستيك", description: "زيادة الاستهلاك والتسوق بعد صرف الرواتب مباشرة", color: C.accent, seasonTag: "رواتب", recurring: "monthly", dayOfMonth: 27 },
+  { id: "salary_pvt", name: "رواتب القطاع الخاص", type: "رواتب", icon: "💳", month: -1, duration: 5, wasteMultiplier: 1.35, peakType: "بلاستيك", description: "زيادة في نفايات التغليف والمواد الاستهلاكية", color: C.info, seasonTag: "رواتب", recurring: "monthly", dayOfMonth: 1 },
   // --- المواسم ---
   { id: "summer", name: "الإجازة الصيفية", type: "موسمية", icon: "☀️", month: 6, duration: 75, wasteMultiplier: 1.6, peakType: "بلاستيك", description: "زيادة الاستهلاك والمشروبات والمواد البلاستيكية", color: "#f97316", seasonTag: "صيف" },
   { id: "back_school", name: "بداية العام الدراسي", type: "موسمية", icon: "📚", month: 8, duration: 14, wasteMultiplier: 1.3, peakType: "ورق", description: "نفايات ورقية ومواد تغليف من المستلزمات المدرسية", color: "#06b6d4", seasonTag: "مدارس" },
   { id: "national_day", name: "اليوم الوطني", type: "وطنية", icon: "🇸🇦", month: 9, duration: 4, wasteMultiplier: 2.1, peakType: "مختلطة", description: "احتفالات كبيرة وفعاليات مفتوحة في جميع الأحياء", color: "#22c55e", seasonTag: "وطني" },
   { id: "founding_day", name: "يوم التأسيس", type: "وطنية", icon: "🏰", month: 2, duration: 3, wasteMultiplier: 1.8, peakType: "مختلطة", description: "فعاليات احتفالية وتجمعات عائلية", color: "#a855f7", seasonTag: "وطني" },
-  { id: "winter", name: "موسم الشتاء والأمطار", type: "موسمية", icon: "🌧️", month: 12, duration: 60, wasteMultiplier: 1.15, peakType: "عضوية", description: "زيادة طفيفة في النفايات الغذائية والتدفئة", color: "#64748b", seasonTag: "شتاء" },
+  { id: "winter", name: "موسم الشتاء والأمطار", type: "موسمية", icon: "🌧️", month: 12, duration: 60, wasteMultiplier: 1.15, peakType: "عضوية", description: "زيادة طفيفة في النفايات الغذائية والتدفئة", color: C.dim, seasonTag: "شتاء" },
   { id: "sales", name: "التخفيضات الكبرى (وايت فرايدي)", type: "تجارية", icon: "🛒", month: 11, duration: 10, wasteMultiplier: 1.7, peakType: "بلاستيك", description: "نفايات تغليف ومواد شحن بكميات كبيرة", color: "#0ea5e9", seasonTag: "تسوق" },
   { id: "newyear", name: "نهاية السنة الميلادية", type: "تجارية", icon: "🎊", month: 12, duration: 7, wasteMultiplier: 1.55, peakType: "مختلطة", description: "احتفالات وتجمعات نهاية العام", color: "#d946ef", seasonTag: "أعياد" },
 ];
@@ -3031,11 +3085,11 @@ const PredictionsLiveTab = ({ neighborhoods = [], bins = [], recentReadings = []
         <StatCard title="متوقع الامتلاء خلال 3 ساعات" value={soonList.filter((x) => x.priority.prediction.hoursToFull <= THRESHOLDS.predictedFullSoonHours).length} icon={<Clock size={22} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
       </div>
 
-      <Card title="🗺️ الخريطة المستقبلية" icon={<MapGlyph size={16} color="#94a3b8" />}>
+      <Card title="🗺️ الخريطة المستقبلية" icon={<MapGlyph size={16} color={C.muted} />}>
         <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} height={360} compact />
       </Card>
 
-      <Card title="حاويات متوقع امتلاؤها قريبًا" icon={<Clock size={16} color="#94a3b8" />}>
+      <Card title="حاويات متوقع امتلاؤها قريبًا" icon={<Clock size={16} color={C.muted} />}>
         {soonList.length === 0 ? (
           <EmptyState icon="📊" title="لا توجد بيانات تاريخية كافية بعد لأي حاوية" desc="يحتاج التنبؤ عدة قراءات متتالية صاعدة لكل حاوية — ستظهر هنا تلقائيًا مع تراكم القراءات." />
         ) : (
@@ -3057,7 +3111,7 @@ const PredictionsLiveTab = ({ neighborhoods = [], bins = [], recentReadings = []
         )}
       </Card>
 
-      <Card title="الحالة المستقبلية المتوقعة للأحياء" icon={<Home size={16} color="#94a3b8" />}>
+      <Card title="الحالة المستقبلية المتوقعة للأحياء" icon={<Home size={16} color={C.muted} />}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
           {neighborhoodFutureRisk.map(({ neighborhood: n, priority, soonCount }) => (
             <div key={n.id} style={{ background: C.bg, border: `1px solid ${STATUS_COLORS[priority.tier]}40`, borderRadius: 10, padding: 12 }}>
@@ -3160,8 +3214,8 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
           { key: "risk", label: "⚠️ تحليل المخاطر" },
         ].map(t => (
           <button key={t.key} onClick={() => setView(t.key)} style={{
-            padding: "10px 20px", borderRadius: 10, border: `1px solid ${view === t.key ? "#f59e0b" : C.border}`,
-            background: view === t.key ? "#f59e0b15" : "transparent", color: view === t.key ? "#f59e0b" : C.muted,
+            padding: "10px 20px", borderRadius: 10, border: `1px solid ${view === t.key ? C.warning : C.border}`,
+            background: view === t.key ? "#f59e0b15" : "transparent", color: view === t.key ? C.warning : C.muted,
             cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ARABIC_FONT,
           }}>{t.label}</button>
         ))}
@@ -3189,7 +3243,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
           </div>
 
           {/* Annual Prediction vs Actual */}
-          <Card title="التنبؤ السنوي مقابل الفعلي (كجم/يوم)" icon={<BarChart2 size={16} color="#94a3b8" />}>
+          <Card title="التنبؤ السنوي مقابل الفعلي (كجم/يوم)" icon={<BarChart2 size={16} color={C.muted} />}>
             <ChartBox height={300}><ResponsiveContainer>
               <ComposedChart data={predictionData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -3197,16 +3251,16 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
                 <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                <Area type="monotone" dataKey="المعتاد" fill="#64748b20" stroke="#64748b" strokeDasharray="5 5" strokeWidth={1} name="المعدل الطبيعي" />
-                <Bar dataKey="المتوقع" fill="#f59e0b" opacity={0.7} radius={[4, 4, 0, 0]} name="المتوقع" />
-                <Line type="monotone" dataKey="الفعلي" stroke="#10b981" strokeWidth={3} dot={{ r: 5, fill: "#10b981" }} name="الفعلي" connectNulls={false} />
+                <Area type="monotone" dataKey="المعتاد" fill="#64748b20" stroke={C.dim} strokeDasharray="5 5" strokeWidth={1} name="المعدل الطبيعي" />
+                <Bar dataKey="المتوقع" fill={C.warning} opacity={0.7} radius={[4, 4, 0, 0]} name="المتوقع" />
+                <Line type="monotone" dataKey="الفعلي" stroke={C.accent} strokeWidth={3} dot={{ r: 5, fill: C.accent }} name="الفعلي" connectNulls={false} />
               </ComposedChart>
             </ResponsiveContainer></ChartBox>
           </Card>
 
           {/* Upcoming Events + Impact by Type */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="الأحداث القادمة" icon={<Clock size={16} color="#94a3b8" />}>
+            <Card title="الأحداث القادمة" icon={<Clock size={16} color={C.muted} />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
                 {upcomingEvents.map((e, i) => (
                   <div key={i} style={{ padding: "12px 14px", borderRadius: 12, background: C.bg, border: `1px solid ${e.color}30`, display: "flex", gap: 12, alignItems: "center" }}>
@@ -3227,7 +3281,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
               </div>
             </Card>
 
-            <Card title="التأثير حسب نوع الحدث" icon={<BarChart2 size={16} color="#94a3b8" />}>
+            <Card title="التأثير حسب نوع الحدث" icon={<BarChart2 size={16} color={C.muted} />}>
               <ChartBox height={280}><ResponsiveContainer>
                 <BarChart data={impactByType} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -3235,7 +3289,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
                   <YAxis dataKey="name" type="category" width={60} tick={{ fill: C.muted, fontSize: 11, fontFamily: ARABIC_FONT }} />
                   <Tooltip content={<CustomTooltip />} />
                   <Bar dataKey="التأثير" radius={[0, 6, 6, 0]} name="مؤشر التأثير">
-                    {impactByType.map((e, i) => <Cell key={i} fill={["#8b5cf6", "#10b981", "#f59e0b", "#22c55e", "#0ea5e9"][i % 5]} />)}
+                    {impactByType.map((e, i) => <Cell key={i} fill={[C.purple, C.accent, C.warning, "#22c55e", "#0ea5e9"][i % 5]} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer></ChartBox>
@@ -3259,8 +3313,8 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {eventTypes.map(t => (
               <button key={t} onClick={() => setSelectedType(t)} style={{
-                padding: "7px 16px", borderRadius: 10, border: `1px solid ${selectedType === t ? "#f59e0b" : C.border}`,
-                background: selectedType === t ? "#f59e0b20" : "transparent", color: selectedType === t ? "#f59e0b" : C.muted,
+                padding: "7px 16px", borderRadius: 10, border: `1px solid ${selectedType === t ? C.warning : C.border}`,
+                background: selectedType === t ? "#f59e0b20" : "transparent", color: selectedType === t ? C.warning : C.muted,
                 cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
               }}>{t}</button>
             ))}
@@ -3268,7 +3322,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
 
           {selectedEvent ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <button onClick={() => setSelectedEvent(null)} style={{ alignSelf: "flex-start", padding: "6px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: "#f59e0b", cursor: "pointer", fontSize: 13, fontFamily: ARABIC_FONT }}>
+              <button onClick={() => setSelectedEvent(null)} style={{ alignSelf: "flex-start", padding: "6px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.warning, cursor: "pointer", fontSize: 13, fontFamily: ARABIC_FONT }}>
                 ← العودة للقائمة
               </button>
               <div style={{ background: C.card, border: `1px solid ${selectedEvent.color}40`, borderRadius: 16, padding: 24 }}>
@@ -3297,7 +3351,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
                 </div>
 
                 {/* Simulated daily impact chart for this event */}
-                <Card title={`التأثير اليومي المتوقع - ${selectedEvent.name}`} icon={<TrendingDown size={16} color="#94a3b8" />}>
+                <Card title={`التأثير اليومي المتوقع - ${selectedEvent.name}`} icon={<TrendingDown size={16} color={C.muted} />}>
                   <ChartBox height={220}><ResponsiveContainer>
                     <AreaChart data={Array.from({ length: Math.min(selectedEvent.duration, 30) }, (_, i) => {
                       const peak = selectedEvent.duration / 2;
@@ -3315,7 +3369,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
                       <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
                       <Tooltip content={<CustomTooltip />} />
                       <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                      <Area type="monotone" dataKey="الطبيعي" stroke="#64748b" fill="none" strokeDasharray="5 5" name="المعدل الطبيعي" />
+                      <Area type="monotone" dataKey="الطبيعي" stroke={C.dim} fill="none" strokeDasharray="5 5" name="المعدل الطبيعي" />
                       <Area type="monotone" dataKey="الكمية" stroke={selectedEvent.color} fill="url(#gEvent)" strokeWidth={2} name="الكمية المتوقعة (كجم)" />
                     </AreaChart>
                   </ResponsiveContainer></ChartBox>
@@ -3377,17 +3431,17 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
       {/* ===== 30-DAY FORECAST ===== */}
       {view === "forecast" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title="توقعات الـ 30 يوم القادمة (كجم/يوم لكل حي)" icon={<TrendingUp size={16} color="#94a3b8" />}>
+          <Card title="توقعات الـ 30 يوم القادمة (كجم/يوم لكل حي)" icon={<TrendingUp size={16} color={C.muted} />}>
             <ChartBox height={320}><ResponsiveContainer>
               <AreaChart data={forecast30} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                 <defs>
                   <linearGradient id="gForecast" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                    <stop offset="5%" stopColor={C.warning} stopOpacity={0.3} />
+                    <stop offset="95%" stopColor={C.warning} stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="gBand" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                    <stop offset="5%" stopColor={C.info} stopOpacity={0.15} />
+                    <stop offset="95%" stopColor={C.info} stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -3397,13 +3451,13 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
                 <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
                 <Area type="monotone" dataKey="الحد_الأعلى" stroke="none" fill="url(#gBand)" name="الحد الأعلى" />
                 <Area type="monotone" dataKey="الحد_الأدنى" stroke="none" fill="transparent" name="الحد الأدنى" />
-                <Line type="monotone" dataKey="المتوقع" stroke="#f59e0b" strokeWidth={3} dot={false} name="التوقع" />
+                <Line type="monotone" dataKey="المتوقع" stroke={C.warning} strokeWidth={3} dot={false} name="التوقع" />
               </AreaChart>
             </ResponsiveContainer></ChartBox>
           </Card>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="توقعات تأثير النفايات حسب النوع" icon={<Trash2 size={16} color="#94a3b8" />}>
+            <Card title="توقعات تأثير النفايات حسب النوع" icon={<Trash2 size={16} color={C.muted} />}>
               <ChartBox height={260}><ResponsiveContainer>
                 <BarChart data={wasteTypeImpact} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -3411,13 +3465,13 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
                   <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                  <Bar dataKey="العادي" fill="#64748b" opacity={0.5} radius={[4, 4, 0, 0]} name="المعدل العادي" />
-                  <Bar dataKey="المتوقع" fill="#f59e0b" radius={[4, 4, 0, 0]} name="المتوقع القادم" />
+                  <Bar dataKey="العادي" fill={C.dim} opacity={0.5} radius={[4, 4, 0, 0]} name="المعدل العادي" />
+                  <Bar dataKey="المتوقع" fill={C.warning} radius={[4, 4, 0, 0]} name="المتوقع القادم" />
                 </BarChart>
               </ResponsiveContainer></ChartBox>
             </Card>
 
-            <Card title="ملخص التوقعات" icon={<ClipboardList size={16} color="#94a3b8" />}>
+            <Card title="ملخص التوقعات" icon={<ClipboardList size={16} color={C.muted} />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
                   { label: "أعلى يوم متوقع", val: `${Math.max(...forecast30.map(d => d.المتوقع))} كجم`, icon: <TrendingUp size={20} color={C.danger} />, color: C.danger },
@@ -3447,7 +3501,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
           <div style={{ background: `${C.warning}10`, border: `1px solid ${C.warning}30`, borderRadius: 14, padding: 18 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
               <span style={{ fontSize: 24 }}>⚠️</span>
-              <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>تحليل المخاطر بناءً على الحدث القادم: <span style={{ color: "#f59e0b" }}>{upcomingEvents[0]?.name} {upcomingEvents[0]?.icon}</span></span>
+              <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>تحليل المخاطر بناءً على الحدث القادم: <span style={{ color: C.warning }}>{upcomingEvents[0]?.name} {upcomingEvents[0]?.icon}</span></span>
             </div>
             <p style={{ fontSize: 12, color: C.muted, margin: 0, lineHeight: 1.7 }}>
               يُتوقع زيادة بمعامل <strong style={{ color: C.warning }}>×{upcomingEvents[0]?.wasteMultiplier}</strong> في حجم النفايات خلال الفترة القادمة.
@@ -3455,7 +3509,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
             </p>
           </div>
 
-          <Card title="مقارنة الخطورة الحالية مع المتوقعة لكل حي" icon={<BarChart2 size={16} color="#94a3b8" />}>
+          <Card title="مقارنة الخطورة الحالية مع المتوقعة لكل حي" icon={<BarChart2 size={16} color={C.muted} />}>
             <ChartBox height={380}><ResponsiveContainer>
               <BarChart data={stationRisk} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -3470,7 +3524,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
           </Card>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="الأحياء الأكثر خطورة" icon={<AlertTriangle size={16} color="#94a3b8" />}>
+            <Card title="الأحياء الأكثر خطورة" icon={<AlertTriangle size={16} color={C.muted} />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {stationRisk.slice(0, 6).map((s, i) => {
                   const risk = s.الخطورة_المتوقعة;
@@ -3496,16 +3550,16 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
               </div>
             </Card>
 
-            <Card title="خطة الاستجابة المقترحة" icon={<FileText size={16} color="#94a3b8" />}>
+            <Card title="خطة الاستجابة المقترحة" icon={<FileText size={16} color={C.muted} />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
-                  { priority: "عاجل", action: "زيادة دورات الجمع للأحياء الحرجة إلى كل 4 ساعات", color: C.danger, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} /> },
-                  { priority: "عاجل", action: "تجهيز حاويات احتياطية في الأحياء ذات الكثافة العالية", color: C.danger, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} /> },
-                  { priority: "مهم", action: "إرسال إشعارات للسكان بمواعيد الجمع الإضافية", color: C.warning, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} /> },
-                  { priority: "مهم", action: "تخصيص فرق صيانة طوارئ على مدار الساعة", color: C.warning, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} /> },
-                  { priority: "وقائي", action: "فحص شامل لجميع الأحياء قبل بدء الحدث", color: C.info, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#3b82f6",flexShrink:0}} /> },
-                  { priority: "وقائي", action: "تحديث جداول النقل لتغطية ساعات الذروة المتوقعة", color: C.info, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#3b82f6",flexShrink:0}} /> },
-                  { priority: "تنسيقي", action: "التنسيق مع البلدية لتوفير موارد إضافية مؤقتة", color: C.accent, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#10b981",flexShrink:0}} /> },
+                  { priority: "عاجل", action: "زيادة دورات الجمع للأحياء الحرجة إلى كل 4 ساعات", color: C.danger, icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.danger,flexShrink:0}} /> },
+                  { priority: "عاجل", action: "تجهيز حاويات احتياطية في الأحياء ذات الكثافة العالية", color: C.danger, icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.danger,flexShrink:0}} /> },
+                  { priority: "مهم", action: "إرسال إشعارات للسكان بمواعيد الجمع الإضافية", color: C.warning, icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.warning,flexShrink:0}} /> },
+                  { priority: "مهم", action: "تخصيص فرق صيانة طوارئ على مدار الساعة", color: C.warning, icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.warning,flexShrink:0}} /> },
+                  { priority: "وقائي", action: "فحص شامل لجميع الأحياء قبل بدء الحدث", color: C.info, icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.info,flexShrink:0}} /> },
+                  { priority: "وقائي", action: "تحديث جداول النقل لتغطية ساعات الذروة المتوقعة", color: C.info, icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.info,flexShrink:0}} /> },
+                  { priority: "تنسيقي", action: "التنسيق مع البلدية لتوفير موارد إضافية مؤقتة", color: C.accent, icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.accent,flexShrink:0}} /> },
                 ].map((item, i) => (
                   <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", padding: "10px 12px", background: C.bg, borderRadius: 10, border: `1px solid ${item.color}20` }}>
                     <div style={{ flexShrink: 0 }}>{item.icon}</div>
@@ -3638,10 +3692,10 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
   const smokeCount = fireData.filter(s => s.smokeDetected).length;
 
   const riskDistribution = [
-    { name: "خطر عالي", value: highRisk.length, fill: "#ef4444" },
+    { name: "خطر عالي", value: highRisk.length, fill: C.danger },
     { name: "خطر متوسط", value: medRisk.length, fill: "#f97316" },
-    { name: "تحذير", value: warnings.length, fill: "#f59e0b" },
-    { name: "آمن", value: safe.length, fill: "#10b981" },
+    { name: "تحذير", value: warnings.length, fill: C.warning },
+    { name: "آمن", value: safe.length, fill: C.accent },
   ];
 
   const stationRiskChart = fireData.map(s => ({
@@ -3659,8 +3713,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
   }));
 
   const getRiskColor = (level) => {
-    const map = { "خطر عالي": "#ef4444", "خطر متوسط": "#f97316", "تحذير": "#f59e0b", "آمن": "#10b981" };
-    return map[level] || "#64748b";
+    const map = { "خطر عالي": C.danger, "خطر متوسط": "#f97316", "تحذير": C.warning, "آمن": C.accent };
+    return map[level] || C.dim;
   };
 
   const getRiskBadge = (level) => {
@@ -3702,8 +3756,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           { key: "protocols", label: "📋 بروتوكولات الطوارئ" },
         ].map(t => (
           <button key={t.key} onClick={() => setView(t.key)} style={{
-            padding: "10px 20px", borderRadius: 10, border: `1px solid ${view === t.key ? "#ef4444" : C.border}`,
-            background: view === t.key ? "#ef444415" : "transparent", color: view === t.key ? "#ef4444" : C.muted,
+            padding: "10px 20px", borderRadius: 10, border: `1px solid ${view === t.key ? C.danger : C.border}`,
+            background: view === t.key ? "#ef444415" : "transparent", color: view === t.key ? C.danger : C.muted,
             cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ARABIC_FONT,
           }}>{t.label}</button>
         ))}
@@ -3740,13 +3794,13 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
 
           {/* Temperature Timeline + Risk Pie */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-            <Card title="منحنى الحرارة الداخلية (24 ساعة)" icon={<Thermometer size={16} color="#94a3b8" />}>
+            <Card title="منحنى الحرارة الداخلية (24 ساعة)" icon={<Thermometer size={16} color={C.muted} />}>
               <ChartBox height={280}><ResponsiveContainer>
                 <AreaChart data={tempHistory} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                   <defs>
                     <linearGradient id="gIntTemp" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#ef4444" stopOpacity={0.4} />
-                      <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                      <stop offset="5%" stopColor={C.danger} stopOpacity={0.4} />
+                      <stop offset="95%" stopColor={C.danger} stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -3754,15 +3808,15 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                   <YAxis tick={{ fill: C.muted, fontSize: 10 }} domain={[0, 90]} />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                  <Area type="monotone" dataKey="الحرارة_الداخلية" stroke="#ef4444" fill="url(#gIntTemp)" strokeWidth={2} name="الحرارة الداخلية °C" />
-                  <Line type="monotone" dataKey="الحرارة_الخارجية" stroke="#f59e0b" strokeWidth={2} strokeDasharray="4 4" dot={false} name="الحرارة الخارجية °C" />
+                  <Area type="monotone" dataKey="الحرارة_الداخلية" stroke={C.danger} fill="url(#gIntTemp)" strokeWidth={2} name="الحرارة الداخلية °C" />
+                  <Line type="monotone" dataKey="الحرارة_الخارجية" stroke={C.warning} strokeWidth={2} strokeDasharray="4 4" dot={false} name="الحرارة الخارجية °C" />
                   <Line type="monotone" dataKey="حد_الإنذار" stroke="#f97316" strokeWidth={1} strokeDasharray="8 4" dot={false} name="حد الإنذار (60°C)" />
-                  <Line type="monotone" dataKey="حد_الخطر" stroke="#ef4444" strokeWidth={1} strokeDasharray="8 4" dot={false} name="حد الخطر (75°C)" />
+                  <Line type="monotone" dataKey="حد_الخطر" stroke={C.danger} strokeWidth={1} strokeDasharray="8 4" dot={false} name="حد الخطر (75°C)" />
                 </AreaChart>
               </ResponsiveContainer></ChartBox>
             </Card>
 
-            <Card title="توزيع مستويات الخطورة" icon={<Target size={16} color="#94a3b8" />}>
+            <Card title="توزيع مستويات الخطورة" icon={<Target size={16} color={C.muted} />}>
               <ChartBox height={200}><ResponsiveContainer>
                 <PieChart>
                   <Pie data={riskDistribution} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={4}
@@ -3787,7 +3841,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           </div>
 
           {/* Station Risk Cards */}
-          <Card title="حالة الأحياء - المراقبة الحية" icon={<Radio size={16} color="#94a3b8" />}>
+          <Card title="حالة الأحياء - المراقبة الحية" icon={<Radio size={16} color={C.muted} />}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 12 }}>
               {fireData.sort((a, b) => b.riskScore - a.riskScore).map((s, i) => {
                 const rColor = getRiskColor(s.riskLevel);
@@ -3799,15 +3853,15 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                       {getRiskBadge(s.riskLevel)}
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 6, fontSize: 11 }}>
-                      <div style={{ color: C.dim }}>🌡️ داخلي: <span style={{ color: s.internalTemp > 55 ? "#ef4444" : s.internalTemp > 40 ? "#f59e0b" : C.text, fontWeight: 600 }}>{s.internalTemp}°C</span></div>
-                      <div style={{ color: C.dim }}>⛽ غاز: <span style={{ color: s.gasLevel > 60 ? "#ef4444" : C.text, fontWeight: 600 }}>{s.gasLevel}%</span></div>
+                      <div style={{ color: C.dim }}>🌡️ داخلي: <span style={{ color: s.internalTemp > 55 ? C.danger : s.internalTemp > 40 ? C.warning : C.text, fontWeight: 600 }}>{s.internalTemp}°C</span></div>
+                      <div style={{ color: C.dim }}>⛽ غاز: <span style={{ color: s.gasLevel > 60 ? C.danger : C.text, fontWeight: 600 }}>{s.gasLevel}%</span></div>
                       <div style={{ color: C.dim }}>💧 رطوبة: <span style={{ color: C.text, fontWeight: 600 }}>{s.humidity}%</span></div>
                       <div style={{ color: C.dim }}>🗑️ امتلاء: <span style={{ color: C.text, fontWeight: 600 }}>{s.fillLevel}%</span></div>
                     </div>
                     <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                      {s.smokeDetected && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#ef444420", color: "#ef4444", fontWeight: 600 }}>💨 دخان</span>}
+                      {s.smokeDetected && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#ef444420", color: C.danger, fontWeight: 600 }}>💨 دخان</span>}
                       {s.sparkDetected && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#f9731620", color: "#f97316", fontWeight: 600 }}>⚡ شرارة</span>}
-                      {s.hasFlammable && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#f59e0b20", color: "#f59e0b", fontWeight: 600 }}>🔥 قابل للاشتعال</span>}
+                      {s.hasFlammable && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#f59e0b20", color: C.warning, fontWeight: 600 }}>🔥 قابل للاشتعال</span>}
                     </div>
                     {/* Risk bar */}
                     <div style={{ marginTop: 8 }}>
@@ -3831,7 +3885,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
       {view === "analysis" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="مؤشر الخطورة الحرارية لكل حي" icon={<BarChart2 size={16} color="#94a3b8" />}>
+            <Card title="مؤشر الخطورة الحرارية لكل حي" icon={<BarChart2 size={16} color={C.muted} />}>
               <ChartBox height={350}><ResponsiveContainer>
                 <BarChart data={stationRiskChart} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -3839,21 +3893,21 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                   <YAxis dataKey="name" type="category" width={60} tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
                   <Tooltip content={<CustomTooltip />} />
                   <Bar dataKey="الخطورة" radius={[0, 6, 6, 0]} name="مؤشر الخطورة %">
-                    {stationRiskChart.map((e, i) => <Cell key={i} fill={e.الخطورة > 75 ? "#ef4444" : e.الخطورة > 50 ? "#f97316" : e.الخطورة > 30 ? "#f59e0b" : "#10b981"} />)}
+                    {stationRiskChart.map((e, i) => <Cell key={i} fill={e.الخطورة > 75 ? C.danger : e.الخطورة > 50 ? "#f97316" : e.الخطورة > 30 ? C.warning : C.accent} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer></ChartBox>
             </Card>
 
-            <Card title="علاقة الحرارة بالغاز والرطوبة" icon={<Microscope size={16} color="#94a3b8" />}>
+            <Card title="علاقة الحرارة بالغاز والرطوبة" icon={<Microscope size={16} color={C.muted} />}>
               <ChartBox height={350}><ResponsiveContainer>
                 <RadarChart cx="50%" cy="50%" outerRadius="70%" data={gasVsTempData}>
                   <PolarGrid stroke={C.border} />
                   <PolarAngleAxis dataKey="name" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
                   <PolarRadiusAxis tick={{ fill: C.dim, fontSize: 8 }} />
-                  <Radar name="الحرارة °C" dataKey="الحرارة" stroke="#ef4444" fill="#ef4444" fillOpacity={0.15} />
-                  <Radar name="الغاز %" dataKey="الغاز" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.15} />
-                  <Radar name="الرطوبة %" dataKey="الرطوبة" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.15} />
+                  <Radar name="الحرارة °C" dataKey="الحرارة" stroke={C.danger} fill={C.danger} fillOpacity={0.15} />
+                  <Radar name="الغاز %" dataKey="الغاز" stroke={C.warning} fill={C.warning} fillOpacity={0.15} />
+                  <Radar name="الرطوبة %" dataKey="الرطوبة" stroke={C.info} fill={C.info} fillOpacity={0.15} />
                   <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
                   <Tooltip content={<CustomTooltip />} />
                 </RadarChart>
@@ -3861,7 +3915,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
             </Card>
           </div>
 
-          <Card title="سجل الإنذارات والحوادث (8 أسابيع)" icon={<TrendingUp size={16} color="#94a3b8" />}>
+          <Card title="سجل الإنذارات والحوادث (8 أسابيع)" icon={<TrendingUp size={16} color={C.muted} />}>
             <ChartBox height={280}><ResponsiveContainer>
               <ComposedChart data={weeklyIncidents} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -3869,22 +3923,22 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                 <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                <Bar dataKey="إنذارات" fill="#f59e0b" radius={[4, 4, 0, 0]} opacity={0.8} name="إنذارات حرارية" />
-                <Bar dataKey="إنذارات_كاذبة" fill="#64748b" radius={[4, 4, 0, 0]} opacity={0.6} name="إنذارات كاذبة" />
-                <Line type="monotone" dataKey="حوادث_فعلية" stroke="#ef4444" strokeWidth={3} dot={{ r: 5, fill: "#ef4444" }} name="حوادث فعلية" />
+                <Bar dataKey="إنذارات" fill={C.warning} radius={[4, 4, 0, 0]} opacity={0.8} name="إنذارات حرارية" />
+                <Bar dataKey="إنذارات_كاذبة" fill={C.dim} radius={[4, 4, 0, 0]} opacity={0.6} name="إنذارات كاذبة" />
+                <Line type="monotone" dataKey="حوادث_فعلية" stroke={C.danger} strokeWidth={3} dot={{ r: 5, fill: C.danger }} name="حوادث فعلية" />
               </ComposedChart>
             </ResponsiveContainer></ChartBox>
           </Card>
 
           {/* Fire risk factors */}
-          <Card title="عوامل خطر الحريق الرئيسية" icon={<Zap size={16} color="#94a3b8" />}>
+          <Card title="عوامل خطر الحريق الرئيسية" icon={<Zap size={16} color={C.muted} />}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
               {[
-                { factor: "ارتفاع الحرارة الداخلية", weight: 35, desc: "تجاوز 55°C يزيد الخطر بشكل كبير", icon: <Thermometer size={22} color="#ef4444" />, color: "#ef4444", affected: fireData.filter(s => s.internalTemp > 55).length },
+                { factor: "ارتفاع الحرارة الداخلية", weight: 35, desc: "تجاوز 55°C يزيد الخطر بشكل كبير", icon: <Thermometer size={22} color={C.danger} />, color: C.danger, affected: fireData.filter(s => s.internalTemp > 55).length },
                 { factor: "تسرب الغازات", weight: 25, desc: "غازات الميثان والهيدروجين القابلة للاشتعال", icon: <Gauge size={22} color="#f97316" />, color: "#f97316", affected: fireData.filter(s => s.gasLevel > 60).length },
-                { factor: "مواد قابلة للاشتعال", weight: 15, desc: "بلاستيك، ورق، ومواد مختلطة", icon: <Package size={22} color="#f59e0b" />, color: "#f59e0b", affected: fireData.filter(s => s.hasFlammable).length },
-                { factor: "الامتلاء الزائد", weight: 10, desc: "الضغط والاحتكاك يولدان حرارة", icon: <BarChart2 size={22} color="#8b5cf6" />, color: "#8b5cf6", affected: fireData.filter(s => s.fillLevel > 75).length },
-                { factor: "انخفاض الرطوبة", weight: 10, desc: "الجفاف يسهّل الاشتعال", icon: <Droplets size={22} color="#3b82f6" />, color: "#3b82f6", affected: fireData.filter(s => s.humidity < 30).length },
+                { factor: "مواد قابلة للاشتعال", weight: 15, desc: "بلاستيك، ورق، ومواد مختلطة", icon: <Package size={22} color={C.warning} />, color: C.warning, affected: fireData.filter(s => s.hasFlammable).length },
+                { factor: "الامتلاء الزائد", weight: 10, desc: "الضغط والاحتكاك يولدان حرارة", icon: <BarChart2 size={22} color={C.purple} />, color: C.purple, affected: fireData.filter(s => s.fillLevel > 75).length },
+                { factor: "انخفاض الرطوبة", weight: 10, desc: "الجفاف يسهّل الاشتعال", icon: <Droplets size={22} color={C.info} />, color: C.info, affected: fireData.filter(s => s.humidity < 30).length },
                 { factor: "الحرارة الخارجية", weight: 5, desc: "درجات حرارة بريدة الصيفية العالية", icon: <Zap size={22} color="#06b6d4" />, color: "#06b6d4", affected: fireData.filter(s => s.ambientTemp > 45).length },
               ].map((f, i) => (
                 <div key={i} style={{ background: C.bg, border: `1px solid ${f.color}25`, borderRadius: 12, padding: 16 }}>
@@ -3896,7 +3950,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                   <div style={{ fontSize: 11, color: C.dim, lineHeight: 1.5, marginBottom: 8 }}>{f.desc}</div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span style={{ fontSize: 11, color: C.muted }}>أحياء متأثرة</span>
-                    <span style={{ fontSize: 16, fontWeight: 800, color: f.affected > 3 ? "#ef4444" : f.affected > 1 ? "#f59e0b" : C.accent }}>{f.affected}</span>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: f.affected > 3 ? C.danger : f.affected > 1 ? C.warning : C.accent }}>{f.affected}</span>
                   </div>
                 </div>
               ))}
@@ -3910,7 +3964,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {selectedStation ? (
             <>
-              <button onClick={() => setSelectedStation(null)} style={{ alignSelf: "flex-start", padding: "6px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: "#ef4444", cursor: "pointer", fontSize: 13, fontFamily: ARABIC_FONT }}>
+              <button onClick={() => setSelectedStation(null)} style={{ alignSelf: "flex-start", padding: "6px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.danger, cursor: "pointer", fontSize: 13, fontFamily: ARABIC_FONT }}>
                 ← العودة
               </button>
               <div style={{ background: C.card, border: `1px solid ${getRiskColor(selectedStation.riskLevel)}40`, borderRadius: 16, padding: 24 }}>
@@ -3924,10 +3978,10 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14, marginBottom: 20 }}>
                   {[
-                    { label: "الحرارة الداخلية", val: `${selectedStation.internalTemp}°C`, color: selectedStation.internalTemp > 55 ? "#ef4444" : "#f59e0b", icon: <Thermometer size={22} color={selectedStation.internalTemp > 55 ? "#ef4444" : "#f59e0b"} /> },
-                    { label: "الحرارة الخارجية", val: `${selectedStation.ambientTemp}°C`, color: "#f59e0b", icon: <Zap size={22} color="#f59e0b" /> },
-                    { label: "مستوى الغاز", val: `${selectedStation.gasLevel}%`, color: selectedStation.gasLevel > 60 ? "#ef4444" : C.accent, icon: <Gauge size={22} color={selectedStation.gasLevel > 60 ? "#ef4444" : C.accent} /> },
-                    { label: "الرطوبة", val: `${selectedStation.humidity}%`, color: selectedStation.humidity < 30 ? "#f59e0b" : C.info, icon: <Droplets size={22} color={selectedStation.humidity < 30 ? "#f59e0b" : C.info} /> },
+                    { label: "الحرارة الداخلية", val: `${selectedStation.internalTemp}°C`, color: selectedStation.internalTemp > 55 ? C.danger : C.warning, icon: <Thermometer size={22} color={selectedStation.internalTemp > 55 ? C.danger : C.warning} /> },
+                    { label: "الحرارة الخارجية", val: `${selectedStation.ambientTemp}°C`, color: C.warning, icon: <Zap size={22} color={C.warning} /> },
+                    { label: "مستوى الغاز", val: `${selectedStation.gasLevel}%`, color: selectedStation.gasLevel > 60 ? C.danger : C.accent, icon: <Gauge size={22} color={selectedStation.gasLevel > 60 ? C.danger : C.accent} /> },
+                    { label: "الرطوبة", val: `${selectedStation.humidity}%`, color: selectedStation.humidity < 30 ? C.warning : C.info, icon: <Droplets size={22} color={selectedStation.humidity < 30 ? C.warning : C.info} /> },
                     { label: "مؤشر الخطورة", val: `${selectedStation.riskScore}%`, color: getRiskColor(selectedStation.riskLevel), icon: <Flame size={22} color={getRiskColor(selectedStation.riskLevel)} /> },
                     { label: "آخر فحص", val: selectedStation.lastInspection, color: C.muted, icon: <Clock size={22} color={C.muted} /> },
                   ].map((item, i) => (
@@ -3941,16 +3995,16 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginBottom: 20 }}>
                   {[
-                    { label: "كاشف الدخان", active: selectedStation.smokeDetected, activeText: "تم كشف دخان!", inactiveText: "لا يوجد دخان", icon: <Wind size={20} color="#94a3b8" /> },
-                    { label: "كاشف الشرارة", active: selectedStation.sparkDetected, activeText: "تم كشف شرارة!", inactiveText: "لا توجد شرارة", icon: <Zap size={20} color="#94a3b8" /> },
-                    { label: "طفاية حريق", active: selectedStation.fireExtinguisher, activeText: "متوفرة وصالحة", inactiveText: "غير متوفرة!", icon: <FireExtinguisher size={20} color="#94a3b8" /> },
-                    { label: "نظام إطفاء تلقائي", active: selectedStation.autoSuppression, activeText: "مُفعّل", inactiveText: "غير مُفعّل", icon: <Droplets size={20} color="#94a3b8" /> },
+                    { label: "كاشف الدخان", active: selectedStation.smokeDetected, activeText: "تم كشف دخان!", inactiveText: "لا يوجد دخان", icon: <Wind size={20} color={C.muted} /> },
+                    { label: "كاشف الشرارة", active: selectedStation.sparkDetected, activeText: "تم كشف شرارة!", inactiveText: "لا توجد شرارة", icon: <Zap size={20} color={C.muted} /> },
+                    { label: "طفاية حريق", active: selectedStation.fireExtinguisher, activeText: "متوفرة وصالحة", inactiveText: "غير متوفرة!", icon: <FireExtinguisher size={20} color={C.muted} /> },
+                    { label: "نظام إطفاء تلقائي", active: selectedStation.autoSuppression, activeText: "مُفعّل", inactiveText: "غير مُفعّل", icon: <Droplets size={20} color={C.muted} /> },
                   ].map((item, i) => (
                     <div key={i} style={{ background: C.bg, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, border: `1px solid ${item.active && (i < 2) ? "#ef444440" : C.border}` }}>
                       <span>{item.icon}</span>
                       <div>
                         <div style={{ fontSize: 10, color: C.dim }}>{item.label}</div>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: item.active ? (i < 2 ? "#ef4444" : C.accent) : (i < 2 ? C.accent : "#ef4444") }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: item.active ? (i < 2 ? C.danger : C.accent) : (i < 2 ? C.accent : C.danger) }}>
                           {item.active ? item.activeText : item.inactiveText}
                         </div>
                       </div>
@@ -3958,13 +4012,13 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                   ))}
                 </div>
 
-                <Card title="سجل الحرارة الداخلية - 24 ساعة" icon={<TrendingUp size={16} color="#94a3b8" />}>
+                <Card title="سجل الحرارة الداخلية - 24 ساعة" icon={<TrendingUp size={16} color={C.muted} />}>
                   <ChartBox height={220}><ResponsiveContainer>
                     <AreaChart data={tempHistory} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                       <defs>
                         <linearGradient id="gFire" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                          <stop offset="5%" stopColor={C.danger} stopOpacity={0.3} />
+                          <stop offset="95%" stopColor={C.danger} stopOpacity={0} />
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -3972,9 +4026,9 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                       <YAxis tick={{ fill: C.muted, fontSize: 10 }} domain={[0, 90]} />
                       <Tooltip content={<CustomTooltip />} />
                       <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                      <Area type="monotone" dataKey="الحرارة_الداخلية" stroke="#ef4444" fill="url(#gFire)" strokeWidth={2} name="الحرارة الداخلية" />
+                      <Area type="monotone" dataKey="الحرارة_الداخلية" stroke={C.danger} fill="url(#gFire)" strokeWidth={2} name="الحرارة الداخلية" />
                       <Line type="monotone" dataKey="حد_الإنذار" stroke="#f97316" strokeDasharray="6 3" dot={false} name="حد الإنذار 60°C" />
-                      <Line type="monotone" dataKey="حد_الخطر" stroke="#ef4444" strokeDasharray="6 3" dot={false} name="حد الخطر 75°C" />
+                      <Line type="monotone" dataKey="حد_الخطر" stroke={C.danger} strokeDasharray="6 3" dot={false} name="حد الخطر 75°C" />
                     </AreaChart>
                   </ResponsiveContainer></ChartBox>
                 </Card>
@@ -4015,7 +4069,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
       {/* ===== SIMULATION ===== */}
       {view === "simulation" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title="محاكاة سيناريو الحريق" icon={<FlaskConical size={16} color="#94a3b8" />}>
+          <Card title="محاكاة سيناريو الحريق" icon={<FlaskConical size={16} color={C.muted} />}>
             <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.7, margin: "0 0 20px 0" }}>
               حرّك شريط الحرارة لمحاكاة ارتفاع درجة حرارة الحاوية الداخلية ومشاهدة كيف يتغير مستوى الخطورة والإجراءات المطلوبة في الوقت الفعلي.
             </p>
@@ -4034,9 +4088,9 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                     style={{ width: "100%", accentColor: getRiskColor(simLevel), height: 8 }} />
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.dim, marginTop: 6 }}>
                     <span>15°C طبيعي</span>
-                    <span style={{ color: "#f59e0b" }}>45°C تحذير</span>
+                    <span style={{ color: C.warning }}>45°C تحذير</span>
                     <span style={{ color: "#f97316" }}>60°C إنذار</span>
-                    <span style={{ color: "#ef4444" }}>75°C+ خطر</span>
+                    <span style={{ color: C.danger }}>75°C+ خطر</span>
                   </div>
                 </div>
 
@@ -4054,11 +4108,11 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                     { temp: 0, action: "المراقبة الروتينية", desc: "فحص دوري كل 6 ساعات", icon: "✅", color: C.accent },
                     { temp: 40, action: "تنبيه مبكر", desc: "إرسال إشعار لفريق المراقبة", icon: "📱", color: "#06b6d4" },
                     { temp: 50, action: "زيادة تردد القراءات", desc: "قراءة المستشعرات كل 5 دقائق", icon: "📡", color: C.info },
-                    { temp: 55, action: "تنبيه تحذيري", desc: "إخطار المشرف المسؤول فوراً", icon: "⚠️", color: "#f59e0b" },
+                    { temp: 55, action: "تنبيه تحذيري", desc: "إخطار المشرف المسؤول فوراً", icon: "⚠️", color: C.warning },
                     { temp: 60, action: "إنذار متوسط", desc: "تفعيل نظام التبريد التلقائي", icon: "❄️", color: "#f97316" },
                     { temp: 65, action: "تأجيل الجولات القريبة", desc: "تأجيل أي جولة جمع مجدولة قرب الموقع المتأثر حتى انخفاض الحرارة", icon: "🛑", color: "#f97316" },
-                    { temp: 70, action: "استدعاء فريق الطوارئ", desc: "تجهيز فريق الإطفاء الداخلي", icon: "🚒", color: "#ef4444" },
-                    { temp: 75, action: "إنذار حريق!", desc: "تفعيل نظام الإطفاء التلقائي وإخلاء المنطقة", icon: "🔥", color: "#ef4444" },
+                    { temp: 70, action: "استدعاء فريق الطوارئ", desc: "تجهيز فريق الإطفاء الداخلي", icon: "🚒", color: C.danger },
+                    { temp: 75, action: "إنذار حريق!", desc: "تفعيل نظام الإطفاء التلقائي وإخلاء المنطقة", icon: "🔥", color: C.danger },
                     { temp: 80, action: "اتصال بالدفاع المدني", desc: "طلب دعم خارجي فوري - 998", icon: "📞", color: "#dc2626" },
                     { temp: 85, action: "إخلاء كامل", desc: "إخلاء المنطقة المحيطة بنطاق 200 متر", icon: "🏃", color: "#991b1b" },
                   ].map((step, i) => {
@@ -4085,7 +4139,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           </Card>
 
           {/* Simulation Chart */}
-          <Card title="منحنى المحاكاة - تصاعد الحرارة" icon={<TrendingUp size={16} color="#94a3b8" />}>
+          <Card title="منحنى المحاكاة - تصاعد الحرارة" icon={<TrendingUp size={16} color={C.muted} />}>
             <ChartBox height={240}><ResponsiveContainer>
               <AreaChart data={Array.from({ length: 60 }, (_, i) => {
                 const t = 25 + (simTemp - 25) * (1 - Math.exp(-i / 20));
@@ -4104,7 +4158,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                 <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
                 <Area type="monotone" dataKey="الحرارة" stroke={getRiskColor(simLevel)} fill="url(#gSim)" strokeWidth={2} name="الحرارة °C" />
                 <Line type="monotone" dataKey="حد_الإنذار" stroke="#f97316" strokeDasharray="6 3" dot={false} name="حد الإنذار" />
-                <Line type="monotone" dataKey="حد_الخطر" stroke="#ef4444" strokeDasharray="6 3" dot={false} name="حد الخطر" />
+                <Line type="monotone" dataKey="حد_الخطر" stroke={C.danger} strokeDasharray="6 3" dot={false} name="حد الخطر" />
               </AreaChart>
             </ResponsiveContainer></ChartBox>
           </Card>
@@ -4114,21 +4168,21 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
       {/* ===== PROTOCOLS ===== */}
       {view === "protocols" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title="بروتوكولات الاستجابة لحرائق الحاويات" icon={<ClipboardList size={16} color="#94a3b8" />}>
+          <Card title="بروتوكولات الاستجابة لحرائق الحاويات" icon={<ClipboardList size={16} color={C.muted} />}>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {[
                 {
                   level: "المستوى 1 - مراقبة",
                   range: "أقل من 45°C",
                   color: C.accent,
-                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#10b981",flexShrink:0}} />,
+                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.accent,flexShrink:0}} />,
                   steps: ["فحص دوري للمستشعرات كل 6 ساعات", "تسجيل القراءات في السجل اليومي", "التأكد من عمل كواشف الدخان"],
                 },
                 {
                   level: "المستوى 2 - تحذير",
                   range: "45°C - 60°C",
-                  color: "#f59e0b",
-                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} />,
+                  color: C.warning,
+                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.warning,flexShrink:0}} />,
                   steps: ["إخطار المشرف المسؤول عبر الرسائل", "زيادة تردد القراءات إلى كل 15 دقيقة", "فحص مصدر الحرارة والتحقق من وجود مواد خطرة", "تجهيز معدات الإطفاء الأولية"],
                 },
                 {
@@ -4141,8 +4195,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                 {
                   level: "المستوى 4 - خطر حريق",
                   range: "أعلى من 75°C",
-                  color: "#ef4444",
-                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} />,
+                  color: C.danger,
+                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.danger,flexShrink:0}} />,
                   steps: ["تفعيل نظام الإطفاء التلقائي فوراً", "الاتصال بالدفاع المدني (998)", "إخلاء المنطقة المحيطة 200 متر", "قطع التيار الكهربائي عن الموقع المتأثر", "تفعيل خطة الطوارئ الشاملة", "توثيق الحادثة بالصور والفيديو"],
                 },
               ].map((protocol, i) => (
@@ -4170,14 +4224,14 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           </Card>
 
           {/* Emergency Contacts */}
-          <Card title="جهات الاتصال في حالات الطوارئ" icon={<Phone size={16} color="#94a3b8" />}>
+          <Card title="جهات الاتصال في حالات الطوارئ" icon={<Phone size={16} color={C.muted} />}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
               {[
-                { name: "الدفاع المدني", phone: "998", icon: "🚒", color: "#ef4444", desc: "الاستجابة الأولى للحرائق" },
-                { name: "الإسعاف", phone: "997", icon: "🚑", color: "#3b82f6", desc: "الطوارئ الطبية" },
-                { name: "الشرطة", phone: "999", icon: "🚔", color: "#8b5cf6", desc: "الأمن والسلامة" },
-                { name: "مشرف المنطقة", phone: "055-XXX-XXXX", icon: "👷", color: "#f59e0b", desc: "المسؤول المباشر" },
-                { name: "فريق الصيانة", phone: "050-XXX-XXXX", icon: "🔧", color: "#10b981", desc: "الدعم التقني" },
+                { name: "الدفاع المدني", phone: "998", icon: "🚒", color: C.danger, desc: "الاستجابة الأولى للحرائق" },
+                { name: "الإسعاف", phone: "997", icon: "🚑", color: C.info, desc: "الطوارئ الطبية" },
+                { name: "الشرطة", phone: "999", icon: "🚔", color: C.purple, desc: "الأمن والسلامة" },
+                { name: "مشرف المنطقة", phone: "055-XXX-XXXX", icon: "👷", color: C.warning, desc: "المسؤول المباشر" },
+                { name: "فريق الصيانة", phone: "050-XXX-XXXX", icon: "🔧", color: C.accent, desc: "الدعم التقني" },
                 { name: "إدارة البلدية", phone: "940", icon: "🏛️", color: "#06b6d4", desc: "التنسيق الحكومي" },
               ].map((contact, i) => (
                 <div key={i} style={{ background: C.bg, border: `1px solid ${contact.color}25`, borderRadius: 12, padding: 16, display: "flex", gap: 12, alignItems: "center" }}>
@@ -4193,18 +4247,18 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           </Card>
 
           {/* Equipment Checklist */}
-          <Card title="قائمة فحص معدات السلامة" icon={<FireExtinguisher size={16} color="#94a3b8" />}>
+          <Card title="قائمة فحص معدات السلامة" icon={<FireExtinguisher size={16} color={C.muted} />}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
               {[
-                { item: "طفاية حريق بودرة ABC", stations: fireData.filter(s => s.fireExtinguisher).length, total: 12, icon: <FireExtinguisher size={22} color="#94a3b8" /> },
-                { item: "نظام إطفاء تلقائي", stations: fireData.filter(s => s.autoSuppression).length, total: 12, icon: <Droplets size={22} color="#94a3b8" /> },
-                { item: "كاشف دخان فعّال", stations: 11, total: 12, icon: <Wind size={22} color="#94a3b8" /> },
-                { item: "كاشف حرارة فعّال", stations: 12, total: 12, icon: <Thermometer size={22} color="#94a3b8" /> },
-                { item: "كاشف غاز فعّال", stations: 10, total: 12, icon: <Gauge size={22} color="#94a3b8" /> },
-                { item: "إضاءة طوارئ", stations: 9, total: 12, icon: <Zap size={22} color="#94a3b8" /> },
+                { item: "طفاية حريق بودرة ABC", stations: fireData.filter(s => s.fireExtinguisher).length, total: 12, icon: <FireExtinguisher size={22} color={C.muted} /> },
+                { item: "نظام إطفاء تلقائي", stations: fireData.filter(s => s.autoSuppression).length, total: 12, icon: <Droplets size={22} color={C.muted} /> },
+                { item: "كاشف دخان فعّال", stations: 11, total: 12, icon: <Wind size={22} color={C.muted} /> },
+                { item: "كاشف حرارة فعّال", stations: 12, total: 12, icon: <Thermometer size={22} color={C.muted} /> },
+                { item: "كاشف غاز فعّال", stations: 10, total: 12, icon: <Gauge size={22} color={C.muted} /> },
+                { item: "إضاءة طوارئ", stations: 9, total: 12, icon: <Zap size={22} color={C.muted} /> },
               ].map((eq, i) => {
                 const pct = Math.round((eq.stations / eq.total) * 100);
-                const eqColor = pct === 100 ? C.accent : pct > 75 ? "#f59e0b" : "#ef4444";
+                const eqColor = pct === 100 ? C.accent : pct > 75 ? C.warning : C.danger;
                 return (
                   <div key={i} style={{ background: C.bg, borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
                     <span>{eq.icon}</span>
@@ -4518,7 +4572,7 @@ const ApiKeyCard = () => {
   const statusColor = testStatus === "ok" ? C.accent : testStatus === "error" ? C.danger : C.info;
 
   return (
-    <Card title="المساعد الذكي — Groq AI (مجاني)" icon={<Bot size={16} color="#94a3b8" />}>
+    <Card title="المساعد الذكي — Groq AI (مجاني)" icon={<Bot size={16} color={C.muted} />}>
       <div style={{ padding: "8px 12px", borderRadius: 8, background: C.accent + "15", border: `1px solid ${C.accent}30`, fontSize: 11, color: C.accent, marginBottom: 14, fontFamily: F }}>
         ✅ مجاني تماماً — بدون بطاقة بنكية — يعمل في جميع المناطق
       </div>
@@ -4644,7 +4698,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 600 }}>
-      <Card title="إعدادات النظام" icon={<SettingsIcon size={16} color="#94a3b8" />}>
+      <Card title="إعدادات النظام" icon={<SettingsIcon size={16} color={C.muted} />}>
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           {[{ label: "التنبيهات الفورية", desc: "استقبال إشعارات عند تجاوز الحدود", val: notif, set: setNotif },
             { label: "التفريغ التلقائي", desc: "تشغيل الجمع تلقائياً عند الامتلاء", val: autoCollect, set: setAutoCollect }].map((item, i) => (
@@ -4669,7 +4723,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
           </div>
         </div>
       </Card>
-      <Card title="حالة الاتصال" icon={<Plug size={16} color="#94a3b8" />}>
+      <Card title="حالة الاتصال" icon={<Plug size={16} color={C.muted} />}>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {[{ name: "خادم البيانات الرئيسي", ok: true }, { name: "شبكة المستشعرات - بريدة", ok: true }, { name: "نظام التنبيهات", ok: true }, { name: "خدمة الخرائط", ok: false }].map((item, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: C.bg, borderRadius: 10 }}>
@@ -4683,7 +4737,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </div>
       </Card>
 
-      <Card title="تهيئة قاعدة البيانات" icon={<Database size={16} color="#94a3b8" />}>
+      <Card title="تهيئة قاعدة البيانات" icon={<Database size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
           يُنشئ هذا الإجراء مستندًا تجريبيًا لكل مجموعة غير موجودة في Firestore
           (districts, sensors, alerts, fire_alerts, requests, citizen_reports).
@@ -4723,7 +4777,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </button>
       </Card>
 
-      <Card title="ترحيل البيانات إلى نموذج الحاويات الذكية" icon={<Database size={16} color="#94a3b8" />}>
+      <Card title="ترحيل البيانات إلى نموذج الحاويات الذكية" icon={<Database size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
           ينشئ هذا الإجراء مستندات "neighborhoods" و"bins" من بيانات "stations" والحاويات
           المضمّنة بداخلها الموجودة حاليًا. إجراء إضافي بالكامل — لا يحذف ولا يعدّل
@@ -4770,7 +4824,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </button>
       </Card>
 
-      <Card title="بيانات تجريبية للعرض — محاكاة مدينة كاملة (Demo)" icon={<Sparkles size={16} color="#94a3b8" />}>
+      <Card title="بيانات تجريبية للعرض — محاكاة مدينة كاملة (Demo)" icon={<Sparkles size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
           يبني مشهد مدينة كاملًا: ~100 حاوية ذكية موزّعة داخل الحدود الحقيقية لأحياء بريدة الـ14
           (3 أحياء حرجة بتجمّعات حاويات شبه ممتلئة، أحياء بأولوية مرتفعة، تنبيهات حرارية، حي بأغلبية
@@ -4817,7 +4871,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </button>
       </Card>
 
-      <Card title="🎮 وضع العرض التجريبي (Demo Mode)" icon={<Sparkles size={16} color="#94a3b8" />}>
+      <Card title="🎮 وضع العرض التجريبي (Demo Mode)" icon={<Sparkles size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 14px" }}>
           تحكّم مباشر بحالة أي حاوية لأغراض العرض أمام اللجنة — التغيير ينعكس فورًا على الأولوية،
           التنبيهات، الخريطة، والجولات المقترحة. كل قراءة تجريبية تُوسم demo:true ولا تُخلط بقراءات حقيقية.
@@ -4853,7 +4907,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         )}
       </Card>
 
-      <Card title="📡 محاكي ESP32 حي — للعرض أمام اللجنة" icon={<Radio size={16} color="#94a3b8" />}>
+      <Card title="📡 محاكي ESP32 حي — للعرض أمام اللجنة" icon={<Radio size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 12px" }}>
           يبث قراءة جديدة كل بضع ثوانٍ لحاوية واحدة فترتفع نسبة امتلائها تدريجيًا على الشاشة أمام اللجنة: شاهد اللون
           يتغير على الخريطة، التنبيه يظهر، الجولة المقترحة تتحدث تلقائيًا، والسائق يُنبَّه — كلها لحظيًا. كل قراءة تُوسم demo:true.
@@ -4883,7 +4937,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         )}
       </Card>
 
-      <Card title="🔄 مزامنة الجولات المقترحة تلقائيًا" icon={<RouteIcon size={16} color="#94a3b8" />}>
+      <Card title="🔄 مزامنة الجولات المقترحة تلقائيًا" icon={<RouteIcon size={16} color={C.muted} />}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
             عند التفعيل يعيد النظام حساب الجولات <b style={{ color: C.text }}>المقترحة</b> تلقائيًا كلما تغيرت حالة الحاويات (حاوية امتلأت → تُضاف للجولة، فُرّغت → تُسحب).
@@ -4894,7 +4948,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
       </Card>
 
       {can(loggedInUser?.role, "municipalities.manage") && (
-        <Card title="🏛️ البلديات الفرعية وتبعية الأحياء" icon={<Landmark size={16} color="#94a3b8" />}>
+        <Card title="🏛️ البلديات الفرعية وتبعية الأحياء" icon={<Landmark size={16} color={C.muted} />}>
           <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 10px" }}>
             يكتب البلديات الست (الأسماء والهواتف والمساحات من المصادر الرسمية) ويسند كل حي بلا تبعية إلى بلديته وفق القراءة البصرية لخرائط النطاق الرسمية (موسومة «غير متحقق منها»)، ثم ينسخ معرّف البلدية على الحاويات والجولات والمركبات والسائقين والبلاغات لتفعيل عزل البيانات. لا يستبدل أي تبعية حُددت يدويًا.
           </p>
@@ -4903,7 +4957,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </Card>
       )}
 
-      <Card title="📚 مصادر البيانات وحالة كل مصدر" icon={<FileText size={16} color="#94a3b8" />}>
+      <Card title="📚 مصادر البيانات وحالة كل مصدر" icon={<FileText size={16} color={C.muted} />}>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
           {[
             ["البلديات الفرعية (الأسماء، الهواتف، خرائط النطاق)", "أمانة منطقة القصيم — صفحة البلديات الفرعية", "رسمي", C.accent, DATA_PROVENANCE.sources[0].url],
@@ -4922,7 +4976,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </div>
       </Card>
 
-      <Card title="🔐 أجهزة IoT ومفاتيح الدخول" icon={<KeyRound size={16} color="#94a3b8" />}>
+      <Card title="🔐 أجهزة IoT ومفاتيح الدخول" icon={<KeyRound size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 12px" }}>
           كل جهاز ESP32 يحتاج مفتاحًا خاصًا به يُرسل في ترويسة <code>x-device-key</code> إلى <code>/api/iot/readings</code>.
           المفتاح يُعرض مرة واحدة فقط هنا ويُخزَّن تجزئته (SHA-256) فقط؛ الجهاز لا يستطيع الكتابة إلا لحاويته. المفتاح التجريبي للمولّد مرفوض من الخادم.
@@ -4974,7 +5028,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
 
       <ApiKeyCard />
 
-      <Card title="تصدير قاعدة البيانات" icon={<BarChart2 size={16} color="#94a3b8" />}>
+      <Card title="تصدير قاعدة البيانات" icon={<BarChart2 size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
           يُصدِّر جميع البيانات من Firestore (10 مجموعات) إلى ملف Excel واحد.
           كل مجموعة في Sheet منفصل — جاهز للتحليل في Power BI أو Excel.
@@ -5425,6 +5479,16 @@ const AUDIT_ACTION_LABELS = {
   driver_break: "استراحة سائق",
   route_assigned: "إسناد جولة لسائق",
   route_optimized: "تحسين ترتيب جولة",
+  plan_applied: "اعتماد خطة جمع ذكية كجولات مقترحة",
+  decision_simulated: "تشغيل سيناريو قرار (محاكاة معزولة)",
+  transfer_proposed: "اقتراح نقل مورد بين بلديتين",
+  transfer_approved: "اعتماد نقل مورد",
+  transfer_rejected: "رفض نقل مورد",
+  transfer_executed: "تنفيذ نقل مورد",
+  transfer_returned: "إعادة مورد إلى بلديته",
+  support_request_created: "طلب دعم من الأمانة",
+  support_request_approved: "موافقة على طلب دعم",
+  support_request_rejected: "رفض طلب دعم",
   route_unreachable_reported: "بلاغ تعذر الوصول لحاوية",
   incident_reviewed: "مراجعة بلاغ ميداني",
   route_stop_reinstated: "إعادة إدراج حاوية في جولة",
@@ -5468,7 +5532,7 @@ const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1.5fr) minmax(260px, 1fr)", gap: 16 }}>
-        <Card title="🗺️ مواقع المركبات (أثناء المناوبة فقط، بإذن السائق)" icon={<Truck size={16} color="#94a3b8" />}>
+        <Card title="🗺️ مواقع المركبات (أثناء المناوبة فقط، بإذن السائق)" icon={<Truck size={16} color={C.muted} />}>
           <div style={{ height: 460, borderRadius: 12, overflow: "hidden", border: `1px solid ${C.border}` }}>
             <MapContainer center={BURAIDAH_CENTER} zoom={12} style={{ width: "100%", height: "100%" }} preferCanvas>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
@@ -5480,7 +5544,7 @@ const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents
                 </CircleMarker>
               ))}
               {sel?.route && (sel.route.orderedStops || []).filter((s) => s.lat != null).map((s) => (
-                <CircleMarker key={s.binId} center={[s.lat, s.lng]} radius={6} pathOptions={{ color: "#fff", weight: 1, fillColor: (sel.route.collectedBinIds || []).includes(s.binId) ? "#64748b" : STATUS_COLORS[s.priorityTier] || C.info, fillOpacity: 0.9 }} />
+                <CircleMarker key={s.binId} center={[s.lat, s.lng]} radius={6} pathOptions={{ color: "#fff", weight: 1, fillColor: (sel.route.collectedBinIds || []).includes(s.binId) ? C.dim : STATUS_COLORS[s.priorityTier] || C.info, fillOpacity: 0.9 }} />
               ))}
             </MapContainer>
           </div>
@@ -5488,7 +5552,7 @@ const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents
         </Card>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title={sel ? `🚛 ${sel.p.fullName}` : "اختر مركبة من الخريطة"} icon={<Users size={16} color="#94a3b8" />}>
+          <Card title={sel ? `🚛 ${sel.p.fullName}` : "اختر مركبة من الخريطة"} icon={<Users size={16} color={C.muted} />}>
             {!sel ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {onShift.length === 0 && <EmptyState icon="🛌" title="لا سائقين في المناوبة" />}
@@ -5512,7 +5576,7 @@ const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents
             )}
           </Card>
 
-          <Card title={`🚧 البلاغات والعوائق (${openIncidents.length} مفتوح)`} icon={<AlertTriangle size={16} color="#94a3b8" />}>
+          <Card title={`🚧 البلاغات والعوائق (${openIncidents.length} مفتوح)`} icon={<AlertTriangle size={16} color={C.muted} />}>
             {incidents.length === 0 ? <EmptyState icon="✅" title="لا بلاغات" /> : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
                 {[...incidents].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 30).map((inc) => {
@@ -5604,7 +5668,7 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 1fr) minmax(320px, 1.3fr)", gap: 14 }}>
-        <Card title="⚙️ إعدادات السيناريو (تجريبية، قابلة للتعديل)" icon={<SettingsIcon size={16} color="#94a3b8" />}>
+        <Card title="⚙️ إعدادات السيناريو (تجريبية، قابلة للتعديل)" icon={<SettingsIcon size={16} color={C.muted} />}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <label style={{ fontSize: 11, color: C.muted, gridColumn: "1 / -1" }}>Seed<input value={cfg.seed} disabled={!canInstall} onChange={(e) => setCfg({ ...cfg, seed: e.target.value })} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: "monospace", direction: "ltr", boxSizing: "border-box" }} /></label>
             {num("totalBins", "عدد الحاويات", 10, 1000)}
@@ -5620,7 +5684,7 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
           {msg && <div style={{ fontSize: 12, color: C.text, marginTop: 8, lineHeight: 1.7 }}>{msg}</div>}
         </Card>
 
-        <Card title="🎛️ التحكم في التشغيل" icon={<Gauge size={16} color="#94a3b8" />}>
+        <Card title="🎛️ التحكم في التشغيل" icon={<Gauge size={16} color={C.muted} />}>
           {sim === undefined ? <div style={{ color: C.dim, fontSize: 12 }}>جاري التحميل…</div> : !sim ? <EmptyState icon="📦" title="لم يُثبَّت مشهد المحاكاة بعد" desc="اضغط «تثبيت المشهد» لتوليد الحاويات والمستشعرات الافتراضية داخل مضلعات الأحياء." /> : (
             <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, marginBottom: 8 }}>
@@ -5643,7 +5707,7 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
       </div>
 
       {sim && (
-        <Card title="⚡ توليد أحداث للعرض" icon={<Sparkles size={16} color="#94a3b8" />}>
+        <Card title="⚡ توليد أحداث للعرض" icon={<Sparkles size={16} color={C.muted} />}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10, fontSize: 12 }}>
             <span style={{ color: C.muted }}>النطاق:</span>
             <select value={evMun} disabled={!scope.all} onChange={(e) => { setEvMun(e.target.value); setEvBin(""); }} style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>
@@ -5674,15 +5738,19 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
 COLLECTIONS.DEMO_SESSIONS = "demo_sessions";
 const DEMO_SESSION_REF = () => doc(db, COLLECTIONS.DEMO_SESSIONS, "current");
 
-const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles = [], vehicles = [], recentReadings = [], fireSensors = [], citizenReports = [], loggedInUser, onNavigate }) => {
+const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles = [], vehicles = [], incidents = [], recentReadings = [], fireSensors = [], citizenReports = [], supportRequests = [], transfers = [], auditLog = [], loggedInUser, onNavigate }) => {
   const [session, setSession] = useState(undefined);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
   const [pickMid, setPickMid] = useState(DEFAULT_DEMO_MUNICIPALITY);
   const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
   const canRun = can(loggedInUser?.role, "simulation.control");
+  const isAmanah = can(loggedInUser?.role, "transfers.approve");
   useEffect(() => onSnapshot(DEMO_SESSION_REF(), (snap) => setSession(snap.exists() ? snap.data() : null), () => setSession(null)), []);
-  const evaluation = useMemo(() => evaluateDemo(session, { bins, routes, profiles, readings: recentReadings }), [session, bins, routes, profiles, recentReadings]);
+  const { runs } = useOptimizationRuns(true, scopeFor(loggedInUser).all ? null : scopeFor(loggedInUser).municipalityId);
+  const { scenarios } = useSimulationScenarios(true);
+  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings });
+  const evaluation = useMemo(() => evaluateDemo(session, { bins, routes, profiles, readings: recentReadings, runs, scenarios, supportRequests, transfers, audit: auditLog }), [session, bins, routes, profiles, recentReadings, runs, scenarios, supportRequests, transfers, auditLog]);
   const { index, doneByKey, newlyPassed } = useMemo(() => nextStepIndex(session, evaluation), [session, evaluation]);
   // Persist newly passed observe-steps so completion survives later data changes and page refreshes.
   useEffect(() => {
@@ -5699,6 +5767,41 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
   const actions = {
     start: run("start", async () => { await setDoc(DEMO_SESSION_REF(), { startedAt: new Date().toISOString(), startedBy: actor.uid, completedKeys: [], firedEvents: 0 }); return "بدأت الجلسة"; }),
     city: run("city", async () => { await patch({ visitedCity: true }); onNavigate && onNavigate("municipalities"); return ""; }),
+    amanah: run("amanah", async () => { await patch({ visitedAmanah: true }); onNavigate && onNavigate(loggedInUser?.role === "executive" ? "exec" : "brain"); return ""; }),
+    plan: run("plan", async () => {
+      const ctx = makeBinContext(fireSensors, citizenReports, munNeighborhoods);
+      const readingsByBin = {}; for (const r of recentReadings) { if (r.bin_id) (readingsByBin[r.bin_id] ||= []).push(r); }
+      const munBins = bins.filter((b) => b.municipalityId === mid);
+      const veh = vehicles.find((v) => v.municipalityId === mid && v.depotLat != null);
+      const depot = veh ? { lat: veh.depotLat, lng: veh.depotLng } : DEFAULT_DEPOT;
+      const plan = buildCollectionPlan({ municipalityId: mid, neighborhoods: munNeighborhoods, bins: munBins, profiles: profiles.filter((p) => p.municipalityId === mid), vehicles: vehicles.filter((v) => v.municipalityId === mid), routes: routes.filter((r) => r.municipalityId === mid), readingsByBin, contextFor: ctx.forBin, depot });
+      const id = await saveOptimizationRun({ municipalityId: mid, summary: plan.summary, routes: plan.routes.map((r) => ({ neighborhoodId: r.neighborhoodId, routeName: r.routeName, stops: r.stops.length, deferred: r.deferredStops.length, distanceKm: r.distanceKm, durationMin: r.durationMin, matrixSource: r.matrixSource, driver: r.driver ? { driverId: r.driver.driverId, driverName: r.driver.driverName } : null })), constraints: plan.constraints, assumptions: plan.assumptions, applied: false, demoScenario: true, demo: munBins.some((b) => b.demo) }, actor);
+      await patch({ planRunId: id });
+      return `🧠 خُطّطت ${plan.summary.routes} جولة لـ ${plan.summary.needCollection} حاوية · ${plan.summary.unassignedRoutes} بلا سائق · ${plan.summary.reductionPct != null ? `خفض مسافة ${plan.summary.reductionPct}% مقابل خط الأساس` : "لا مقارنة بخط الأساس"} (مسافات جوية — للطرق الفعلية: صفحة خطة الجمع الذكية)`;
+    }),
+    shortage: run("shortage", async () => {
+      const munVehicles = vehicles.filter((v) => v.municipalityId === mid);
+      const target = munVehicles.find((v) => v.id === session?.recommendedVehicleId) || munVehicles.find((v) => v.status === "available" || v.status === "on_route") || munVehicles[0];
+      if (!target) throw new Error("لا مركبة في هذه البلدية لمحاكاة تعطلها");
+      const state = { municipalityId: mid, municipalityName: municipalityById(mid)?.shortAr, neighborhoods: munNeighborhoods, bins: bins.filter((b) => b.municipalityId === mid), profiles: profiles.filter((p) => p.municipalityId === mid), vehicles: munVehicles, routes: routes.filter((r) => r.municipalityId === mid), incidents: incidents.filter((i) => i.municipalityId === mid) };
+      const sc = { type: "vehicle_down", vehicleId: target.id };
+      const r = simulateDecision(state, sc, { depot: DEFAULT_DEPOT });
+      await saveSimulationScenario({ municipalityId: mid, scenario: sc, verdict: r.verdict, recommendation: r.recommendation, baseline: r.baseline, result: r.result, delta: r.delta, notes: r.notes, explanation: r.explanation, assumptions: r.assumptions, demoScenario: true, demo: state.bins.some((b) => b.demo) }, actor);
+      await writeAuditLog("decision_simulated", actor.uid, actor.name, { municipalityId: mid, type: sc.type, verdict: r.verdict, demoScenario: true });
+      // In the demo scene the breakdown also happens "for real" — but only to a demo vehicle, never to a real fleet row.
+      let liveNote = "لم يُغيَّر وضع المركبة الفعلية (ليست صفًا تجريبيًا)";
+      if (target.demo && target.status !== "maintenance") { await setVehicleStatusWithHistory(target.id, target.status, "maintenance", actor, "سيناريو العرض: تعطل محاكى"); await patch({ brokenVehicleId: target.id }); liveNote = `وأُخرجت ${target.vehicleNumber} (تجريبية) من الخدمة في المشهد فارتفع ضغط البلدية فعليًا`; }
+      return `🧪 تعطل ${target.vehicleNumber}: ${r.recommendation} — غير مخدومة ${r.baseline.unserved} ← ${r.result.unserved} · ضغط ${r.baseline.pressure} ← ${r.result.pressure} (المحاكاة على نسخة معزولة؛ ${liveNote})`;
+    }),
+    recommend: run("recommend", async () => {
+      const rec = city.transfersRec.recommendations.find((x) => x.toMunicipalityId === mid);
+      if (!rec) { const p = city.pressures.find((x) => x.municipalityId === mid); const w = city.transfersRec.warnings.find((x) => x.startsWith(p?.name || "—")); throw new Error(w ? `لا نقل ممكن ضمن القيود: ${w}` : `ضغط ${p?.name || mid} الآن ${p?.index ?? "—"} (دون حد الدعم ${city.transfersRec.thresholds.shortageThreshold}) — ولّد أحداث امتلاء إضافية أو شغّل سيناريو النقص أولًا`); }
+      const id = await proposeResourceTransfer(transferFromRecommendation(rec), actor);
+      await writeAuditLog("transfer_proposed", actor.uid, actor.name, { transferId: id, from: rec.fromMunicipalityId, to: rec.toMunicipalityId, resource: rec.resourceLabel, demoScenario: true });
+      return `🤝 ${rec.reason}`;
+    }),
+    transferApprove: run("transferApprove", async () => { const t = evaluation.transfer; if (!t || t.status !== "proposed") throw new Error("لا اقتراح نقل بانتظار الاعتماد"); await decideResourceTransfer(t, actor, "approved", "سيناريو العرض"); return `✅ اعتُمد نقل ${t.resourceLabel} — نفّذه لإعادة توطين المورد مؤقتًا`; }),
+    transferExecute: run("transferExecute", async () => { const t = evaluation.transfer; if (!t || t.status !== "approved") throw new Error("لا نقل معتمد بانتظار التنفيذ"); await executeResourceTransfer(t, actor); return `🚚 نُفّذ النقل: ${t.resourceLabel} يعمل الآن ضمن ${municipalityById(t.toMunicipalityId)?.shortAr} مؤقتًا (يُعاد من بوابة متخذي القرار)`; }),
     pick: run("pick", async () => { await patch({ municipalityId: pickMid }); onNavigate && onNavigate("municipalities", { municipalityId: pickMid }); return `اختيرت ${municipalityById(pickMid)?.nameAr}`; }),
     fill: run("fill", async () => {
       const names = [];
@@ -5757,11 +5860,12 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
     reset: run("reset", async () => {
       if (!window.confirm("إعادة السيناريو من البداية: تُحذف الجلسة ويُعاد تثبيت مشهد المحاكاة بنفس الـseed (الصفوف التجريبية فقط). متابعة؟")) return "";
       const r = await resetSimulation({ neighborhoods, featuresByKey: FEATURE_BY_KEY, actor, withHistory: true, vehicleIds: vehicles.filter((v) => v.demo).map((v) => v.id) });
+      const closed = await withdrawOpenSupportRequests(actor, "أُغلق عند إعادة سيناريو العرض");
       await setDoc(DEMO_SESSION_REF(), { startedAt: new Date().toISOString(), startedBy: actor.uid, completedKeys: [], firedEvents: 0, resetAt: new Date().toISOString() });
-      return `🔁 أُعيد المشهد (${r.bins} حاوية) وبدأت جلسة جديدة`;
+      return `🔁 أُعيد المشهد (${r.bins} حاوية)${closed ? ` · أُغلق ${closed} طلب دعم مفتوح` : ""} وبدأت جلسة جديدة`;
     }),
   };
-  const actionFor = (key) => ({ city: actions.city, pick: actions.pick, fill: actions.fill, route: actions.route, driver: actions.driver, approve: actions.approve })[key];
+  const actionFor = (key) => ({ city: actions.city, amanah: actions.amanah, pick: actions.pick, fill: actions.fill, plan: actions.plan, route: actions.route, driver: actions.driver, approve: actions.approve, shortage: actions.shortage, ...(isAmanah ? { recommend: actions.recommend, transferApprove: actions.transferApprove, transferExecute: actions.transferExecute } : {}) })[key];
 
   if (!canRun) return <EmptyState icon="🔒" title="غير مصرح" />;
   if (session === undefined) return <EmptyState icon="⏳" title="جاري التحميل…" />;
@@ -5770,7 +5874,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>🎬 وضع العرض — سيناريو لجنة التحكيم</div>
-          <div style={{ fontSize: 12, color: C.dim }}>12 خطوة من المدينة إلى تحديث المؤشرات. الخطوات الإجرائية تُنفَّذ بزر؛ خطوات السائق تُكتشف تلقائيًا من البيانات الحية. الحالة محفوظة في قاعدة البيانات فلا تضيع عند تحديث الصفحة.</div>
+          <div style={{ fontSize: 12, color: C.dim }}>{DEMO_STEPS.length} خطوة: الأمانة ← البلدية ← الموظف ← السائق ← نقص الموارد ← النقل بين البلديات ← مؤشرات المدينة. الخطوات الإجرائية تُنفَّذ بزر؛ خطوات السائق ومدير البلدية تُكتشف تلقائيًا من البيانات الحية. الحالة محفوظة في قاعدة البيانات فلا تضيع عند تحديث الصفحة.</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {!session && <button disabled={!!busy} onClick={actions.start} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>▶️ بدء الجلسة</button>}
@@ -5795,12 +5899,159 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
                   <select value={pickMid} onChange={(e) => setPickMid(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>{MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.nameAr}</option>)}</select>
                 )}
                 {act && (current || (done && st.key === "city")) && <button disabled={!!busy || (!current && !done)} onClick={act} style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === st.key ? "…" : st.kind === "nav" ? "افتح" : "نفّذ"}</button>}
+                {st.key === "support" && current && <span style={{ fontSize: 11.5, color: C.warning }}>🏛️ من حساب مدير البلدية ({mid ? `manager.${mid}@…` : ""}) في نافذة ثانية: البلديات والنطاقات → مؤشرات الأداء → «طلب دعم من الأمانة».</span>}
+                {["recommend", "transferApprove", "transferExecute"].includes(st.key) && current && !isAmanah && <span style={{ fontSize: 11.5, color: C.warning }}>🏛️ من حساب متخذ القرار بالأمانة: بوابة متخذي القرار → القيادة الاستراتيجية.</span>}
                 {st.key === "inbox" && current && <span style={{ fontSize: 11.5, color: C.warning }}>📱 سجّل دخول السائق ({profiles.find((p) => p.uid === session.driverId)?.email || "حساب السائق"}) على جهاز ثانٍ، ابدأ المناوبة ثم الجولة.</span>}
               </div>
             );
           })}
           {index >= DEMO_STEPS.length && <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}60`, borderRadius: 12, padding: 14, fontSize: 13, color: C.accent, fontWeight: 700 }}>🎉 اكتمل السيناريو — {evaluation.indicators.detail}. يمكنك الإعادة من البداية.</div>}
         </div>
+      )}
+    </div>
+  );
+};
+
+// ======================== SMART COLLECTION PLAN (Phase 4 — Municipal Collection Optimization Engine) ========================
+const SmartPlanPage = ({ neighborhoods = [], bins = [], profiles = [], vehicles = [], routes = [], recentReadings = [], fireSensors = [], citizenReports = [], loggedInUser, onOpenRoute }) => {
+  const scope = scopeFor(loggedInUser);
+  const [mid, setMid] = useState(scope.all ? "east" : scope.municipalityId);
+  const [plan, setPlan] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const { runs } = useOptimizationRuns(true, scope.all ? null : scope.municipalityId);
+  const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
+  const munNeighborhoods = useMemo(() => neighborhoods.filter((n) => municipalityForNeighborhood(n) === mid), [neighborhoods, mid]);
+  const nIds = useMemo(() => new Set(munNeighborhoods.map((n) => n.id)), [munNeighborhoods]);
+  const munBins = useMemo(() => bins.filter((b) => nIds.has(b.neighborhoodId)), [bins, nIds]);
+  const munProfiles = profiles.filter((p) => p.municipalityId === mid);
+  const munVehicles = vehicles.filter((v) => v.municipalityId === mid);
+  const munRoutes = routes.filter((r) => r.municipalityId === mid);
+  const depot = useMemo(() => { const v = munVehicles.find((x) => x.depotLat != null); return v ? { lat: v.depotLat, lng: v.depotLng, label: v.depotLabel || "مستودع المركبة" } : DEFAULT_DEPOT; }, [munVehicles]);
+
+  const build = async () => {
+    setBusy("build"); setMsg("");
+    try {
+      const readingsByBin = {}; for (const r of recentReadings) { if (r.bin_id) (readingsByBin[r.bin_id] ||= []).push(r); }
+      const ctx = makeBinContext(fireSensors, citizenReports, munNeighborhoods);
+      const base = { municipalityId: mid, neighborhoods: munNeighborhoods, bins: munBins, profiles: munProfiles, vehicles: munVehicles, routes: munRoutes, readingsByBin, contextFor: ctx.forBin, depot };
+      // Pass 1 (Haversine) decides the stop sets; pass 2 re-optimizes each route on a real OSRM time matrix when reachable.
+      const first = buildCollectionPlan(base);
+      const matrixByNeighborhood = {};
+      await Promise.all(first.routes.map(async (r) => {
+        const pts = [depot, ...r.stops.filter((s) => s.lat != null).map((s) => ({ lat: s.lat, lng: s.lng }))];
+        const m = await fetchRoadMatrix(pts).catch(() => null);
+        if (m) matrixByNeighborhood[r.neighborhoodId] = m;
+      }));
+      const p = buildCollectionPlan({ ...base, matrixByNeighborhood });
+      setPlan(p);
+      await saveOptimizationRun({ municipalityId: mid, summary: p.summary, constraints: p.constraints, routes: p.routes.map((r) => ({ neighborhoodId: r.neighborhoodId, neighborhoodName: r.neighborhoodName, stops: r.stops.length, deferred: r.deferredStops.length, distanceKm: r.distanceKm, durationMin: r.durationMin, matrixSource: r.matrixSource, driver: r.driver ? { driverId: r.driver.driverId, driverName: r.driver.driverName, vehicleNumber: r.driver.vehicleNumber } : null })), assumptions: p.assumptions, demo: munBins.some((b) => b.demo) }, actor);
+      setMsg(`✅ خُطّطت ${p.routes.length} جولة لـ ${p.summary.served} حاوية${p.summary.unassignedRoutes ? ` · ${p.summary.unassignedRoutes} بلا سائق` : ""}${p.summary.deferred ? ` · ${p.summary.deferred} مؤجلة` : ""}`);
+    } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); }
+  };
+
+  /** Writes the plan as SUGGESTED routes (withdrawing older suggestions of the same neighborhoods) — nothing is dispatched until approval. */
+  const apply = async () => {
+    if (!plan) return;
+    setBusy("apply"); setMsg("");
+    try {
+      const toWithdraw = munRoutes.filter((r) => r.status === "suggested" && plan.routes.some((pr) => pr.neighborhoodId === (r.neighborhoodIds || [])[0])).map((r) => r.id);
+      const toCreate = plan.routes.map((r) => {
+        const stops = [...r.stops.map((s, i) => ({ order: i + 1, binId: s.binId, binName: s.binName, priorityTier: s.priorityTier, priorityScore: s.priorityScore ?? null, hasCoords: s.lat != null, lat: s.lat ?? null, lng: s.lng ?? null, fillLevelPercent: s.fillLevelPercent ?? null, arrivalMin: s.arrivalMin ?? null, deferred: false })), ...r.deferredStops.map((s, i) => ({ order: r.stops.length + i + 1, binId: s.binId, binName: s.binName, priorityTier: s.priorityTier, priorityScore: s.priorityScore ?? null, hasCoords: s.lat != null, lat: s.lat ?? null, lng: s.lng ?? null, fillLevelPercent: s.fillLevelPercent ?? null, deferred: true }))];
+        return { routeName: `خطة ذكية — ${r.neighborhoodName}`, neighborhoodIds: [r.neighborhoodId], binIds: stops.map((s) => s.binId), orderedStops: stops, priorityTier: r.priorityTier, totalPriorityScore: r.totalPriorityScore, estimatedDistanceKm: r.distanceKm, estimatedWasteLiters: r.wasteLiters, reasons: r.reasons, status: "suggested", manualBinIds: [], municipalityId: mid,
+          optimization: { at: plan.generatedAt, by: actor.uid, matrixSource: r.matrixSource, confidence: r.confidence, totalDurationMin: r.durationMin, trips: r.trips, constraints: r.constraints, deferredBinIds: r.deferredStops.map((d) => d.binId), planner: true },
+          recommendedDriver: r.driver ? { driverId: r.driver.driverId, driverName: r.driver.driverName, vehicleId: r.driver.vehicleId, vehicleNumber: r.driver.vehicleNumber, reason: r.driver.reason, capacityShortfall: r.driver.capacityShortfall } : null, createdAt: new Date().toISOString() };
+      });
+      const res = await applyRouteReconciliation({ toCreate, toUpdate: [], toWithdraw }, { planner: true });
+      await writeAuditLog("plan_applied", actor.uid, actor.name, { municipalityId: mid, created: res.created, withdrawn: res.withdrawn, served: plan.summary.served });
+      setMsg(`✅ أُنشئت ${res.created} جولة مقترحة من الخطة (سُحب ${res.withdrawn} اقتراح قديم) — اعتمد الإسناد المقترح لكل جولة`);
+    } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); }
+  };
+
+  const approveSuggested = async (route) => {
+    const rec = route.recommendedDriver; if (!rec) return;
+    const conflicts = findRouteAssignmentConflicts({ routeId: route.id, driverId: rec.driverId, vehicleId: rec.vehicleId }, routes);
+    if (conflicts.length) { alert(conflicts.map((c) => c.message).join("\n")); return; }
+    setBusy(route.id);
+    try {
+      await approveAndAssignRoute(route.id, actor.uid, { driverId: rec.driverId, driverName: rec.driverName, vehicleId: rec.vehicleId }, rec.capacityShortfall ? { reason: "إسناد مع تحذير سعة من الخطة الذكية" } : null);
+      await writeAuditLog("route_assigned", actor.uid, actor.name, { routeId: route.id, routeName: route.routeName, driverId: rec.driverId, vehicleId: rec.vehicleId, source: "smart_plan" });
+    } finally { setBusy(""); }
+  };
+
+  const plannedSuggested = munRoutes.filter((r) => r.status === "suggested" && r.optimization?.planner);
+  const conf = { high: ["عالية", C.accent], medium: ["متوسطة", C.warning], low: ["منخفضة", C.dim], none: ["—", C.dim] };
+  if (!can(loggedInUser?.role, "plan.create")) return <EmptyState icon="🔒" title="غير مصرح" />;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>🧠 خطة الجمع الذكية — {municipalityById(mid)?.nameAr || "—"}</div>
+          <div style={{ fontSize: 12, color: C.dim }}>محرك تخطيط الجمع البلدي: الحاويات المؤهلة (امتلاء + تنبؤ + بلاغات) → جولات لكل حي → ترتيب محسَّن بقيود السعة على أزمنة الطرق → السائق المرشح → مؤشرات وقيود.</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {scope.all && <select value={mid} onChange={(e) => { setMid(e.target.value); setPlan(null); }} style={{ padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>{MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.nameAr}</option>)}</select>}
+          <button disabled={!!busy} onClick={build} style={{ padding: "11px 20px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === "build" ? "جاري الحساب…" : "⚡ إنشاء خطة الجمع الذكية"}</button>
+        </div>
+      </div>
+      {msg && <div style={{ fontSize: 12, color: C.text, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>{msg}</div>}
+
+      {!plan ? (
+        <Card title="بانتظار إنشاء الخطة" icon={<Target size={16} color={C.muted} />}>
+          <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>{munBins.length} حاوية · {munNeighborhoods.length} حي · {munProfiles.filter((p) => p.shiftStatus === "on_shift").length} سائق في المناوبة · {munVehicles.filter((v) => v.status === "available").length} مركبة متاحة · {munRoutes.filter((r) => ["approved", "in_progress"].includes(r.status)).length} جولة معتمدة/نشطة.</div>
+          {plannedSuggested.length > 0 && <div style={{ fontSize: 12, color: C.info, marginTop: 6 }}>توجد {plannedSuggested.length} جولة مقترحة من خطة سابقة بانتظار الاعتماد (أدناه).</div>}
+        </Card>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+            {[["تحتاج جمعًا", plan.summary.needCollection, C.danger], ["جولات", plan.summary.routes, C.info], ["حاويات مخدومة", plan.summary.served, C.accent], ["مؤجلة (سعة)", plan.summary.deferred, plan.summary.deferred ? C.warning : C.dim], ["بلا سائق", plan.summary.unassignedRoutes, plan.summary.unassignedRoutes ? C.danger : C.dim], ["مستبعدة (مستشعر)", plan.summary.excluded, plan.summary.excluded ? C.warning : C.dim], ["المسافة", `${plan.summary.totalKm} كم`, C.text], ["الزمن", `${plan.summary.totalMin} د`, C.text], ["النفايات المتوقعة", `${plan.summary.totalWasteLiters} لتر`, C.purple], ["الثقة", conf[plan.summary.confidence][0], conf[plan.summary.confidence][1]]].map(([l, v, c]) => (
+              <div key={l} style={{ background: C.card, border: `1px solid ${c}30`, borderRadius: 12, padding: "10px 12px" }}><div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 11, color: C.muted }}>{l}</div></div>
+            ))}
+          </div>
+          {plan.summary.reductionPct != null ? (
+            <div style={{ fontSize: 12, color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>مقارنة عادلة بخط الأساس (جولة لكل حي من نفس المستودع تزور كل حاوياته، مسافات جوية للطرفين): {plan.summary.baselineKm} كم ← {plan.summary.totalKm} كم (توفير {plan.summary.kmSaved} كم ≈ {plan.summary.reductionPct}% · وقود تقديري {plan.summary.fuelSavedL} لتر بافتراض {plan.assumptions.truckFuelLitersPerKm} لتر/كم).</div>
+          ) : <div style={{ fontSize: 12, color: C.dim }}>لا تُعرض نسبة توفير: البيانات غير كافية للمقارنة.</div>}
+          {plan.constraints.length > 0 && <ul style={{ margin: 0, paddingInlineStart: 18, fontSize: 12, color: C.warning, lineHeight: 1.9 }}>{plan.constraints.map((c, i) => <li key={i}>{c}</li>)}</ul>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {plan.routes.map((r) => (
+              <div key={r.neighborhoodId} style={{ background: C.card, border: `1px solid ${r.driver ? C.border : C.danger + "60"}`, borderRadius: 12, padding: 12, fontSize: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}><b style={{ color: C.text, fontSize: 14 }}>{r.routeName}</b><span style={{ color: conf[r.confidence][1] }}>ثقة {conf[r.confidence][0]} · {r.matrixSource === "osrm" ? "طرق فعلية" : "تقدير جوي"}</span></div>
+                <div style={{ color: C.muted, marginTop: 4, lineHeight: 1.8 }}>{explainRoute(r)}</div>
+                <div style={{ color: C.dim, fontSize: 11, marginTop: 4 }}>{r.stops.map((s) => `#${s.order} ${s.binName}${s.arrivalMin != null ? ` (${s.arrivalMin} د)` : ""}`).join(" ← ")}{r.deferredStops.length ? ` · مؤجلة: ${r.deferredStops.map((d) => d.binName).join("، ")}` : ""}</div>
+                {r.constraints.length > 0 && <div style={{ color: C.warning, fontSize: 11, marginTop: 4 }}>{r.constraints.join(" · ")}</div>}
+              </div>
+            ))}
+          </div>
+          {plan.excluded.length > 0 && <Card title={`حاويات حرجة/مرتفعة مستبعدة من الجمع التلقائي (${plan.excluded.length})`} icon={<AlertTriangle size={16} color={C.muted} />}><div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>{plan.excluded.map((e) => `${e.binName}: ${e.reason}`).join(" · ")}</div></Card>}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button disabled={!!busy || plan.routes.length === 0} onClick={apply} style={{ padding: "11px 20px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === "apply" ? "…" : "📋 اعتماد الخطة كجولات مقترحة"}</button>
+            <span style={{ fontSize: 11, color: C.dim, alignSelf: "center" }}>لا تُرسل أي مركبة تلقائيًا: الاعتماد والإسناد قرار بشري لكل جولة.</span>
+          </div>
+        </>
+      )}
+
+      {plannedSuggested.length > 0 && (
+        <Card title={`جولات مقترحة من الخطة بانتظار الإسناد (${plannedSuggested.length})`} icon={<RouteIcon size={16} color={C.muted} />}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {plannedSuggested.map((r) => (
+              <div key={r.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", background: C.bg, borderRadius: 10, padding: "10px 12px", fontSize: 12, flexWrap: "wrap" }}>
+                <div><b style={{ color: C.text }}>{r.routeName}</b> · {r.binIds?.length || 0} حاوية · {r.estimatedDistanceKm} كم{r.optimization?.totalDurationMin ? ` · ~${r.optimization.totalDurationMin} د` : ""}<div style={{ color: C.muted }}>{r.recommendedDriver ? `السائق المقترح: ${r.recommendedDriver.driverName} — ${r.recommendedDriver.vehicleNumber} · ${r.recommendedDriver.reason}` : "لا سائق مؤهل — افتح الجولة للإسناد الاستثنائي"}</div></div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {r.recommendedDriver && <button disabled={busy === r.id} onClick={() => approveSuggested(r)} style={smallBtn(C.accent, true)}>اعتماد الإسناد المقترح</button>}
+                  {onOpenRoute && <button onClick={() => onOpenRoute(r.id)} style={smallBtn(C.info)}>فتح الجولة</button>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {(runs || []).length > 0 && (
+        <Card title="سجل عمليات التخطيط" icon={<ClipboardList size={16} color={C.muted} />}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 200, overflowY: "auto" }}>
+            {(runs || []).filter((x) => x.municipalityId === mid).slice(0, 10).map((x) => <div key={x.id} style={{ fontSize: 11.5, color: C.muted, background: C.bg, borderRadius: 6, padding: "6px 10px" }}>{getReadingAgeLabel(x.createdAt)} · {x.createdByName || "—"} · {x.summary?.routes} جولة · {x.summary?.served} حاوية · {x.summary?.totalKm} كم · ثقة {conf[x.summary?.confidence || "none"][0]}</div>)}
+          </div>
+        </Card>
       )}
     </div>
   );
@@ -5886,7 +6137,7 @@ const DriversPage = ({ profiles = [], assignments = [], vehicles = [], loggedInU
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(320px, 1.4fr)", gap: 16 }}>
-        <Card title="السائقون" icon={<Users size={16} color="#94a3b8" />}>
+        <Card title="السائقون" icon={<Users size={16} color={C.muted} />}>
           {rows.length === 0 ? <EmptyState icon="🚛" title="لا توجد حسابات بدور سائق بعد" desc="يسجل السائق حسابه من شاشة التسجيل بدور «سائق ميداني»، ثم يُفعَّل من إدارة المستخدمين ويُهيأ ملفه هنا." /> : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {rows.map(({ user: u, profile: p }) => {
@@ -5918,7 +6169,7 @@ const DriversPage = ({ profiles = [], assignments = [], vehicles = [], loggedInU
           )}
         </Card>
 
-        <Card title={selectedProfile ? `ملف السائق — ${selectedProfile.fullName}` : "اختر سائقًا"} icon={<HardHat size={16} color="#94a3b8" />}>
+        <Card title={selectedProfile ? `ملف السائق — ${selectedProfile.fullName}` : "اختر سائقًا"} icon={<HardHat size={16} color={C.muted} />}>
           {!selectedProfile || !form ? <EmptyState icon="👈" title="اختر سائقًا من القائمة لتعديل مركبته ونطاقه" /> : (
             <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 12 }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -5979,7 +6230,7 @@ const DriversPage = ({ profiles = [], assignments = [], vehicles = [], loggedInU
         </Card>
       </div>
 
-      <Card title="🗺️ تغطية الأحياء — من يغطي كل حي؟" icon={<MapGlyph size={16} color="#94a3b8" />}>
+      <Card title="🗺️ تغطية الأحياء — من يغطي كل حي؟" icon={<MapGlyph size={16} color={C.muted} />}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
           {NEIGHBORHOOD_KEYS.map((k) => {
             const ds = matrix[k] || [];
@@ -6134,7 +6385,7 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
       </div>
 
       {showVehicles && (
-        <Card title="المركبات" icon={<Truck size={16} color="#94a3b8" />}>
+        <Card title="المركبات" icon={<Truck size={16} color={C.muted} />}>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <input value={newVehicleNumber} onChange={(e) => setNewVehicleNumber(e.target.value)} placeholder="رقم/اسم المركبة الجديدة…"
               style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }} />
@@ -6372,8 +6623,278 @@ const SessionTimeout = ({ onLogout, timeoutMin = 30, countdownSec = 10 }) => {
   );
 };
 
-const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, neighborhoods = [], bins = [], routes = [], fireSensors = [], citizenReports = [], collectionEvents = [], auditLog = [], vehicles = [], recentReadings = [] }) => {
-  const [tab, setTab] = useState("today");
+// ======================== AMANAH STRATEGIC COMMAND (Phase 5 — Inter-Municipality Resource Optimization) ========================
+const PRESSURE_LABEL = { critical: ["حرج", C.danger], high: ["مرتفع", C.warning], moderate: ["متوسط", C.info], low: ["منخفض", C.accent] };
+const TRANSFER_STATUS = { proposed: ["مقترح", C.warning], approved: ["معتمد", C.info], executed: ["منفَّذ", C.accent], returned: ["أُعيد", C.dim], rejected: ["مرفوض", C.danger] };
+
+/** Pure-ish helper shared by the Amanah panel and the municipality dashboard: live subsets + pressure per municipality. */
+const useCityPressure = ({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings }) => useMemo(() => {
+  const groups = groupNeighborhoodsByName(neighborhoods, bins);
+  const zones = operationalZones(FEATURE_BY_KEY, groups, neighborhoods);
+  const centroids = Object.fromEntries(Object.values(zones).map((z) => [z.municipalityId, { lat: z.hull.reduce((a, p) => a + p[0], 0) / z.hull.length, lng: z.hull.reduce((a, p) => a + p[1], 0) / z.hull.length }]));
+  const readingsByBin = {}; for (const r of recentReadings) { if (r.bin_id) (readingsByBin[r.bin_id] ||= []).push(r); }
+  const predictedSoonIds = new Set(bins.filter((b) => { const p = predictFullTime(b, readingsByBin[b.id] || []); return p.predictionAvailable && p.hoursToFull != null && p.hoursToFull <= THRESHOLDS.predictedFullSoonHours; }).map((b) => b.id));
+  const nMid = Object.fromEntries(neighborhoods.map((n) => [n.id, municipalityForNeighborhood(n)]));
+  const live = Object.fromEntries(MUNICIPALITIES.map((m) => [m.id, {
+    bins: bins.filter((b) => (b.municipalityId || nMid[b.neighborhoodId]) === m.id),
+    profiles: profiles.filter((p) => p.municipalityId === m.id), vehicles: vehicles.filter((v) => v.municipalityId === m.id),
+    routes: routes.filter((r) => r.municipalityId === m.id), incidents: incidents.filter((i) => i.municipalityId === m.id), predictedSoonIds,
+  }]));
+  const pressures = MUNICIPALITIES.map((m) => municipalityPressure(m, live[m.id]));
+  const transfersRec = recommendTransfers(pressures, { centroids });
+  return { pressures, comparison: compareMunicipalities(pressures), transfersRec, centroids, live, predictedSoon: predictedSoonIds.size };
+}, [neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings]);
+
+/** Transfer record built from an interMunicipalEngine recommendation (used by the Amanah panel and the demo scenario). */
+const transferFromRecommendation = (rec) => ({ resourceType: rec.resourceType, resourceId: rec.resourceType === "driver" ? rec.driverId : rec.vehicleId, resourceLabel: rec.resourceLabel, driverId: rec.driverId, driverName: rec.driverName, vehicleId: rec.vehicleId, vehicleNumber: rec.vehicleNumber, fromMunicipalityId: rec.fromMunicipalityId, toMunicipalityId: rec.toMunicipalityId, impact: rec.impact, travelMin: rec.travelMin, travelKm: rec.travelKm, travelSource: rec.travelSource, benefit: rec.benefit, cost: rec.cost, net: rec.net, reason: rec.reason, until: new Date(Date.now() + 8 * 3600000).toISOString() });
+const AmanahStrategicPanel = ({ neighborhoods = [], bins = [], profiles = [], vehicles = [], routes = [], incidents = [], recentReadings = [], fireSensors = [], citizenReports = [], supportRequests = [], transfers = [], auditLog = [], loggedInUser, onOpenMunicipality }) => {
+  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings });
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
+  const isAmanah = can(loggedInUser?.role, "transfers.approve");
+  const run = (label, fn) => async () => { setBusy(label); setMsg(""); try { const r = await fn(); if (r) setMsg(r); } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); } };
+  const totals = city.pressures.reduce((a, p) => ({ critical: a.critical + p.critical, warning: a.warning + p.warning, ready: a.ready + p.readyDrivers, vehicles: a.vehicles + p.usableVehicles, active: a.active + p.activeRoutes, incidents: a.incidents + p.openIncidents }), { critical: 0, warning: 0, ready: 0, vehicles: 0, active: 0, incidents: 0 });
+  const decisions = auditLog.filter((a) => /^(transfer_|support_|plan_applied|route_assigned)/.test(a.action)).slice(0, 12);
+  const propose = (rec) => run(rec.resourceId, async () => {
+    const id = await proposeResourceTransfer(transferFromRecommendation(rec), actor);
+    await writeAuditLog("transfer_proposed", actor.uid, actor.name, { transferId: id, from: rec.fromMunicipalityId, to: rec.toMunicipalityId, resource: rec.resourceLabel });
+    return `📝 سُجّل اقتراح نقل ${rec.resourceLabel} من ${rec.fromName} إلى ${rec.toName} — بانتظار الاعتماد`;
+  });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {msg && <div style={{ fontSize: 12, color: C.text, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>{msg}</div>}
+      {/* 2. مؤشرات المدينة */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+        {[["بلديات تحت ضغط", city.transfersRec.shortages.length, city.transfersRec.shortages.length ? C.danger : C.accent], ["حاويات حرجة", totals.critical, C.danger], ["تحتاج متابعة", totals.warning, C.warning], ["متوقع امتلاؤها قريبًا", city.predictedSoon, C.purple], ["سائقون جاهزون", totals.ready, C.accent], ["مركبات متاحة", totals.vehicles, C.info], ["جولات نشطة", totals.active, C.info], ["بلاغات مفتوحة", totals.incidents, totals.incidents ? C.danger : C.dim]].map(([l, v, c]) => (
+          <div key={l} style={{ background: C.card, border: `1px solid ${c}30`, borderRadius: 12, padding: "12px 14px" }}><div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 11, color: C.muted }}>{l}</div></div>
+        ))}
+      </div>
+      {/* 1. خريطة البلديات */}
+      <Card title="🗺️ خريطة البلديات — النطاقات التشغيلية والضغط" icon={<MapGlyph size={16} color={C.muted} />}>
+        <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={profiles} initialLayer="municipalities" height={420} compact />
+      </Card>
+      {/* 3+4. مقارنة البلديات والضغط التشغيلي */}
+      <Card title="📊 مقارنة أداء البلديات والضغط التشغيلي" icon={<BarChart2 size={16} color={C.muted} />}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: ARABIC_FONT }}>
+            <thead><tr style={{ color: C.muted, textAlign: "right" }}>{["#", "البلدية", "الضغط", "حرجة", "متابعة", "متوقعة قريبًا", "بلاغات", "سائقون جاهزون", "مركبات متاحة", "جولات نشطة", "الطاقة (حاوية/مناوبة)", ""].map((h) => <th key={h} style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{h}</th>)}</tr></thead>
+            <tbody>{city.comparison.map((p) => { const [lab, col] = PRESSURE_LABEL[p.level]; return (
+              <tr key={p.municipalityId} style={{ color: C.text }}>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{p.rank}</td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, fontWeight: 700 }}>{p.name}</td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, minWidth: 140 }}><div style={{ display: "flex", alignItems: "center", gap: 6 }}><div style={{ flex: 1, height: 8, background: C.bg, borderRadius: 4, overflow: "hidden" }}><div style={{ width: `${p.index}%`, height: "100%", background: col }} /></div><b style={{ color: col }}>{p.index}</b> <span style={{ fontSize: 10.5, color: col }}>{lab}</span></div></td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, color: p.critical ? C.danger : C.muted }}>{p.critical}</td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{p.warning}</td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{p.predictedSoon}</td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{p.openIncidents}</td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{p.readyDrivers}</td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{p.usableVehicles}</td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{p.activeRoutes}</td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, color: C.muted }}>{p.capacityUnits} / طلب {p.demandUnits}</td>
+                <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{onOpenMunicipality && <button onClick={() => onOpenMunicipality(p.municipalityId)} style={smallBtn(C.info)}>التفاصيل</button>}</td>
+              </tr>
+            ); })}</tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>الضغط = الطلب (حرجة ×1 + متابعة/متوقعة ×0.5 + بلاغات ×0.5) ÷ الطاقة (الطواقم الجاهزة × {Math.round(CREW_BINS_PER_HOUR * 10) / 10} حاوية/ساعة × {city.pressures[0]?.remainingShiftHours || 4} ساعات متبقية) × 100 — إشرافي بلا الدخول إلى حساب مدير البلدية.</div>
+      </Card>
+      {/* 6+7. التنبؤات والتوصيات الاستراتيجية */}
+      <Card title="🤝 التوصيات الاستراتيجية — دعم البلديات ونقل الموارد" icon={<Target size={16} color={C.muted} />}>
+        {city.transfersRec.recommendations.length === 0 && city.transfersRec.warnings.length === 0 && <div style={{ fontSize: 12, color: C.accent }}>✅ لا توجد بلدية تحت ضغط يستدعي دعمًا الآن.</div>}
+        {city.transfersRec.warnings.map((w, i) => <div key={i} style={{ fontSize: 12, color: C.warning, marginBottom: 6 }}>⚠️ {w}</div>)}
+        {city.transfersRec.recommendations.map((rec) => (
+          <div key={rec.toMunicipalityId + rec.resourceId} style={{ background: C.bg, border: `1px solid ${C.info}50`, borderRadius: 12, padding: 12, marginBottom: 8, fontSize: 12 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 800, color: C.text }}>نقل {rec.resourceType === "crew" ? "طاقم" : rec.resourceType === "vehicle" ? "مركبة" : "سائق"} {rec.resourceLabel}{rec.driverName && rec.resourceType === "crew" ? ` (${rec.driverName})` : ""}: {rec.fromName} ← {rec.toName}</div>
+            <div style={{ color: C.muted, lineHeight: 1.8, marginTop: 4 }}>{rec.reason}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6, marginTop: 8 }}>
+              {[["ضغط المستقبِلة", `${rec.impact.receiverBefore} ← ${rec.impact.receiverAfter}`, C.accent], ["ضغط المرسِلة", `${rec.impact.donorBefore} ← ${rec.impact.donorAfter}`, C.warning], ["الانتقال", rec.travelMin != null ? `~${rec.travelMin} د · ${rec.travelKm} كم` : "—", C.info], ["الفائدة − التكلفة", rec.net, rec.net > 0 ? C.accent : C.danger]].map(([l, v, c]) => <div key={l} style={{ background: C.card, borderRadius: 8, padding: "6px 10px" }}><div style={{ fontSize: 10.5, color: C.muted }}>{l}</div><b style={{ color: c }}>{v}</b></div>)}
+            </div>
+            {rec.rejected.length > 0 && <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>بدائل مرفوضة: {rec.rejected.map((o) => `${o.fromName} (${o.constraintsViolated[0]})`).join(" · ")}</div>}
+            {isAmanah && <button disabled={!!busy} onClick={propose(rec)} style={{ ...smallBtn(C.info, true), color: "#fff", marginTop: 8 }}>📝 تسجيل اقتراح النقل للاعتماد</button>}
+          </div>
+        ))}
+        <div style={{ fontSize: 10.5, color: C.dim }}>لا يُنقل أي مورد فعليًا دون اعتماد متخذ القرار بالأمانة؛ التوصية تحسب أثر النقل على الطرفين وتستبعد ما يخالف القيود (سقف ضغط المرسِلة {city.transfersRec.thresholds.donorCeiling}، زمن انتقال ≤ {city.transfersRec.thresholds.maxTransferMin} د).</div>
+      </Card>
+      {/* طلبات الدعم */}
+      <Card title={`📨 طلبات الدعم من البلديات (${supportRequests.filter((s) => s.status === "open").length} مفتوح)`} icon={<Inbox size={16} color={C.muted} />}>
+        {supportRequests.length === 0 ? <div style={{ fontSize: 12, color: C.dim }}>لا طلبات دعم.</div> : supportRequests.slice(0, 20).map((s) => (
+          <div key={s.id} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px", marginBottom: 6, fontSize: 12, display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+            <div><b style={{ color: C.text }}>{municipalityById(s.municipalityId)?.shortAr}</b> · {s.requestedByName} · {s.need}{s.note ? ` — ${s.note}` : ""}<div style={{ color: C.dim, fontSize: 11 }}>ضغط عند الطلب: {s.pressureIndex} · {getReadingAgeLabel(s.createdAt)} · {s.status === "open" ? "مفتوح" : s.status === "approved" ? "موافق عليه" : s.status === "rejected" ? "مرفوض" : s.status}{s.resolution ? ` — ${s.resolution}` : ""}</div></div>
+            {isAmanah && s.status === "open" && <div style={{ display: "flex", gap: 6 }}><button disabled={!!busy} onClick={run(s.id, async () => { const res = window.prompt("قرار الأمانة (ملاحظة):", "") ?? ""; await reviewSupportRequest(s.id, actor, "approved", res); await writeAuditLog("support_request_approved", actor.uid, actor.name, { requestId: s.id, municipalityId: s.municipalityId }); return "✅ تمت الموافقة على طلب الدعم — اقترح النقل المناسب أعلاه"; })} style={smallBtn(C.accent)}>موافقة</button><button disabled={!!busy} onClick={run(s.id + "r", async () => { const res = window.prompt("سبب الرفض:", "") ?? ""; await reviewSupportRequest(s.id, actor, "rejected", res); await writeAuditLog("support_request_rejected", actor.uid, actor.name, { requestId: s.id }); return "تم رفض الطلب"; })} style={smallBtn(C.danger)}>رفض</button></div>}
+          </div>
+        ))}
+      </Card>
+      {/* النقل المعتمد */}
+      <Card title={`🔁 عمليات نقل الموارد (${transfers.length})`} icon={<Truck size={16} color={C.muted} />}>
+        {transfers.length === 0 ? <div style={{ fontSize: 12, color: C.dim }}>لا عمليات نقل.</div> : [...transfers].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 20).map((t) => { const [lab, col] = TRANSFER_STATUS[t.status] || ["—", C.dim]; return (
+          <div key={t.id} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px", marginBottom: 6, fontSize: 12, display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+            <div><b style={{ color: C.text }}>{t.resourceLabel}</b> ({t.resourceType === "crew" ? `طاقم: مركبة + سائق ${t.driverName || ""}` : t.resourceType === "vehicle" ? "مركبة" : "سائق"}): {municipalityById(t.fromMunicipalityId)?.shortAr} ← {municipalityById(t.toMunicipalityId)?.shortAr} · <span style={{ color: col, fontWeight: 700 }}>{lab}</span><div style={{ color: C.dim, fontSize: 11 }}>الأثر: {t.impact?.receiverBefore} ← {t.impact?.receiverAfter} للمستقبِلة · {t.impact?.donorBefore} ← {t.impact?.donorAfter} للمرسِلة · {getReadingAgeLabel(t.createdAt)}{t.decisionNote ? ` · ${t.decisionNote}` : ""}</div></div>
+            {isAmanah && <div style={{ display: "flex", gap: 6 }}>
+              {t.status === "proposed" && <><button disabled={!!busy} onClick={run(t.id, async () => { await decideResourceTransfer(t, actor, "approved", window.prompt("ملاحظة الاعتماد:", "") ?? ""); return "✅ اعتُمد النقل — نفّذه لإعادة توطين المورد مؤقتًا"; })} style={smallBtn(C.accent)}>اعتماد</button><button disabled={!!busy} onClick={run(t.id + "x", async () => { await decideResourceTransfer(t, actor, "rejected", window.prompt("سبب الرفض:", "") ?? ""); return "رُفض النقل"; })} style={smallBtn(C.danger)}>رفض</button></>}
+              {t.status === "approved" && <button disabled={!!busy} onClick={run(t.id + "e", async () => { await executeResourceTransfer(t, actor); return "🚚 نُفّذ النقل: المورد يعمل الآن ضمن البلدية المستقبِلة مؤقتًا"; })} style={smallBtn(C.info)}>تنفيذ النقل</button>}
+              {t.status === "executed" && <button disabled={!!busy} onClick={run(t.id + "b", async () => { await returnResourceTransfer(t, actor); return "↩️ أُعيد المورد إلى بلديته"; })} style={smallBtn(C.dim)}>إعادة المورد</button>}
+            </div>}
+          </div>
+        ); })}
+      </Card>
+      {/* 9. سجل القرارات */}
+      <Card title="📜 سجل القرارات" icon={<ClipboardList size={16} color={C.muted} />}>
+        {decisions.length === 0 ? <div style={{ fontSize: 12, color: C.dim }}>لا قرارات مسجلة بعد.</div> : decisions.map((a) => <div key={a.id} style={{ fontSize: 11.5, color: C.muted, background: C.bg, borderRadius: 6, padding: "6px 10px", marginBottom: 4 }}><b style={{ color: C.text }}>{AUDIT_ACTION_LABELS[a.action] || a.action}</b> · {a.actorName || "—"} · {getReadingAgeLabel(a.createdAt)}{a.details?.resource ? ` · ${a.details.resource}` : ""}{a.details?.routeName ? ` · ${a.details.routeName}` : ""}</div>)}
+      </Card>
+    </div>
+  );
+};
+
+// ======================== CITY OPERATIONAL INTELLIGENCE + DECISION SIMULATION CENTER (Phase 6) ========================
+const VERDICT_LABEL = { better: ["أفضل", C.accent], worse: ["أسوأ", C.danger], neutral: ["محايد", C.warning] };
+
+const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicles = [], routes = [], incidents = [], recentReadings = [], fireSensors = [], citizenReports = [], loggedInUser }) => {
+  const scope = scopeFor(loggedInUser);
+  const [mid, setMid] = useState(scope.all ? "east" : scope.municipalityId);
+  const [section, setSection] = useState("predict");
+  const [scenario, setScenario] = useState({ type: "vehicle_down", vehicleId: "", driverId: "", factor: 1.5, count: 3, delayMin: 20, delta: -1, fromMunicipalityId: "east", routeId: "" });
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const { scenarios } = useSimulationScenarios(true);
+  const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
+  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings });
+  const live = useMemo(() => city.live[mid] || { bins: [], profiles: [], vehicles: [], routes: [], incidents: [] }, [city.live, mid]);
+  const munNeighborhoods = useMemo(() => neighborhoods.filter((n) => municipalityForNeighborhood(n) === mid), [neighborhoods, mid]);
+  const depot = useMemo(() => { const v = live.vehicles.find((x) => x.depotLat != null); return v ? { lat: v.depotLat, lng: v.depotLng } : DEFAULT_DEPOT; }, [live.vehicles]);
+  // 1. What will happen — predictions per bin in scope.
+  const forecast = useMemo(() => {
+    const readingsByBin = {}; for (const r of recentReadings) { if (r.bin_id) (readingsByBin[r.bin_id] ||= []).push(r); }
+    const rows = live.bins.map((b) => ({ bin: b, p: predictFullTime(b, readingsByBin[b.id] || []), conn: getSensorConnectivity(b) }));
+    const soon = rows.filter((r) => r.p.predictionAvailable && r.p.hoursToFull != null && r.p.hoursToFull <= 6).sort((a, b) => a.p.hoursToFull - b.p.hoursToFull);
+    const insufficient = rows.filter((r) => r.conn === "online" && !r.p.predictionAvailable).length;
+    const silent = rows.filter((r) => r.conn === "offline" || r.conn === "fault").length;
+    return { soon, insufficient, silent, readingsByBin };
+  }, [live.bins, recentReadings]);
+  // 2. Best action — quick plan (Haversine) for the scope + near-route additions + transfers.
+  const quickPlan = useMemo(() => {
+    const ctx = makeBinContext(fireSensors, citizenReports, munNeighborhoods);
+    const plan = buildCollectionPlan({ municipalityId: mid, neighborhoods: munNeighborhoods, bins: live.bins, profiles: live.profiles, vehicles: live.vehicles, routes: live.routes, readingsByBin: forecast.readingsByBin, contextFor: ctx.forBin, depot });
+    const additions = suggestAdditions(plan, live.bins, new Set(forecast.soon.map((r) => r.bin.id)));
+    return { plan, additions };
+  }, [mid, munNeighborhoods, live, forecast, fireSensors, citizenReports, depot]);
+  const pressure = city.pressures.find((p) => p.municipalityId === mid);
+  const myTransfers = city.transfersRec.recommendations.filter((r) => r.toMunicipalityId === mid || r.fromMunicipalityId === mid);
+
+  const runSim = async () => {
+    setBusy("sim"); setMsg("");
+    try {
+      const state = { municipalityId: mid, municipalityName: municipalityById(mid)?.shortAr, neighborhoods: munNeighborhoods, bins: live.bins, profiles: live.profiles, vehicles: live.vehicles, routes: live.routes, incidents: live.incidents,
+        extraVehicles: vehicles.filter((v) => v.municipalityId === scenario.fromMunicipalityId && v.status === "available"), extraProfiles: profiles.filter((p) => p.municipalityId === scenario.fromMunicipalityId && p.shiftStatus === "on_shift") };
+      const sc = { ...scenario };
+      if (sc.type === "transfer_vehicle") { const d = state.extraProfiles.find((p) => p.vehicleId === sc.vehicleId); sc.withDriver = !!d; sc.driver = d || null; }
+      const r = simulateDecision(state, sc, { depot });
+      setResult(r);
+      await saveSimulationScenario({ municipalityId: mid, scenario: sc, verdict: r.verdict, recommendation: r.recommendation, baseline: r.baseline, result: r.result, delta: r.delta, notes: r.notes, explanation: r.explanation, assumptions: r.assumptions, demo: live.bins.some((b) => b.demo) }, actor);
+      await writeAuditLog("decision_simulated", actor.uid, actor.name, { municipalityId: mid, type: sc.type, verdict: r.verdict });
+    } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); }
+  };
+  const field = (label, el) => <label style={{ fontSize: 11, color: C.muted, display: "flex", flexDirection: "column", gap: 4 }}>{label}{el}</label>;
+  const sel = (value, onChange, options) => <select value={value} onChange={(e) => onChange(e.target.value)} style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>{options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>;
+  const num = (value, onChange) => <input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT, width: 110 }} />;
+  const metric = (l, b, r, unit = "", invert = false) => { const d = r != null && b != null ? r - b : null; const good = d == null || d === 0 ? C.muted : (invert ? d < 0 : d > 0) ? C.accent : C.danger; return <div key={l} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px" }}><div style={{ fontSize: 10.5, color: C.muted }}>{l}</div><div style={{ fontSize: 13, color: C.text }}>{b ?? "—"}{unit} ← <b style={{ color: good }}>{r ?? "—"}{unit}</b></div></div>; };
+  if (!can(loggedInUser?.role, "intelligence.view")) return <EmptyState icon="🔒" title="غير مصرح" />;
+  const [plab, pcol] = PRESSURE_LABEL[pressure?.level || "low"];
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div><div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>🧠 {BRAND.engine}</div><div style={{ fontSize: 12, color: C.dim }}>{BRAND.engineEn} — يربط المراقبة بالتنبؤ والتخطيط والتنفيذ وقياس النتائج. كل توصية مبنية على نتائج المحركات الحسابية، لا على نص مولَّد.</div></div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {scope.all && sel(mid, (v) => { setMid(v); setResult(null); }, MUNICIPALITIES.map((m) => [m.id, m.nameAr]))}
+          {[["predict", "1 · ماذا سيحدث؟"], ["act", "2 · ما أفضل إجراء؟"], ["impact", "3 · ما أثر القرار؟"]].map(([k, l]) => <button key={k} onClick={() => setSection(k)} style={{ padding: "8px 14px", borderRadius: 10, border: `1px solid ${section === k ? C.accent : C.border}`, background: section === k ? C.accent + "20" : "transparent", color: section === k ? C.accent : C.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT }}>{l}</button>)}
+        </div>
+      </div>
+
+      {section === "predict" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+            {[["الضغط التشغيلي", `${pressure?.index ?? "—"} (${plab})`, pcol], ["حرجة الآن", pressure?.critical ?? 0, C.danger], ["متوقع امتلاؤها ≤ 6 س", forecast.soon.length, C.purple], ["بيانات غير كافية للتنبؤ", forecast.insufficient, C.dim], ["مستشعرات صامتة/معطلة", forecast.silent, C.warning], ["سائقون جاهزون / مركبات", `${pressure?.readyDrivers ?? 0} / ${pressure?.usableVehicles ?? 0}`, C.info]].map(([l, v, c]) => (
+              <div key={l} style={{ background: C.card, border: `1px solid ${c}30`, borderRadius: 12, padding: "12px 14px" }}><div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 11, color: C.muted }}>{l}</div></div>
+            ))}
+          </div>
+          <Card title="🔮 التنبؤات والمخاطر القادمة" icon={<Sparkles size={16} color={C.muted} />}>
+            {forecast.soon.length === 0 ? <div style={{ fontSize: 12, color: C.muted }}>لا حاويات متوقع وصولها للمستوى الحرج خلال 6 ساعات وفق القراءات الحالية.{forecast.insufficient ? ` (${forecast.insufficient} حاوية بيانات غير كافية للتنبؤ)` : ""}</div> : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 320, overflowY: "auto" }}>
+                {forecast.soon.slice(0, 30).map(({ bin: b, p }) => <div key={b.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, background: C.bg, borderRadius: 8, padding: "7px 10px", flexWrap: "wrap" }}><span><b style={{ color: C.text }}>{b.name}</b> · الآن {b.lastFillLevelPercent}%</span><span style={{ color: p.hoursToFull <= 2 ? C.danger : C.warning }}>حرجة خلال ~{Math.round(p.hoursToFull * 10) / 10} س · ثقة {CONFIDENCE_LABELS[p.confidence] || p.confidence}</span></div>)}
+              </div>
+            )}
+            <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>التنبؤ: انحدار خطي على القراءات بعد آخر تفريغ مع كشف الشذوذ؛ لا تنبؤ من قراءة واحدة، والمستشعرات الصامتة تُعرض مخاطر بلا توقع.</div>
+          </Card>
+          {pressure && <Card title="⚖️ لماذا هذا الضغط؟" icon={<Gauge size={16} color={C.muted} />}><div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>{pressure.reasons.join(" · ")} — الطلب {pressure.demandUnits} وحدة مقابل طاقة {pressure.capacityUnits} حاوية في {pressure.remainingShiftHours} ساعات متبقية.</div></Card>}
+        </div>
+      )}
+
+      {section === "act" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Card title="🧭 الجولات المقترحة الآن (خطة سريعة — مسافات جوية)" icon={<RouteIcon size={16} color={C.muted} />}>
+            {quickPlan.plan.routes.length === 0 ? <div style={{ fontSize: 12, color: C.accent }}>✅ لا حاويات مؤهلة للجمع الآن في هذه البلدية.</div> : quickPlan.plan.routes.map((r) => <div key={r.neighborhoodId} style={{ fontSize: 12, color: C.muted, background: C.bg, borderRadius: 8, padding: "8px 10px", marginBottom: 6, lineHeight: 1.8 }}><b style={{ color: C.text }}>{r.routeName}</b> — {explainRoute(r)}</div>)}
+            {quickPlan.plan.constraints.length > 0 && <ul style={{ margin: "6px 0 0", paddingInlineStart: 18, fontSize: 11.5, color: C.warning }}>{quickPlan.plan.constraints.map((c, i) => <li key={i}>{c}</li>)}</ul>}
+            <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6 }}>للخطة الكاملة على أزمنة الطرق الفعلية واعتمادها: صفحة «خطة الجمع الذكية».</div>
+          </Card>
+          <Card title="💡 توصيات قابلة للتفسير" icon={<Target size={16} color={C.muted} />}>
+            {quickPlan.additions.sentences.length === 0 && myTransfers.length === 0 ? <div style={{ fontSize: 12, color: C.muted }}>لا توصيات إضافية الآن.</div> : null}
+            {quickPlan.additions.sentences.map((t, i) => <div key={i} style={{ fontSize: 12.5, color: C.text, lineHeight: 1.9, background: C.accent + "12", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "8px 12px", marginBottom: 6 }}>{t}</div>)}
+            {myTransfers.map((t, i) => <div key={i} style={{ fontSize: 12.5, color: C.text, lineHeight: 1.9, background: C.info + "12", border: `1px solid ${C.info}40`, borderRadius: 10, padding: "8px 12px", marginBottom: 6 }}>🤝 {t.reason}</div>)}
+          </Card>
+        </div>
+      )}
+
+      {section === "impact" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Card title="🧪 مركز محاكاة القرارات — ماذا لو؟" icon={<Gauge size={16} color={C.muted} />}>
+            {!can(loggedInUser?.role, "decisions.simulate") && <div style={{ fontSize: 12, color: C.warning, marginBottom: 8 }}>تشغيل السيناريوهات متاح لمتخذي القرار (الأمانة/مدير البلدية)؛ يمكنك الاطلاع على النتائج المحفوظة.</div>}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+              {field("السيناريو", sel(scenario.type, (v) => setScenario({ ...scenario, type: v }), Object.entries(SCENARIO_TYPES).map(([k, s]) => [k, s.label])))}
+              {["vehicle_down"].includes(scenario.type) && field("المركبة", sel(scenario.vehicleId, (v) => setScenario({ ...scenario, vehicleId: v }), [["", "اختر…"], ...live.vehicles.map((v) => [v.id, `${v.vehicleNumber} (${VEHICLE_STATUS_LABELS[v.status] || v.status})`])]))}
+              {["driver_absent"].includes(scenario.type) && field("السائق", sel(scenario.driverId, (v) => setScenario({ ...scenario, driverId: v }), [["", "اختر…"], ...live.profiles.map((p) => [p.uid, `${p.fullName} (${SHIFT_STATUS_LABELS[p.shiftStatus]})`])]))}
+              {["transfer_vehicle", "transfer_driver"].includes(scenario.type) && field("من بلدية", sel(scenario.fromMunicipalityId, (v) => setScenario({ ...scenario, fromMunicipalityId: v, vehicleId: "", driverId: "" }), MUNICIPALITIES.filter((m) => m.id !== mid).map((m) => [m.id, m.shortAr])))}
+              {scenario.type === "transfer_vehicle" && field("المركبة المنقولة", sel(scenario.vehicleId, (v) => setScenario({ ...scenario, vehicleId: v }), [["", "اختر…"], ...vehicles.filter((v) => v.municipalityId === scenario.fromMunicipalityId && v.status === "available").map((v) => [v.id, v.vehicleNumber])]))}
+              {scenario.type === "transfer_driver" && field("السائق المنقول", sel(scenario.driverId, (v) => setScenario({ ...scenario, driverId: v }), [["", "اختر…"], ...profiles.filter((p) => p.municipalityId === scenario.fromMunicipalityId && p.shiftStatus === "on_shift").map((p) => [p.uid, p.fullName])]))}
+              {scenario.type === "waste_rate_up" && field("المعامل", num(scenario.factor, (v) => setScenario({ ...scenario, factor: v })))}
+              {scenario.type === "more_critical" && field("عدد الحاويات", num(scenario.count, (v) => setScenario({ ...scenario, count: v })))}
+              {["road_closed", "route_delayed"].includes(scenario.type) && field("التأخير (د)", num(scenario.delayMin, (v) => setScenario({ ...scenario, delayMin: v })))}
+              {scenario.type === "route_delayed" && field("الجولة", sel(scenario.routeId, (v) => setScenario({ ...scenario, routeId: v }), [["", "اختر…"], ...live.routes.filter((r) => ["approved", "in_progress"].includes(r.status)).map((r) => [r.id, r.routeName])]))}
+              {scenario.type === "vehicles_count" && field("التغير (±)", num(scenario.delta, (v) => setScenario({ ...scenario, delta: v })))}
+              <button disabled={!!busy || !can(loggedInUser?.role, "decisions.simulate")} onClick={runSim} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: C.purple, color: "#fff", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === "sim" ? "جاري المحاكاة…" : "▶️ تشغيل السيناريو على نسخة معزولة"}</button>
+            </div>
+            {msg && <div style={{ fontSize: 12, color: C.danger, marginTop: 8 }}>{msg}</div>}
+            {result && (() => { const [vl, vc] = VERDICT_LABEL[result.verdict]; return (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}><div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>النتيجة مقابل خط الأساس</div><span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: vc + "20", color: vc }}>{vl}</span></div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, marginTop: 8 }}>
+                  {metric("حاويات مخدومة", result.baseline.served, result.result.served)}
+                  {metric("غير مخدومة", result.baseline.unserved, result.result.unserved, "", true)}
+                  {metric("جولات بلا سائق", result.baseline.unassignedRoutes, result.result.unassignedRoutes, "", true)}
+                  {metric("زمن الاستجابة", result.baseline.avgResponseMin, result.result.avgResponseMin, " د", true)}
+                  {metric("المسافة", result.baseline.km, result.result.km, " كم", true)}
+                  {metric("مدة التشغيل", result.baseline.minutes, result.result.minutes, " د", true)}
+                  {metric("استغلال المركبات", result.baseline.utilization, result.result.utilization, "%")}
+                  {metric("التكلفة التقديرية", result.baseline.cost, result.result.cost, " ر.س", true)}
+                  {metric("الضغط التشغيلي", result.baseline.pressure, result.result.pressure, "", true)}
+                </div>
+                <div style={{ fontSize: 12.5, color: C.text, background: vc + "12", border: `1px solid ${vc}40`, borderRadius: 10, padding: "8px 12px", marginTop: 8, fontWeight: 700 }}>{result.recommendation}</div>
+                <ul style={{ margin: "8px 0 0", paddingInlineStart: 18, fontSize: 12, color: C.muted, lineHeight: 1.9 }}>{result.explanation.map((t, i) => <li key={i}>{t}</li>)}</ul>
+                <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6 }}>{result.assumptions.note} · وقود {result.assumptions.fuelPricePerLiter} ر.س/لتر · طاقم {result.assumptions.crewCostPerHour} ر.س/ساعة · لا تغيير على البيانات الفعلية.</div>
+              </div>
+            ); })()}
+          </Card>
+          <Card title={`سجل السيناريوهات (${(scenarios || []).length})`} icon={<ClipboardList size={16} color={C.muted} />}>
+            {(scenarios || []).length === 0 ? <div style={{ fontSize: 12, color: C.dim }}>لا سيناريوهات محفوظة.</div> : [...(scenarios || [])].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 12).map((s) => { const [vl, vc] = VERDICT_LABEL[s.verdict] || VERDICT_LABEL.neutral; return <div key={s.id} style={{ fontSize: 11.5, color: C.muted, background: C.bg, borderRadius: 6, padding: "6px 10px", marginBottom: 4 }}><b style={{ color: C.text }}>{municipalityById(s.municipalityId)?.shortAr}</b> · {SCENARIO_TYPES[s.scenario?.type]?.label} · <span style={{ color: vc }}>{vl}</span> · غير مخدومة {s.baseline?.unserved} ← {s.result?.unserved} · ضغط {s.baseline?.pressure} ← {s.result?.pressure} · {s.createdByName || "—"} · {getReadingAgeLabel(s.createdAt)}</div>; })}
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, neighborhoods = [], bins = [], routes = [], fireSensors = [], citizenReports = [], collectionEvents = [], auditLog = [], vehicles = [], recentReadings = [], profiles = [], incidents = [], supportRequests = [], transfers = [], loggedInUser = null, onOpenMunicipality }) => {
+  const [tab, setTab] = useState("amanah");
 
   // ── "ملخص اليوم" — the city on one page, from live smart-bin data ──
   const today = useMemo(() => {
@@ -6432,11 +6953,11 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
   const worstDistrict = districtPerf.reduce((min, d) => d.الأداء < min.الأداء ? d : min, districtPerf[0]);
 
   const costBreakdown = [
-    { name: "التشغيل", value: 40, color: "#3b82f6" },
-    { name: "الصيانة", value: 20, color: "#f59e0b" },
-    { name: "الموظفون", value: 25, color: "#8b5cf6" },
-    { name: "الوقود", value: 10, color: "#ef4444" },
-    { name: "أخرى", value: 5, color: "#64748b" },
+    { name: "التشغيل", value: 40, color: C.info },
+    { name: "الصيانة", value: 20, color: C.warning },
+    { name: "الموظفون", value: 25, color: C.purple },
+    { name: "الوقود", value: 10, color: C.danger },
+    { name: "أخرى", value: 5, color: C.dim },
   ];
 
   const satisfactionTrend = _satdoc?.data || [
@@ -6451,35 +6972,35 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
   const strategicGoals = [
     { goal: "رفع كفاءة التشغيل إلى 95%", current: avgEfficiency, target: 95, color: C.accent },
     { goal: "خفض التكاليف التشغيلية 25%", current: 72, target: 100, color: C.info },
-    { goal: "تغطية 100% من أحياء بريدة", current: 85, target: 100, color: "#f59e0b" },
-    { goal: "الوصول لصفر نفايات 2030", current: 42, target: 100, color: "#8b5cf6" },
+    { goal: "تغطية 100% من أحياء بريدة", current: 85, target: 100, color: C.warning },
+    { goal: "الوصول لصفر نفايات 2030", current: 42, target: 100, color: C.purple },
     { goal: "رضا المواطنين 90%+", current: 82, target: 90, color: "#ec4899" },
     { goal: "إعادة تدوير 80% من النفايات", current: 68, target: 80, color: "#06b6d4" },
   ];
 
   return (
-    <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: "#070b14", color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
       {/* Executive Header */}
-      <header style={{ padding: isMobile ? "10px 14px" : "12px 28px", background: "linear-gradient(90deg, #111827, #1a1040)", borderBottom: "1px solid #f59e0b30", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "nowrap" }}>
+      <header style={{ padding: isMobile ? "10px 14px" : "12px 28px", background: C.brand, borderBottom: `1px solid ${C.brandSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "nowrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
           <div style={{ flexShrink: 0 }}><AppLogo size={38} /></div>
           {!isMobile && <div>
-            <div style={{ fontSize: 15, fontWeight: 900, color: "#f59e0b" }}>بوابة متخذي القرار</div>
-            <div style={{ fontSize: 10, color: "#94a3b8" }}>نظام إدارة النفايات - بريدة • <ExecHeaderClock /></div>
+            <div style={{ fontSize: 15, fontWeight: 900, color: C.warning }}>بوابة متخذي القرار</div>
+            <div style={{ fontSize: 10, color: C.muted }}>نظام إدارة النفايات - بريدة • <ExecHeaderClock /></div>
           </div>}
-          {isMobile && <div style={{ fontSize: 14, fontWeight: 800, color: "#f59e0b", whiteSpace: "nowrap" }}>بوابة القرار</div>}
+          {isMobile && <div style={{ fontSize: 14, fontWeight: 800, color: C.warning, whiteSpace: "nowrap" }}>بوابة القرار</div>}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 10, flexShrink: 0 }}>
           {!isMobile && <div style={{ textAlign: "left" }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{user.name}</div>
-            <div style={{ fontSize: 10, color: "#f59e0b" }}>{user.roleTitle}</div>
+            <div style={{ fontSize: 10, color: C.warning }}>{user.roleTitle}</div>
           </div>}
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f59e0b20", display: "flex", alignItems: "center", justifyContent: "center" }}><User size={18} color="#f59e0b" /></div>
-          {!isMobile && <button onClick={() => window.__showAdminPanel && window.__showAdminPanel()} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #8b5cf640", background: "#8b5cf615", color: "#8b5cf6", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><Crown size={13} /> إدارة المستخدمين</button>}
-          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: "#10b981", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><SettingsIcon size={13} />{!isMobile && " إعدادات"}</button>
-          <button onClick={onLogout} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ef444440", background: "#ef444415", color: "#ef4444", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><LogOut size={13} />{!isMobile && " خروج"}</button>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "#f59e0b20", display: "flex", alignItems: "center", justifyContent: "center" }}><User size={18} color={C.warning} /></div>
+          {!isMobile && <button onClick={() => window.__showAdminPanel && window.__showAdminPanel()} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #8b5cf640", background: "#8b5cf615", color: C.purple, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><Crown size={13} /> إدارة المستخدمين</button>}
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: C.accent, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><SettingsIcon size={13} />{!isMobile && " إعدادات"}</button>
+          <button onClick={onLogout} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ef444440", background: "#ef444415", color: C.danger, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><LogOut size={13} />{!isMobile && " خروج"}</button>
         </div>
       </header>
       {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
@@ -6488,6 +7009,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
       {/* Tabs */}
       <div style={{ padding: isMobile ? "10px 12px 0" : "12px 28px 0", display: "flex", gap: 6, flexWrap: "wrap", overflowX: "auto" }}>
         {[
+          { key: "amanah",    label: "القيادة الاستراتيجية",  icon: <Landmark size={14} /> },
+          { key: "brain",     label: "العقل التشغيلي ومحاكاة القرارات", icon: <Sparkles size={14} /> },
           { key: "today",     label: "ملخص اليوم",            icon: <Target size={14} /> },
           { key: "overview",  label: "نظرة تنفيذية",         icon: <ChartNoAxesCombined size={14} /> },
           { key: "financial", label: "التحليل المالي",        icon: <DollarSign size={14} /> },
@@ -6497,8 +7020,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
           { key: "strategic", label: "الأهداف الاستراتيجية", icon: <MapIcon size={14} /> },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
-            padding: "9px 18px", borderRadius: 10, border: `1px solid ${tab === t.key ? "#f59e0b" : "#1e293b"}`,
-            background: tab === t.key ? "#f59e0b18" : "transparent", color: tab === t.key ? "#f59e0b" : "#94a3b8",
+            padding: "9px 18px", borderRadius: 10, border: `1px solid ${tab === t.key ? C.warning : C.border}`,
+            background: tab === t.key ? "#f59e0b18" : "transparent", color: tab === t.key ? C.warning : C.muted,
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
             display: "flex", alignItems: "center", gap: 6,
           }}>{t.icon}{t.label}</button>
@@ -6508,12 +7031,14 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
       <div style={{ flex: 1, overflow: "auto", padding: "20px 28px" }}>
 
         {/* ===== TODAY — one page for the decision maker, exportable to PDF ===== */}
+        {tab === "brain" && <IntelligencePage neighborhoods={neighborhoods} bins={bins} profiles={profiles} vehicles={vehicles} routes={routes} incidents={incidents} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser || user} />}
+        {tab === "amanah" && <AmanahStrategicPanel neighborhoods={neighborhoods} bins={bins} profiles={profiles} vehicles={vehicles} routes={routes} incidents={incidents} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} supportRequests={supportRequests} transfers={transfers} auditLog={auditLog} loggedInUser={loggedInUser || user} onOpenMunicipality={onOpenMunicipality} />}
         {tab === "today" && (
           <div id="exec-today" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <style>{`@media print { body * { visibility: hidden !important; } #exec-today, #exec-today * { visibility: visible !important; } #exec-today { position: absolute; inset: 0; padding: 16px; background: #fff; color: #111; } .no-print { display: none !important; } }`}</style>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
               <div>
-                <div style={{ fontSize: 18, fontWeight: 900, color: "#f59e0b" }}>ملخص المدينة اليوم — {new Date().toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: C.warning }}>ملخص المدينة اليوم — {new Date().toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</div>
                 <div style={{ fontSize: 12, color: C.muted }}>أرقام حية من الحاويات الذكية والجولات — جاهزة للتصدير كتقرير PDF أسبوعي.</div>
               </div>
               <button className="no-print" onClick={() => window.print()} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #f59e0b, #d97706)", color: "#000", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🖨️ تصدير PDF</button>
@@ -6521,7 +7046,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
               {[
-                { label: "أحياء مغطاة", value: today.groupsCount, color: "#f59e0b" },
+                { label: "أحياء مغطاة", value: today.groupsCount, color: C.warning },
                 { label: "حاويات ذكية", value: bins.length, color: C.info },
                 { label: "حاويات حرجة الآن", value: today.critical, color: C.danger },
                 { label: "أحياء تحتاج جمعًا الآن", value: today.ranked.length, color: C.danger },
@@ -6537,7 +7062,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
               ))}
             </div>
 
-            <Card title="📌 القرارات المقترحة اليوم" icon={<Target size={16} color="#94a3b8" />}>
+            <Card title="📌 القرارات المقترحة اليوم" icon={<Target size={16} color={C.muted} />}>
               {today.decisions.length === 0 ? <EmptyState icon="✅" title="لا توجد قرارات عاجلة اليوم" /> : (
                 <ol style={{ margin: 0, paddingInlineStart: 20, display: "flex", flexDirection: "column", gap: 10 }}>
                   {today.decisions.map((d, i) => (
@@ -6551,9 +7076,9 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
               <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>القرارات مقترحة من محرك القرار بمبرراتها — اعتمادها يبقى قرار الإدارة/المشرف.</div>
             </Card>
 
-            <ImpactCard impact={today.impact} compact accent="#f59e0b" />
+            <ImpactCard impact={today.impact} compact accent={C.warning} />
 
-            <Card title="🚛 الأسطول خلال 7 أيام" icon={<Truck size={16} color="#94a3b8" />}>
+            <Card title="🚛 الأسطول خلال 7 أيام" icon={<Truck size={16} color={C.muted} />}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
                 {[
                   { label: "جولات مكتملة", value: today.fleet.totals.routes },
@@ -6564,7 +7089,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                   { label: "أعطال/عوائق", value: today.fleet.totals.incidents },
                 ].map((t) => (
                   <div key={t.label} style={{ background: C.bg, borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
-                    <div style={{ fontSize: 20, fontWeight: 800, color: "#f59e0b" }}>{t.value}</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: C.warning }}>{t.value}</div>
                     <div style={{ fontSize: 11, color: C.muted }}>{t.label}</div>
                   </div>
                 ))}
@@ -6584,7 +7109,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-              <Card title="الأداء الربعي (ر.س)" icon={<BarChart2 size={16} color="#94a3b8" />}>
+              <Card title="الأداء الربعي (ر.س)" icon={<BarChart2 size={16} color={C.muted} />}>
                 <ChartBox height={280}><ResponsiveContainer>
                   <ComposedChart data={quarterlyData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -6592,20 +7117,20 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                    <Bar dataKey="الإيرادات" fill="#f59e0b" radius={[4, 4, 0, 0]} opacity={0.8} />
-                    <Bar dataKey="التكاليف" fill="#ef4444" radius={[4, 4, 0, 0]} opacity={0.6} />
-                    <Line type="monotone" dataKey="الأرباح" stroke="#10b981" strokeWidth={3} dot={{ r: 5 }} />
+                    <Bar dataKey="الإيرادات" fill={C.warning} radius={[4, 4, 0, 0]} opacity={0.8} />
+                    <Bar dataKey="التكاليف" fill={C.danger} radius={[4, 4, 0, 0]} opacity={0.6} />
+                    <Line type="monotone" dataKey="الأرباح" stroke={C.accent} strokeWidth={3} dot={{ r: 5 }} />
                   </ComposedChart>
                 </ResponsiveContainer></ChartBox>
               </Card>
 
-              <Card title="رضا المواطنين والشكاوى" icon={<Smile size={16} color="#94a3b8" />}>
+              <Card title="رضا المواطنين والشكاوى" icon={<Smile size={16} color={C.muted} />}>
                 <ChartBox height={280}><ResponsiveContainer>
                   <AreaChart data={satisfactionTrend} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                     <defs>
                       <linearGradient id="gSat" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                        <stop offset="5%" stopColor={C.accent} stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={C.accent} stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -6613,8 +7138,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                    <Area type="monotone" dataKey="الرضا" stroke="#10b981" fill="url(#gSat)" strokeWidth={2} name="نسبة الرضا %" />
-                    <Line type="monotone" dataKey="الشكاوى" stroke="#ef4444" strokeWidth={2} strokeDasharray="4 4" dot={{ r: 3 }} name="الشكاوى" />
+                    <Area type="monotone" dataKey="الرضا" stroke={C.accent} fill="url(#gSat)" strokeWidth={2} name="نسبة الرضا %" />
+                    <Line type="monotone" dataKey="الشكاوى" stroke={C.danger} strokeWidth={2} strokeDasharray="4 4" dot={{ r: 3 }} name="الشكاوى" />
                   </AreaChart>
                 </ResponsiveContainer></ChartBox>
               </Card>
@@ -6623,17 +7148,17 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
             {/* Quick Insights */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 14 }}>
               {[
-                { title: "أفضل حي أداءً", value: bestDistrict.district, sub: `${bestDistrict.الأداء}% كفاءة`, icon: <Trophy size={26} color="#10b981" />, color: "#10b981" },
-                { title: "حي يحتاج تحسين", value: worstDistrict.district, sub: `${worstDistrict.الأداء}% كفاءة`, icon: <AlertTriangle size={26} color="#ef4444" />, color: "#ef4444" },
-                { title: "هامش الربح", value: `${Math.round((totalProfit / totalRevenue) * 100)}%`, sub: "نسبة مئوية سنوية", icon: <TrendingUp size={26} color="#f59e0b" />, color: "#f59e0b" },
-                { title: "العائد على الاستثمار", value: "340%", sub: "منذ بداية المشروع", icon: <Target size={26} color="#8b5cf6" />, color: "#8b5cf6" },
+                { title: "أفضل حي أداءً", value: bestDistrict.district, sub: `${bestDistrict.الأداء}% كفاءة`, icon: <Trophy size={26} color={C.accent} />, color: C.accent },
+                { title: "حي يحتاج تحسين", value: worstDistrict.district, sub: `${worstDistrict.الأداء}% كفاءة`, icon: <AlertTriangle size={26} color={C.danger} />, color: C.danger },
+                { title: "هامش الربح", value: `${Math.round((totalProfit / totalRevenue) * 100)}%`, sub: "نسبة مئوية سنوية", icon: <TrendingUp size={26} color={C.warning} />, color: C.warning },
+                { title: "العائد على الاستثمار", value: "340%", sub: "منذ بداية المشروع", icon: <Target size={26} color={C.purple} />, color: C.purple },
               ].map((insight, i) => (
-                <div key={i} style={{ background: "#111827", border: `1px solid ${insight.color}30`, borderRadius: 14, padding: 18, display: "flex", gap: 14, alignItems: "center" }}>
+                <div key={i} style={{ background: C.card, border: `1px solid ${insight.color}30`, borderRadius: 14, padding: 18, display: "flex", gap: 14, alignItems: "center" }}>
                   <div style={{ width: 50, height: 50, borderRadius: 14, background: `${insight.color}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>{insight.icon}</div>
                   <div>
-                    <div style={{ fontSize: 11, color: "#64748b" }}>{insight.title}</div>
+                    <div style={{ fontSize: 11, color: C.dim }}>{insight.title}</div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: insight.color }}>{insight.value}</div>
-                    <div style={{ fontSize: 10, color: "#94a3b8" }}>{insight.sub}</div>
+                    <div style={{ fontSize: 10, color: C.muted }}>{insight.sub}</div>
                   </div>
                 </div>
               ))}
@@ -6645,13 +7170,13 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
         {tab === "financial" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-              <Card title="العائد على الاستثمار الشهري (ر.س)" icon={<TrendingUp size={16} color="#94a3b8" />}>
+              <Card title="العائد على الاستثمار الشهري (ر.س)" icon={<TrendingUp size={16} color={C.muted} />}>
                 <ChartBox height={300}><ResponsiveContainer>
                   <AreaChart data={roiData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                     <defs>
                       <linearGradient id="gROI" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                        <stop offset="5%" stopColor={C.warning} stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={C.warning} stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -6659,14 +7184,14 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                    <Area type="monotone" dataKey="العائد" stroke="#f59e0b" fill="url(#gROI)" strokeWidth={2} />
-                    <Line type="monotone" dataKey="الاستثمار" stroke="#ef4444" strokeWidth={2} strokeDasharray="4 4" dot={false} />
-                    <Line type="monotone" dataKey="التوفير" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
+                    <Area type="monotone" dataKey="العائد" stroke={C.warning} fill="url(#gROI)" strokeWidth={2} />
+                    <Line type="monotone" dataKey="الاستثمار" stroke={C.danger} strokeWidth={2} strokeDasharray="4 4" dot={false} />
+                    <Line type="monotone" dataKey="التوفير" stroke={C.accent} strokeWidth={2} dot={{ r: 3 }} />
                   </AreaChart>
                 </ResponsiveContainer></ChartBox>
               </Card>
 
-              <Card title="توزيع التكاليف التشغيلية" icon={<LucidePieChart size={16} color="#94a3b8" />}>
+              <Card title="توزيع التكاليف التشغيلية" icon={<LucidePieChart size={16} color={C.muted} />}>
                 <ChartBox height={240}><ResponsiveContainer>
                   <PieChart>
                     <Pie data={costBreakdown} cx="50%" cy="50%" outerRadius={90} innerRadius={50} dataKey="value" paddingAngle={3}
@@ -6679,7 +7204,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
               </Card>
             </div>
 
-            <Card title="مقارنة التكلفة لكل حي (ر.س/شهر)" icon={<Banknote size={16} color="#94a3b8" />}>
+            <Card title="مقارنة التكلفة لكل حي (ر.س/شهر)" icon={<Banknote size={16} color={C.muted} />}>
               <ChartBox height={300}><ResponsiveContainer>
                 <BarChart data={districtPerf} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -6687,7 +7212,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                   <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
                   <Tooltip content={<CustomTooltip />} />
                   <Bar dataKey="التكلفة" radius={[6, 6, 0, 0]} name="التكلفة الشهرية (ر.س)">
-                    {districtPerf.map((e, i) => <Cell key={i} fill={e.التكلفة > 35000 ? "#ef4444" : e.التكلفة > 30000 ? "#f59e0b" : "#10b981"} />)}
+                    {districtPerf.map((e, i) => <Cell key={i} fill={e.التكلفة > 35000 ? C.danger : e.التكلفة > 30000 ? C.warning : C.accent} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer></ChartBox>
@@ -6698,7 +7223,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
         {/* ===== DISTRICTS ===== */}
         {tab === "districts" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Card title="أداء الأحياء الشامل" icon={<Building size={16} color="#94a3b8" />}>
+            <Card title="أداء الأحياء الشامل" icon={<Building size={16} color={C.muted} />}>
               <ChartBox height={350}><ResponsiveContainer>
                 <BarChart data={districtPerf} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -6706,28 +7231,28 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                   <YAxis dataKey="district" type="category" width={60} tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                  <Bar dataKey="الأداء" fill="#3b82f6" radius={[0, 4, 4, 0]} opacity={0.8} name="الأداء %" />
-                  <Bar dataKey="الرضا" fill="#10b981" radius={[0, 4, 4, 0]} opacity={0.8} name="الرضا %" />
+                  <Bar dataKey="الأداء" fill={C.info} radius={[0, 4, 4, 0]} opacity={0.8} name="الأداء %" />
+                  <Bar dataKey="الرضا" fill={C.accent} radius={[0, 4, 4, 0]} opacity={0.8} name="الرضا %" />
                 </BarChart>
               </ResponsiveContainer></ChartBox>
             </Card>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-              <Card title="الأداء مقابل الرضا" icon={<Target size={16} color="#94a3b8" />}>
+              <Card title="الأداء مقابل الرضا" icon={<Target size={16} color={C.muted} />}>
                 <ChartBox height={280}><ResponsiveContainer>
                   <RadarChart cx="50%" cy="50%" outerRadius="70%" data={districtPerf.slice(0, 8)}>
                     <PolarGrid stroke={C.border} />
                     <PolarAngleAxis dataKey="district" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
-                    <PolarRadiusAxis tick={{ fill: "#64748b", fontSize: 8 }} />
-                    <Radar name="الأداء" dataKey="الأداء" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.2} />
-                    <Radar name="الرضا" dataKey="الرضا" stroke="#10b981" fill="#10b981" fillOpacity={0.2} />
+                    <PolarRadiusAxis tick={{ fill: C.dim, fontSize: 8 }} />
+                    <Radar name="الأداء" dataKey="الأداء" stroke={C.info} fill={C.info} fillOpacity={0.2} />
+                    <Radar name="الرضا" dataKey="الرضا" stroke={C.accent} fill={C.accent} fillOpacity={0.2} />
                     <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
                     <Tooltip content={<CustomTooltip />} />
                   </RadarChart>
                 </ResponsiveContainer></ChartBox>
               </Card>
 
-              <Card title="عدد الحوادث لكل حي" icon={<AlertTriangle size={16} color="#94a3b8" />}>
+              <Card title="عدد الحوادث لكل حي" icon={<AlertTriangle size={16} color={C.muted} />}>
                 <ChartBox height={280}><ResponsiveContainer>
                   <BarChart data={[...districtPerf].sort((a, b) => b.الحوادث - a.الحوادث)} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -6735,7 +7260,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                     <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Bar dataKey="الحوادث" radius={[6, 6, 0, 0]} name="عدد الحوادث">
-                      {districtPerf.map((e, i) => <Cell key={i} fill={e.الحوادث > 5 ? "#ef4444" : e.الحوادث > 2 ? "#f59e0b" : "#10b981"} />)}
+                      {districtPerf.map((e, i) => <Cell key={i} fill={e.الحوادث > 5 ? C.danger : e.الحوادث > 2 ? C.warning : C.accent} />)}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer></ChartBox>
@@ -6747,7 +7272,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
         {/* ===== BENCHMARK ===== */}
         {tab === "benchmark" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Card title="المقارنة المعيارية - بريدة مقابل المعايير الوطنية" icon={<TrendingUp size={16} color="#94a3b8" />}>
+            <Card title="المقارنة المعيارية - بريدة مقابل المعايير الوطنية" icon={<TrendingUp size={16} color={C.muted} />}>
               <ChartBox height={350}><ResponsiveContainer>
                 <BarChart data={benchmarkData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -6755,9 +7280,9 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                   <YAxis tick={{ fill: C.muted, fontSize: 10 }} domain={[0, 100]} />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                  <Bar dataKey="بريدة" fill="#f59e0b" radius={[4, 4, 0, 0]} name="بريدة" />
-                  <Bar dataKey="المعيار_الوطني" fill="#64748b" radius={[4, 4, 0, 0]} opacity={0.6} name="المعيار الوطني" />
-                  <Bar dataKey="أفضل_ممارسة" fill="#10b981" radius={[4, 4, 0, 0]} opacity={0.5} name="أفضل ممارسة عالمية" />
+                  <Bar dataKey="بريدة" fill={C.warning} radius={[4, 4, 0, 0]} name="بريدة" />
+                  <Bar dataKey="المعيار_الوطني" fill={C.dim} radius={[4, 4, 0, 0]} opacity={0.6} name="المعيار الوطني" />
+                  <Bar dataKey="أفضل_ممارسة" fill={C.accent} radius={[4, 4, 0, 0]} opacity={0.5} name="أفضل ممارسة عالمية" />
                 </BarChart>
               </ResponsiveContainer></ChartBox>
             </Card>
@@ -6766,21 +7291,21 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
               {benchmarkData.map((b, i) => {
                 const gap = b.أفضل_ممارسة - b.بريدة;
                 return (
-                  <div key={i} style={{ background: "#111827", border: `1px solid #1e293b`, borderRadius: 14, padding: 18 }}>
+                  <div key={i} style={{ background: C.card, border: `1px solid #1e293b`, borderRadius: 14, padding: 18 }}>
                     <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>{b.metric}</div>
                     <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-                      <span style={{ fontSize: 32, fontWeight: 900, color: "#f59e0b" }}>{b.بريدة}%</span>
-                      <span style={{ fontSize: 12, color: gap <= 5 ? "#10b981" : gap <= 15 ? "#f59e0b" : "#ef4444" }}>
+                      <span style={{ fontSize: 32, fontWeight: 900, color: C.warning }}>{b.بريدة}%</span>
+                      <span style={{ fontSize: 12, color: gap <= 5 ? C.accent : gap <= 15 ? C.warning : C.danger }}>
                         {gap <= 5 ? "✓ ممتاز" : gap <= 15 ? "↗ جيد" : "↑ يحتاج تحسين"} (فجوة {gap}%)
                       </span>
                     </div>
                     <div style={{ display: "flex", gap: 10, fontSize: 11 }}>
-                      <span style={{ color: "#64748b" }}>الوطني: {b.المعيار_الوطني}%</span>
-                      <span style={{ color: "#10b981" }}>الأفضل: {b.أفضل_ممارسة}%</span>
+                      <span style={{ color: C.dim }}>الوطني: {b.المعيار_الوطني}%</span>
+                      <span style={{ color: C.accent }}>الأفضل: {b.أفضل_ممارسة}%</span>
                     </div>
-                    <div style={{ width: "100%", height: 8, background: "#0a0e1a", borderRadius: 4, marginTop: 8, overflow: "hidden", position: "relative" }}>
+                    <div style={{ width: "100%", height: 8, background: C.bg, borderRadius: 4, marginTop: 8, overflow: "hidden", position: "relative" }}>
                       <div style={{ position: "absolute", width: `${b.المعيار_الوطني}%`, height: "100%", background: "#64748b40", borderRadius: 4 }} />
-                      <div style={{ position: "absolute", width: `${b.بريدة}%`, height: "100%", background: "#f59e0b", borderRadius: 4 }} />
+                      <div style={{ position: "absolute", width: `${b.بريدة}%`, height: "100%", background: C.warning, borderRadius: 4 }} />
                     </div>
                   </div>
                 );
@@ -6792,64 +7317,64 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
         {/* ===== SCENARIOS ===== */}
         {tab === "scenarios" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ background: "#111827", border: "1px solid #f59e0b30", borderRadius: 14, padding: 18 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#f59e0b", marginBottom: 6, display: "flex", alignItems: "center", gap: 7 }}><Target size={16} color="#f59e0b" /> أداة دعم القرار</div>
-              <p style={{ fontSize: 12, color: "#94a3b8", margin: 0, lineHeight: 1.7 }}>
+            <div style={{ background: C.card, border: "1px solid #f59e0b30", borderRadius: 14, padding: 18 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.warning, marginBottom: 6, display: "flex", alignItems: "center", gap: 7 }}><Target size={16} color={C.warning} /> أداة دعم القرار</div>
+              <p style={{ fontSize: 12, color: C.muted, margin: 0, lineHeight: 1.7 }}>
                 استعرض السيناريوهات المختلفة مع تحليل العائد والمخاطر لكل خيار. اضغط على أي سيناريو لعرض التفاصيل الكاملة والتوصيات.
               </p>
             </div>
 
             {selectedScenario ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                <button onClick={() => setSelectedScenario(null)} style={{ alignSelf: "flex-start", padding: "6px 16px", borderRadius: 8, border: "1px solid #1e293b", background: "transparent", color: "#f59e0b", cursor: "pointer", fontSize: 13, fontFamily: ARABIC_FONT }}>
+                <button onClick={() => setSelectedScenario(null)} style={{ alignSelf: "flex-start", padding: "6px 16px", borderRadius: 8, border: "1px solid #1e293b", background: "transparent", color: C.warning, cursor: "pointer", fontSize: 13, fontFamily: ARABIC_FONT }}>
                   ← العودة
                 </button>
-                <div style={{ background: "#111827", border: "1px solid #f59e0b30", borderRadius: 16, padding: 28 }}>
+                <div style={{ background: C.card, border: "1px solid #f59e0b30", borderRadius: 16, padding: 28 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                     <div>
                       <h2 style={{ fontSize: 22, fontWeight: 900, color: C.text, margin: "0 0 4px 0" }}>{selectedScenario.name}</h2>
-                      <span style={{ fontSize: 12, color: "#f59e0b" }}>{selectedScenario.type}</span>
+                      <span style={{ fontSize: 12, color: C.warning }}>{selectedScenario.type}</span>
                     </div>
                     <span style={{ padding: "6px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700,
                       background: selectedScenario.recommendation === "موصى به بشدة" ? "#10b98120" : selectedScenario.recommendation === "موصى به" ? "#f59e0b20" : "#64748b20",
-                      color: selectedScenario.recommendation === "موصى به بشدة" ? "#10b981" : selectedScenario.recommendation === "موصى به" ? "#f59e0b" : "#94a3b8",
+                      color: selectedScenario.recommendation === "موصى به بشدة" ? C.accent : selectedScenario.recommendation === "موصى به" ? C.warning : C.muted,
                       border: `1px solid ${selectedScenario.recommendation === "موصى به بشدة" ? "#10b98140" : "#f59e0b40"}`
                     }}>{selectedScenario.recommendation}</span>
                   </div>
 
-                  <p style={{ fontSize: 14, color: "#94a3b8", lineHeight: 1.8, margin: "0 0 24px 0" }}>{selectedScenario.details}</p>
+                  <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.8, margin: "0 0 24px 0" }}>{selectedScenario.details}</p>
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14, marginBottom: 24 }}>
                     {[
-                      { label: "الاستثمار المطلوب", val: `${(selectedScenario.investment / 1000000).toFixed(1)}M ر.س`, color: "#ef4444", icon: <DollarSign size={22} color="#ef4444" /> },
-                      { label: "التوفير السنوي", val: `${(selectedScenario.annualSaving / 1000).toFixed(0)}K ر.س`, color: "#10b981", icon: <TrendingUp size={22} color="#10b981" /> },
-                      { label: "العائد ROI", val: `${selectedScenario.roi}%`, color: "#f59e0b", icon: <TrendingUp size={22} color="#f59e0b" /> },
-                      { label: "فترة الاسترداد", val: selectedScenario.payback, color: "#3b82f6", icon: <Clock size={22} color="#3b82f6" /> },
-                      { label: "مستوى المخاطرة", val: selectedScenario.risk, color: selectedScenario.risk === "منخفض" ? "#10b981" : "#f59e0b", icon: <Zap size={22} color={selectedScenario.risk === "منخفض" ? "#10b981" : "#f59e0b"} /> },
-                      { label: "الأثر المتوقع", val: selectedScenario.impact, color: "#8b5cf6", icon: <Target size={22} color="#8b5cf6" /> },
+                      { label: "الاستثمار المطلوب", val: `${(selectedScenario.investment / 1000000).toFixed(1)}M ر.س`, color: C.danger, icon: <DollarSign size={22} color={C.danger} /> },
+                      { label: "التوفير السنوي", val: `${(selectedScenario.annualSaving / 1000).toFixed(0)}K ر.س`, color: C.accent, icon: <TrendingUp size={22} color={C.accent} /> },
+                      { label: "العائد ROI", val: `${selectedScenario.roi}%`, color: C.warning, icon: <TrendingUp size={22} color={C.warning} /> },
+                      { label: "فترة الاسترداد", val: selectedScenario.payback, color: C.info, icon: <Clock size={22} color={C.info} /> },
+                      { label: "مستوى المخاطرة", val: selectedScenario.risk, color: selectedScenario.risk === "منخفض" ? C.accent : C.warning, icon: <Zap size={22} color={selectedScenario.risk === "منخفض" ? C.accent : C.warning} /> },
+                      { label: "الأثر المتوقع", val: selectedScenario.impact, color: C.purple, icon: <Target size={22} color={C.purple} /> },
                     ].map((item, i) => (
                       <div key={i} style={{ background: "#070b14", borderRadius: 12, padding: 16, textAlign: "center" }}>
                         <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>{item.icon}</div>
                         <div style={{ fontSize: 16, fontWeight: 800, color: item.color }}>{item.val}</div>
-                        <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>{item.label}</div>
+                        <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>{item.label}</div>
                       </div>
                     ))}
                   </div>
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
                     <div style={{ background: "#10b98110", border: "1px solid #10b98130", borderRadius: 12, padding: 16 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#10b981", marginBottom: 10 }}>✅ المميزات</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 10 }}>✅ المميزات</div>
                       {selectedScenario.pros.map((p, i) => (
-                        <div key={i} style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6, display: "flex", gap: 6 }}>
-                          <span style={{ color: "#10b981" }}>●</span> {p}
+                        <div key={i} style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "flex", gap: 6 }}>
+                          <span style={{ color: C.accent }}>●</span> {p}
                         </div>
                       ))}
                     </div>
                     <div style={{ background: "#ef444410", border: "1px solid #ef444430", borderRadius: 12, padding: 16 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#ef4444", marginBottom: 10 }}>⚠️ التحديات</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.danger, marginBottom: 10 }}>⚠️ التحديات</div>
                       {selectedScenario.cons.map((c, i) => (
-                        <div key={i} style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6, display: "flex", gap: 6 }}>
-                          <span style={{ color: "#ef4444" }}>●</span> {c}
+                        <div key={i} style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "flex", gap: 6 }}>
+                          <span style={{ color: C.danger }}>●</span> {c}
                         </div>
                       ))}
                     </div>
@@ -6860,21 +7385,21 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
                 {scenarios.map(s => (
                   <div key={s.id} onClick={() => setSelectedScenario(s)} style={{
-                    background: "#111827", border: "1px solid #1e293b", borderRadius: 14, padding: 20, cursor: "pointer", transition: "all 0.2s",
+                    background: C.card, border: "1px solid #1e293b", borderRadius: 14, padding: 20, cursor: "pointer", transition: "all 0.2s",
                   }}
                     onMouseEnter={e => { e.currentTarget.style.borderColor = "#f59e0b60"; e.currentTarget.style.transform = "translateY(-3px)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = "#1e293b"; e.currentTarget.style.transform = "translateY(0)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.transform = "translateY(0)"; }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                      <span style={{ fontSize: 11, color: "#f59e0b", background: "#f59e0b15", padding: "3px 10px", borderRadius: 6, fontWeight: 600 }}>{s.type}</span>
-                      <span style={{ fontSize: 11, color: s.recommendation.includes("بشدة") ? "#10b981" : "#f59e0b", fontWeight: 600 }}>{s.recommendation}</span>
+                      <span style={{ fontSize: 11, color: C.warning, background: "#f59e0b15", padding: "3px 10px", borderRadius: 6, fontWeight: 600 }}>{s.type}</span>
+                      <span style={{ fontSize: 11, color: s.recommendation.includes("بشدة") ? C.accent : C.warning, fontWeight: 600 }}>{s.recommendation}</span>
                     </div>
                     <div style={{ fontSize: 16, fontWeight: 800, color: C.text, marginBottom: 8 }}>{s.name}</div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 8, fontSize: 11 }}>
-                      <div style={{ color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}><DollarSign size={11} /> استثمار: <span style={{ color: C.text }}>{(s.investment / 1000000).toFixed(1)}M</span></div>
-                      <div style={{ color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}><TrendingUp size={11} /> ROI: <span style={{ color: "#f59e0b", fontWeight: 700 }}>{s.roi}%</span></div>
-                      <div style={{ color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}><Clock size={11} /> استرداد: <span style={{ color: C.text }}>{s.payback}</span></div>
-                      <div style={{ color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}><Zap size={11} /> خطر: <span style={{ color: s.risk === "منخفض" ? "#10b981" : "#f59e0b" }}>{s.risk}</span></div>
+                      <div style={{ color: C.dim, display: "flex", alignItems: "center", gap: 4 }}><DollarSign size={11} /> استثمار: <span style={{ color: C.text }}>{(s.investment / 1000000).toFixed(1)}M</span></div>
+                      <div style={{ color: C.dim, display: "flex", alignItems: "center", gap: 4 }}><TrendingUp size={11} /> ROI: <span style={{ color: C.warning, fontWeight: 700 }}>{s.roi}%</span></div>
+                      <div style={{ color: C.dim, display: "flex", alignItems: "center", gap: 4 }}><Clock size={11} /> استرداد: <span style={{ color: C.text }}>{s.payback}</span></div>
+                      <div style={{ color: C.dim, display: "flex", alignItems: "center", gap: 4 }}><Zap size={11} /> خطر: <span style={{ color: s.risk === "منخفض" ? C.accent : C.warning }}>{s.risk}</span></div>
                     </div>
                   </div>
                 ))}
@@ -6886,9 +7411,9 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
         {/* ===== STRATEGIC GOALS ===== */}
         {tab === "strategic" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ background: "linear-gradient(135deg, #111827, #1a1040)", border: "1px solid #f59e0b20", borderRadius: 16, padding: 24 }}>
-              <div style={{ fontSize: 18, fontWeight: 900, color: "#f59e0b", marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}><MapIcon size={20} color="#f59e0b" /> الخطة الاستراتيجية - رؤية 2030</div>
-              <p style={{ fontSize: 13, color: "#94a3b8", margin: 0, lineHeight: 1.8 }}>
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24 }}>
+              <div style={{ fontSize: 18, fontWeight: 900, color: C.warning, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}><MapIcon size={20} color={C.warning} /> الخطة الاستراتيجية - رؤية 2030</div>
+              <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.8 }}>
                 متابعة التقدم نحو الأهداف الاستراتيجية لنظام إدارة النفايات الذكي في مدينة بريدة، 
                 بما يتوافق مع أهداف رؤية المملكة 2030 في الاستدامة البيئية وجودة الحياة.
               </p>
@@ -6898,21 +7423,21 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
               {strategicGoals.map((g, i) => {
                 const pct = Math.round((g.current / g.target) * 100);
                 const status = pct >= 90 ? "على المسار" : pct >= 70 ? "تقدم جيد" : "يحتاج تسريع";
-                const statusColor = pct >= 90 ? "#10b981" : pct >= 70 ? "#f59e0b" : "#ef4444";
+                const statusColor = pct >= 90 ? C.accent : pct >= 70 ? C.warning : C.danger;
                 return (
-                  <div key={i} style={{ background: "#111827", border: `1px solid ${g.color}25`, borderRadius: 16, padding: 20 }}>
+                  <div key={i} style={{ background: C.card, border: `1px solid ${g.color}25`, borderRadius: 16, padding: 20 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                       <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{g.goal}</span>
                       <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, background: `${statusColor}15`, color: statusColor, fontWeight: 600 }}>{status}</span>
                     </div>
                     <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 10 }}>
                       <span style={{ fontSize: 36, fontWeight: 900, color: g.color }}>{g.current}</span>
-                      <span style={{ fontSize: 14, color: "#64748b" }}>/ {g.target}</span>
+                      <span style={{ fontSize: 14, color: C.dim }}>/ {g.target}</span>
                     </div>
                     <div style={{ width: "100%", height: 12, background: "#070b14", borderRadius: 6, overflow: "hidden", marginBottom: 8 }}>
                       <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg, ${g.color}80, ${g.color})`, borderRadius: 6, transition: "width 1.5s ease" }} />
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.dim }}>
                       <span>التقدم: {pct}%</span>
                       <span>المتبقي: {g.target - g.current}</span>
                     </div>
@@ -6922,7 +7447,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
             </div>
 
             {/* Vision 2030 Alignment */}
-            <Card title="التوافق مع رؤية 2030" icon={<Flag size={16} color="#94a3b8" />}>
+            <Card title="التوافق مع رؤية 2030" icon={<Flag size={16} color={C.muted} />}>
               <ChartBox height={300}><ResponsiveContainer>
                 <RadarChart cx="50%" cy="50%" outerRadius="75%" data={[
                   { axis: "الاستدامة البيئية", الحالي: 75, المستهدف: 95 },
@@ -6934,9 +7459,9 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                 ]}>
                   <PolarGrid stroke={C.border} />
                   <PolarAngleAxis dataKey="axis" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                  <PolarRadiusAxis tick={{ fill: "#64748b", fontSize: 8 }} domain={[0, 100]} />
-                  <Radar name="الوضع الحالي" dataKey="الحالي" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.25} strokeWidth={2} />
-                  <Radar name="المستهدف 2030" dataKey="المستهدف" stroke="#10b981" fill="#10b981" fillOpacity={0.1} strokeWidth={2} strokeDasharray="6 3" />
+                  <PolarRadiusAxis tick={{ fill: C.dim, fontSize: 8 }} domain={[0, 100]} />
+                  <Radar name="الوضع الحالي" dataKey="الحالي" stroke={C.warning} fill={C.warning} fillOpacity={0.25} strokeWidth={2} />
+                  <Radar name="المستهدف 2030" dataKey="المستهدف" stroke={C.accent} fill={C.accent} fillOpacity={0.1} strokeWidth={2} strokeDasharray="6 3" />
                   <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
                   <Tooltip content={<CustomTooltip />} />
                 </RadarChart>
@@ -7111,7 +7636,7 @@ ${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distS
           {/* Messages */}
           <div style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
             {/* Greeting */}
-            <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: "#1e293b", borderRadius: "12px 12px 12px 0", padding: "10px 14px", fontSize: 12, color: C.text, lineHeight: 1.6 }}>
+            <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: C.border, borderRadius: "12px 12px 12px 0", padding: "10px 14px", fontSize: 12, color: C.text, lineHeight: 1.6 }}>
               {greeting}
             </div>
 
@@ -7133,9 +7658,9 @@ ${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distS
               <div key={i} style={{
                 alignSelf: m.role === "user" ? "flex-end" : "flex-start",
                 maxWidth: "85%",
-                background: m.role === "user" ? "linear-gradient(135deg,#6d28d9,#4c1d95)" : "#1e293b",
+                background: m.role === "user" ? "linear-gradient(135deg,#6d28d9,#4c1d95)" : C.border,
                 borderRadius: m.role === "user" ? "12px 12px 0 12px" : "12px 12px 12px 0",
-                padding: "10px 14px", fontSize: 12, color: "#f1f5f9", lineHeight: 1.7,
+                padding: "10px 14px", fontSize: 12, color: C.text, lineHeight: 1.7,
                 whiteSpace: "pre-wrap",
               }}>
                 {m.content}
@@ -7143,7 +7668,7 @@ ${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distS
             ))}
 
             {loading && (
-              <div style={{ alignSelf: "flex-start", background: "#1e293b", borderRadius: "12px 12px 12px 0", padding: "10px 14px", fontSize: 12, color: "#a78bfa" }}>
+              <div style={{ alignSelf: "flex-start", background: C.border, borderRadius: "12px 12px 12px 0", padding: "10px 14px", fontSize: 12, color: "#a78bfa" }}>
                 <span style={{ animation: "pulse 1s infinite" }}>● </span>جاري التفكير...
               </div>
             )}
@@ -7246,7 +7771,7 @@ function FollowMe({ position, follow, zoom = 16, onUserDrag }) {
 
 const vehicleIcon = (headingDeg, live) => L.divIcon({
   className: "",
-  html: `<div style="width:30px;height:30px;border-radius:50%;background:${live ? "#3b82f6" : "#64748b"};border:3px solid #fff;box-shadow:0 0 0 4px ${live ? "#3b82f655" : "#64748b55"};display:flex;align-items:center;justify-content:center;transform:rotate(${headingDeg ?? 0}deg)"><div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:12px solid #fff;margin-top:-4px"></div></div>`,
+  html: `<div style="width:30px;height:30px;border-radius:50%;background:${live ? C.info : C.dim};border:3px solid #fff;box-shadow:0 0 0 4px ${live ? "#3b82f655" : "#64748b55"};display:flex;align-items:center;justify-content:center;transform:rotate(${headingDeg ?? 0}deg)"><div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:12px solid #fff;margin-top:-4px"></div></div>`,
   iconSize: [30, 30], iconAnchor: [15, 15],
 });
 
@@ -7360,7 +7885,7 @@ const NavigationView = ({ position, posStatus, remainingStops = [], nextStop, al
             : remainingStops.length > 0 && <Polyline positions={[[position.lat, position.lng], ...remainingStops.filter((s) => s.lat != null).map((s) => [s.lat, s.lng])]} pathOptions={{ color: C.info, weight: 4, dashArray: "8 8" }} />}
           {allStops.filter((s) => s.lat != null).map((s) => (
             <CircleMarker key={s.binId} center={[s.lat, s.lng]} radius={s.binId === nextStop?.binId ? 11 : 7}
-              pathOptions={{ color: "#fff", weight: 2, fillColor: s.done ? "#64748b" : s.skipped ? C.warning : (STATUS_COLORS[s.priorityTier] || C.info), fillOpacity: s.done ? 0.5 : 1 }}>
+              pathOptions={{ color: "#fff", weight: 2, fillColor: s.done ? C.dim : s.skipped ? C.warning : (STATUS_COLORS[s.priorityTier] || C.info), fillOpacity: s.done ? 0.5 : 1 }}>
               <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}>#{s.order} {s.binName}{s.done ? " ✅" : s.skipped ? " 🚧" : ""}</div></Popup>
             </CircleMarker>
           ))}
@@ -7888,7 +8413,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
             <div style={{ fontSize: 10, color: C.accent }}>{user.district}</div>
           </div>
           <div style={{ width: 38, height: 38, borderRadius: 10, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>👤</div>
-          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid #10b98140`, background: `#10b98115`, color: "#10b981", cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>⚙️ إعدادات الحساب</button>
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid #10b98140`, background: `#10b98115`, color: C.accent, cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>⚙️ إعدادات الحساب</button>
           <button onClick={onLogout} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.danger}40`, background: `${C.danger}15`, color: C.danger, cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>خروج</button>
         </div>
       </header>
@@ -7936,7 +8461,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                 { label: "طلب حاوية جديدة",    desc: "اطلب حاوية لمنزلك أو مبناك",          icon: <FileText size={32} color={C.accent} />, color: C.accent,   action: () => { setTab("request"); setReqDone(null); } },
                 { label: "إبلاغ عن مشكلة",     desc: "بلّغ عن حاوية تالفة أو ممتلئة",       icon: <AlertTriangle size={32} color={C.warning} />, color: C.warning,  action: () => { setTab("report"); setReportDone(null); } },
                 { label: "متابعة محطة الحي",    desc: "شاهد حالة محطة الشفط في حيك",         icon: <BarChart2 size={32} color={C.info} />, color: C.info,    action: () => setTab("station") },
-                { label: "عرض حاويات الحي",    desc: "تابع حالة الحاويات في محطة حيك",       icon: <Trash2 size={32} color="#8b5cf6" />, color: "#8b5cf6", action: () => setTab("bins") },
+                { label: "عرض حاويات الحي",    desc: "تابع حالة الحاويات في محطة حيك",       icon: <Trash2 size={32} color={C.purple} />, color: C.purple, action: () => setTab("bins") },
               ].map((item, i) => (
                 <div key={i} onClick={item.action} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 14, padding: 18, cursor: "pointer", transition: "all 0.2s" }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = item.color + "70"; e.currentTarget.style.transform = "translateY(-2px)"; }}
@@ -7986,10 +8511,10 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
                         {[
-                          { label: "نوع الحاوية",   val: bin.binType,                                             icon: <Recycle size={18} color="#94a3b8" /> },
-                          { label: "الحي",          val: bin.district,                                            icon: <MapPin size={18} color="#94a3b8" /> },
-                          { label: "تاريخ الموافقة", val: approvedAt ? new Date(approvedAt).toLocaleDateString("ar-SA") : "—", icon: <Calendar size={18} color="#94a3b8" /> },
-                          { label: "رقم الطلب",     val: bin.id.slice(0, 8),                                      icon: <Bookmark size={18} color="#94a3b8" /> },
+                          { label: "نوع الحاوية",   val: bin.binType,                                             icon: <Recycle size={18} color={C.muted} /> },
+                          { label: "الحي",          val: bin.district,                                            icon: <MapPin size={18} color={C.muted} /> },
+                          { label: "تاريخ الموافقة", val: approvedAt ? new Date(approvedAt).toLocaleDateString("ar-SA") : "—", icon: <Calendar size={18} color={C.muted} /> },
+                          { label: "رقم الطلب",     val: bin.id.slice(0, 8),                                      icon: <Bookmark size={18} color={C.muted} /> },
                         ].map((item, j) => (
                           <div key={j} style={{ background: C.bg, borderRadius: 10, padding: "10px 12px", display: "flex", alignItems: "center", gap: 8 }}>
                             <span style={{ display: "flex", alignItems: "center" }}>{item.icon}</span>
@@ -8044,7 +8569,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
 
               {/* Containers summary */}
               {myContainers.length > 0 && (
-                <Card title={`حاويات المحطة (${myContainers.length})`} icon={<Trash2 size={16} color="#94a3b8" />}>
+                <Card title={`حاويات المحطة (${myContainers.length})`} icon={<Trash2 size={16} color={C.muted} />}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {myContainers.map((c, i) => {
                       const fl = Number(c.fillLevel) || 0;
@@ -8085,7 +8610,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                 <button onClick={() => setReqDone(null)} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 13 }}>تقديم طلب آخر</button>
               </div>
             ) : (
-              <Card title="طلب حاوية جديدة" icon={<FileText size={16} color="#94a3b8" />}>
+              <Card title="طلب حاوية جديدة" icon={<FileText size={16} color={C.muted} />}>
                 {reqDone?.error && (
                   <div style={{ background: C.danger + "20", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: C.danger }}>
                     ❌ خطأ: <strong>{reqDone.error}</strong>
@@ -8149,7 +8674,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                 <button onClick={() => setReportDone(null)} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 13 }}>تقديم بلاغ آخر</button>
               </div>
             ) : (
-              <Card title="إبلاغ عن مشكلة" icon={<AlertTriangle size={16} color="#94a3b8" />}>
+              <Card title="إبلاغ عن مشكلة" icon={<AlertTriangle size={16} color={C.muted} />}>
                 {reportDone?.error && (
                   <div style={{ background: C.danger + "20", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: C.danger }}>
                     ❌ خطأ: <strong>{reportDone.error}</strong>
@@ -8303,9 +8828,9 @@ const UnifiedLoginPage = ({ onLogin }) => {
   };
 
   const roleCards = [
-    { key: "employee", label: "الموظفين", icon: "👷", desc: "لوحة تحكم التشغيل والمراقبة", color: "#10b981", gradient: "linear-gradient(135deg, #10b981, #059669)" },
-    { key: "executive", label: "الإدارة العليا", icon: "🏛️", desc: "بوابة متخذي القرار والتقارير التنفيذية", color: "#f59e0b", gradient: "linear-gradient(135deg, #f59e0b, #d97706)" },
-    { key: "citizen", label: "الأفراد", icon: "🏠", desc: "طلب حاويات، إبلاغ عن مشاكل، متابعة الحي", color: "#3b82f6", gradient: "linear-gradient(135deg, #3b82f6, #1d4ed8)" },
+    { key: "employee", label: "الموظفين", icon: "👷", desc: "لوحة تحكم التشغيل والمراقبة", color: C.accent, gradient: "linear-gradient(135deg, #10b981, #059669)" },
+    { key: "executive", label: "الإدارة العليا", icon: "🏛️", desc: "بوابة متخذي القرار والتقارير التنفيذية", color: C.warning, gradient: "linear-gradient(135deg, #f59e0b, #d97706)" },
+    { key: "citizen", label: "الأفراد", icon: "🏠", desc: "طلب حاويات، إبلاغ عن مشاكل، متابعة الحي", color: C.info, gradient: "linear-gradient(135deg, #3b82f6, #1d4ed8)" },
   ];
 
   const filteredHints = selectedRole ? ALL_USERS.filter(u => u.role === selectedRole) : ALL_USERS;
@@ -8313,20 +8838,20 @@ const UnifiedLoginPage = ({ onLogin }) => {
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0a0e1a 0%, #0f172a 50%, #0a0e1a 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: ARABIC_FONT, direction: "rtl", padding: "16px" }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-      <div style={{ width: "100%", maxWidth: 480, padding: "clamp(20px, 5vw, 36px)", background: "#111827", borderRadius: 24, border: "1px solid #1e293b", position: "relative", overflow: "hidden" }}>
+      <div style={{ width: "100%", maxWidth: 480, padding: "clamp(20px, 5vw, 36px)", background: C.card, borderRadius: 24, border: "1px solid #1e293b", position: "relative", overflow: "hidden" }}>
         {/* Decorative */}
         <div style={{ position: "absolute", top: -80, left: "50%", transform: "translateX(-50%)", width: 250, height: 250, background: "radial-gradient(circle, #10b98115, transparent)", borderRadius: "50%" }} />
 
         <div style={{ textAlign: "center", marginBottom: 28, position: "relative" }}>
           <div style={{ width: 72, height: 72, borderRadius: 20, background: "linear-gradient(135deg, #10b981, #059669)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, margin: "0 auto 14px" }}>♻️</div>
-          <h1 style={{ fontSize: 22, fontWeight: 900, color: "#f1f5f9", margin: "0 0 4px" }}>نظام إدارة النفايات الذكي</h1>
-          <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>مدينة بريدة - منطقة القصيم</p>
+          <h1 style={{ fontSize: 22, fontWeight: 900, color: C.text, margin: "0 0 4px" }}>نظام إدارة النفايات الذكي</h1>
+          <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>مدينة بريدة - منطقة القصيم</p>
         </div>
 
         {/* Role Selection */}
         {!selectedRole ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12, position: "relative" }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#94a3b8", textAlign: "center", marginBottom: 4 }}>اختر نوع الحساب</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.muted, textAlign: "center", marginBottom: 4 }}>اختر نوع الحساب</div>
             {roleCards.map(r => (
               <button key={r.key} onClick={() => setSelectedRole(r.key)} style={{
                 display: "flex", alignItems: "center", gap: 14, padding: "16px 18px", borderRadius: 14,
@@ -8338,15 +8863,15 @@ const UnifiedLoginPage = ({ onLogin }) => {
               >
                 <div style={{ width: 50, height: 50, borderRadius: 14, background: r.gradient, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 }}>{r.icon}</div>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: "#f1f5f9" }}>دخول {r.label}</div>
-                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{r.desc}</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>دخول {r.label}</div>
+                  <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>{r.desc}</div>
                 </div>
               </button>
             ))}
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 14, position: "relative" }}>
-            <button onClick={() => { setSelectedRole(null); setError(""); setUsername(""); setPassword(""); }} style={{ alignSelf: "flex-start", background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT, padding: 0 }}>
+            <button onClick={() => { setSelectedRole(null); setError(""); setUsername(""); setPassword(""); }} style={{ alignSelf: "flex-start", background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT, padding: 0 }}>
               ← العودة لاختيار الحساب
             </button>
 
@@ -8360,19 +8885,19 @@ const UnifiedLoginPage = ({ onLogin }) => {
             </div>
 
             <div>
-              <label style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6, display: "block" }}>اسم المستخدم</label>
+              <label style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "block" }}>اسم المستخدم</label>
               <input value={username} onChange={e => setUsername(e.target.value)} placeholder="أدخل اسم المستخدم"
                 onKeyDown={e => e.key === "Enter" && handleLogin()}
-                style={{ width: "100%", padding: "12px 16px", borderRadius: 12, border: "1px solid #334155", background: "#0a0e1a", color: "#f1f5f9", fontSize: 14, fontFamily: ARABIC_FONT, outline: "none", boxSizing: "border-box" }} />
+                style={{ width: "100%", padding: "12px 16px", borderRadius: 12, border: "1px solid #334155", background: C.bg, color: C.text, fontSize: 14, fontFamily: ARABIC_FONT, outline: "none", boxSizing: "border-box" }} />
             </div>
             <div>
-              <label style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6, display: "block" }}>كلمة المرور</label>
+              <label style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "block" }}>كلمة المرور</label>
               <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="أدخل كلمة المرور"
                 onKeyDown={e => e.key === "Enter" && handleLogin()}
-                style={{ width: "100%", padding: "12px 16px", borderRadius: 12, border: "1px solid #334155", background: "#0a0e1a", color: "#f1f5f9", fontSize: 14, fontFamily: ARABIC_FONT, outline: "none", boxSizing: "border-box" }} />
+                style={{ width: "100%", padding: "12px 16px", borderRadius: 12, border: "1px solid #334155", background: C.bg, color: C.text, fontSize: 14, fontFamily: ARABIC_FONT, outline: "none", boxSizing: "border-box" }} />
             </div>
 
-            {error && <div style={{ fontSize: 12, color: "#ef4444", background: "#ef444415", padding: "8px 12px", borderRadius: 8, textAlign: "center" }}>⚠️ {error}</div>}
+            {error && <div style={{ fontSize: 12, color: C.danger, background: "#ef444415", padding: "8px 12px", borderRadius: 8, textAlign: "center" }}>⚠️ {error}</div>}
 
             <button onClick={handleLogin} style={{
               padding: "14px", borderRadius: 12, border: "none",
@@ -8380,11 +8905,11 @@ const UnifiedLoginPage = ({ onLogin }) => {
               color: "#000", fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: ARABIC_FONT,
             }}>تسجيل الدخول</button>
 
-            <button onClick={() => setShowHint(!showHint)} style={{ background: "none", border: "none", color: "#64748b", fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>
+            <button onClick={() => setShowHint(!showHint)} style={{ background: "none", border: "none", color: C.dim, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>
               {showHint ? "إخفاء بيانات الدخول" : "عرض بيانات الدخول التجريبية"}
             </button>
             {showHint && (
-              <div style={{ background: "#0a0e1a", borderRadius: 10, padding: 12, fontSize: 11, color: "#94a3b8", border: "1px solid #1e293b" }}>
+              <div style={{ background: C.bg, borderRadius: 10, padding: 12, fontSize: 11, color: C.muted, border: "1px solid #1e293b" }}>
                 {filteredHints.map((u, i) => (
                   <div key={i} style={{ marginBottom: i < filteredHints.length - 1 ? 6 : 0, display: "flex", justifyContent: "space-between" }}>
                     <span>{u.avatar} {u.roleTitle}</span>
@@ -8444,6 +8969,8 @@ function SmartWasteManagement() {
   const { profiles: driverProfiles } = useDriverProfiles(isStaffAccount, scopeMid);
   const { incidents: routeIncidents } = useRouteIncidents(isStaffAccount, scopeMid);
   const { assignments: vehicleAssignments } = useDriverVehicleAssignments(isStaffAccount, scopeMid);
+  const { supportRequests } = useSupportRequests(isStaffAccount, scopeMid);
+  const { transfers: resourceTransfers } = useResourceTransfers(isStaffAccount && (scope.all || userData?.role === "manager" || userData?.role === "employee"), scope.all ? null : scopeMid);
   const { municipalities: municipalityDocs } = useMunicipalities(); // eslint-disable-line no-unused-vars -- used by the municipalities page (Phase 2)
   const municipalityIdFor = useCallback((nid) => municipalityForNeighborhood(neighborhoods.find((n) => n.id === nid)), [neighborhoods]);
   const { data: _citizenReportsCol } = useCollection(COLLECTIONS.CITIZEN_REPORTS);
@@ -8633,6 +9160,8 @@ function SmartWasteManagement() {
     { key: "municipalities", label: "البلديات والنطاقات", icon: <Landmark size={20} /> },
     ...(loggedInUser.role === "executive" ? [{ key: "neighborhoods", label: "الأحياء (كل المدينة)", icon: <Home size={20} /> }] : []),
     { key: "bins",      label: "الحاويات الذكية",     icon: <Trash2 size={20} /> },
+    { key: "brain",     label: "العقل التشغيلي للمدينة", icon: <Sparkles size={20} /> },
+    { key: "plan",      label: "خطة الجمع الذكية",     icon: <Target size={20} /> },
     { key: "control",   label: "إدارة الجولات",       icon: <RouteIcon size={20} /> },
     { key: "drivers",   label: "السائقون والأسطول",    icon: <Truck size={20} /> },
     { key: "fleet",     label: "متابعة الأسطول",        icon: <Radio size={20} /> },
@@ -8664,15 +9193,15 @@ function SmartWasteManagement() {
       {/* ── Sidebar ─────────────────────────────────────── */}
       <aside style={{
         width: 240,
-        background: C.card,
-        borderLeft: `1px solid ${C.border}`,
+        background: C.brand,
+        borderLeft: `1px solid ${C.brandSoft}`,
         display: "flex",
         flexDirection: "column",
         flexShrink: 0,
         transition: "transform 0.3s ease",
         // Desktop: shrink to 64px when closed; Mobile: slide off-screen (fixed overlay)
         ...(isMobile ? {
-          position: "fixed", top: 0, right: 0, bottom: 0, zIndex: 50,
+          position: "fixed", top: 26, right: 0, bottom: 0, zIndex: 50,
           transform: sidebarOpen ? "translateX(0)" : "translateX(100%)",
           boxShadow: sidebarOpen ? "-8px 0 32px #0008" : "none",
         } : {
@@ -8682,11 +9211,11 @@ function SmartWasteManagement() {
           overflow: "hidden",
         }),
       }}>
-        <div style={{ padding: "20px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12, minHeight: 70 }}>
+        <div style={{ padding: "20px 18px", borderBottom: `1px solid #ffffff22`, display: "flex", alignItems: "center", gap: 12, minHeight: 70 }}>
           <div style={{ flexShrink: 0 }}><AppLogo size={40} /></div>
           {(sidebarOpen || isMobile) && <div style={{ overflow: "hidden" }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: C.text, whiteSpace: "nowrap" }}>إدارة النفايات - بريدة</div>
-            <div style={{ fontSize: 10, color: C.accent, fontWeight: 600 }}>Smart Waste MIS</div>
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: "#ffffff", whiteSpace: "nowrap" }}>{BRAND.ar}</div>
+            <div style={{ fontSize: 10, color: C.brandText, fontWeight: 600 }}>{BRAND.en} · {BRAND.city}</div>
           </div>}
           {isMobile && (
             <button onClick={() => setSidebarOpen(false)} style={{ marginRight: "auto", background: "none", border: "none", color: C.muted, fontSize: 22, cursor: "pointer", padding: 4 }}>✕</button>
@@ -8700,8 +9229,8 @@ function SmartWasteManagement() {
               padding: (sidebarOpen || isMobile) ? "12px 14px" : "12px 0",
               justifyContent: (sidebarOpen || isMobile) ? "flex-start" : "center",
               borderRadius: 10, border: "none",
-              background: page === item.key ? C.accent + "18" : "transparent",
-              color: page === item.key ? C.accent : C.muted,
+              background: page === item.key ? "#ffffff1f" : "transparent",
+              color: page === item.key ? "#ffffff" : C.brandText,
               cursor: "pointer", fontSize: 14, fontWeight: page === item.key ? 700 : 500,
               fontFamily: ARABIC_FONT, whiteSpace: "nowrap", width: "100%",
             }}>
@@ -8717,20 +9246,30 @@ function SmartWasteManagement() {
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", marginBottom: 8 }}>
               <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><User size={16} color={C.accent} /></div>
               <div style={{ overflow: "hidden" }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{loggedInUser.name}</div>
-                <div style={{ fontSize: 10, color: C.accent }}>{loggedInUser.roleTitle}</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#ffffff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{loggedInUser.name}</div>
+                <div style={{ fontSize: 10, color: C.brandText }}>{ROLE_LABELS_AR[canonicalRole(loggedInUser.role)] || loggedInUser.roleTitle}</div>
               </div>
             </div>
           )}
+          <button onClick={() => setTheme(THEME_NAME === "dark" ? "light" : "dark")} title="تبديل الوضع الفاتح/الداكن" style={{
+            display: "flex", alignItems: "center", gap: 10, width: "100%",
+            padding: (sidebarOpen || isMobile) ? "10px 14px" : "10px 0",
+            justifyContent: (sidebarOpen || isMobile) ? "flex-start" : "center",
+            borderRadius: 10, marginBottom: 6, border: "1px solid #ffffff30", background: "#ffffff10", color: C.brandText,
+            cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
+          }}>
+            <span style={{ fontSize: 14 }}>{THEME_NAME === "dark" ? "☀️" : "🌙"}</span>
+            {(sidebarOpen || isMobile) && (THEME_NAME === "dark" ? "الوضع الفاتح" : "الوضع الداكن")}
+          </button>
           <button onClick={() => { setShowPassModal(true); if (isMobile) setSidebarOpen(false); }} style={{
             display: "flex", alignItems: "center", gap: 10, width: "100%",
             padding: (sidebarOpen || isMobile) ? "10px 14px" : "10px 0",
             justifyContent: (sidebarOpen || isMobile) ? "flex-start" : "center",
             borderRadius: 10, marginBottom: 6,
-            border: `1px solid #10b98130`, background: `#10b98110`, color: "#10b981",
+            border: `1px solid #10b98130`, background: `#10b98110`, color: C.accent,
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
           }}>
-            <SettingsIcon size={16} color="#10b981" />
+            <SettingsIcon size={16} color={C.accent} />
             {(sidebarOpen || isMobile) && "إعدادات الحساب"}
           </button>
           <button onClick={handleLogout} style={{
@@ -8845,7 +9384,7 @@ function SmartWasteManagement() {
         <div style={{ flex: 1, overflow: "auto", padding: isMobile ? 12 : 24 }}>
           {page === "dashboard"  && <DashboardPage weeklyData={weeklyData} monthlyTrend={monthlyTrend} alerts={alerts} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} loadingNeighborhoods={loadingNeighborhoods} loadingBins={loadingBins} onViewBins={goToBins} onViewRoutes={() => setPage("control")} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
           {page === "map"         && <MapPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} loading={loadingNeighborhoods || loadingBins} onViewBins={goToBins} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} initialSelectedKey={mapInitialKey} />}
-          {page === "municipalities" && <MunicipalitiesPage key={municipalityInitialId || "all"} initialMunicipalityId={municipalityInitialId} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} loggedInUser={loggedInUser} onOpenRoute={(id) => { setRouteInitialId(id); setPage("control"); }} onViewBins={(nid) => { setBinsNeighborhoodFilter(nid); setPage("bins"); }} onAddToRoute={(b) => { setRouteDraftBinId(b.id); setPage("control"); }} />}
+          {page === "municipalities" && <MunicipalitiesPage key={municipalityInitialId || "all"} initialMunicipalityId={municipalityInitialId} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} supportRequests={supportRequests} loggedInUser={loggedInUser} onOpenRoute={(id) => { setRouteInitialId(id); setPage("control"); }} onViewBins={(nid) => { setBinsNeighborhoodFilter(nid); setPage("bins"); }} onAddToRoute={(b) => { setRouteDraftBinId(b.id); setPage("control"); }} />}
           {page === "neighborhoods" && <NeighborhoodsPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods} onViewBins={goToBins} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
           {page === "bins"        && <BinsPage neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} loading={loadingBins} initialNeighborhoodId={binsNeighborhoodFilter} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} />}
           {page === "control"    && <RouteManagementPage neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} vehicles={vehicles} routes={routes} driverProfiles={driverProfiles} loadingVehicles={loadingVehicles} loadingRoutes={loadingRoutes} loggedInUser={loggedInUser} draftBinId={routeDraftBinId} onConsumeDraftBin={() => setRouteDraftBinId(null)} initialRouteId={routeInitialId} onConsumeInitialRoute={() => setRouteInitialId(null)} onShowOnMap={goToMapNeighborhood} />}
@@ -8853,10 +9392,13 @@ function SmartWasteManagement() {
           {page === "fire"       && <FireAlertPage stations={stations} fireSensors={fireSensors} fireTempHistory={fireTempHistory} fireWeekly={fireWeeklyData} />}
           {page === "predictions" && <PredictionsPage stations={stations} neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} />}
           {page === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} bins={bins} neighborhoods={neighborhoods} routes={routes} collectionEvents={collectionEvents} vehicles={vehicles} auditLog={auditLog} fireSensors={fireSensors} citizenReports={citizenReports} />}
-          {page === "demo"       && <DemoScenarioPage neighborhoods={neighborhoods} bins={bins} routes={routes} profiles={driverProfiles} vehicles={vehicles} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onNavigate={(pg, extra) => { if (extra?.municipalityId) setMunicipalityInitialId(extra.municipalityId); setPage(pg); }} />}
+          {page === "demo"       && <DemoScenarioPage neighborhoods={neighborhoods} bins={bins} routes={routes} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} supportRequests={supportRequests} transfers={resourceTransfers} auditLog={auditLog} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onNavigate={(pg, extra) => { if (extra?.municipalityId) setMunicipalityInitialId(extra.municipalityId); setPage(pg); }} />}
+          {page === "brain"      && <IntelligencePage neighborhoods={neighborhoods} bins={bins} profiles={driverProfiles} vehicles={vehicles} routes={routes} incidents={routeIncidents} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} />}
+          {page === "plan"       && <SmartPlanPage neighborhoods={neighborhoods} bins={bins} profiles={driverProfiles} vehicles={vehicles} routes={routes} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onOpenRoute={(id) => { setRouteInitialId(id); setPage("control"); }} />}
           {page === "simulation" && <SimulationPage neighborhoods={neighborhoods} bins={bins} vehicles={vehicles} loggedInUser={loggedInUser} />}
           {page === "exec"       && <ExecDashboard user={loggedInUser} onLogout={handleLogout} stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData}
-            neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} collectionEvents={collectionEvents} auditLog={auditLog} vehicles={vehicles} recentReadings={recentReadings} />}
+            neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} collectionEvents={collectionEvents} auditLog={auditLog} vehicles={vehicles} recentReadings={recentReadings}
+            profiles={driverProfiles} incidents={routeIncidents} supportRequests={supportRequests} transfers={resourceTransfers} loggedInUser={loggedInUser} onOpenMunicipality={(mid) => { setMunicipalityInitialId(mid); setPage("municipalities"); }} />}
           {page === "settings"   && <SettingsPage bins={bins} loggedInUser={loggedInUser} autoSyncRoutes={autoSyncRoutes} onToggleAutoSync={toggleAutoSync} />}
           {page === "fleet"      && <FleetMonitorPage profiles={driverProfiles} vehicles={vehicles} routes={routes} incidents={routeIncidents} bins={bins} neighborhoods={neighborhoods} loggedInUser={loggedInUser} />}
           {page === "drivers"    && <DriversPage profiles={driverProfiles} assignments={vehicleAssignments} vehicles={vehicles} loggedInUser={loggedInUser} />}
@@ -8884,34 +9426,34 @@ const PendingApprovalScreen = () => {
   const { logout, userData } = useAuth();
   const F = "'Noto Kufi Arabic',sans-serif";
   return (
-    <div dir="rtl" style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0a0e1a,#1a1040,#0a0e1a)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F }}>
+    <div dir="rtl" style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-      <div style={{ width:"100%", maxWidth:460, padding:"clamp(20px,5vw,40px)", background:"#111827", borderRadius:24, border:"1px solid #f59e0b30", textAlign:"center" }}>
+      <div style={{ width:"100%", maxWidth:460, padding:"clamp(20px,5vw,40px)", background:C.card, borderRadius:24, border:"1px solid #f59e0b30", textAlign:"center" }}>
         <div style={{ width:80, height:80, borderRadius:20, background:"#f59e0b15", display:"flex", alignItems:"center", justifyContent:"center", fontSize:42, margin:"0 auto 20px", border:"2px solid #f59e0b30" }}>⏳</div>
-        <h2 style={{ fontSize:22, fontWeight:900, color:"#f1f5f9", margin:"0 0 10px" }}>بانتظار الموافقة</h2>
-        <p style={{ fontSize:14, color:"#94a3b8", lineHeight:1.8, margin:"0 0 20px" }}>
-          تم إنشاء حسابك بنجاح كـ <span style={{ color:"#f59e0b", fontWeight:700 }}>{userData?.roleAr}</span>
+        <h2 style={{ fontSize:22, fontWeight:900, color:C.text, margin:"0 0 10px" }}>بانتظار الموافقة</h2>
+        <p style={{ fontSize:14, color:C.muted, lineHeight:1.8, margin:"0 0 20px" }}>
+          تم إنشاء حسابك بنجاح كـ <span style={{ color:C.warning, fontWeight:700 }}>{userData?.roleAr}</span>
           <br />حسابك قيد المراجعة من الإدارة. ستتمكن من الدخول بعد الموافقة.
         </p>
-        <div style={{ background:"#0a0e1a", borderRadius:12, padding:16, marginBottom:20, textAlign:"right" }}>
+        <div style={{ background:C.bg, borderRadius:12, padding:16, marginBottom:20, textAlign:"right" }}>
           <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8, fontSize:13 }}>
-            <span style={{ color:"#64748b" }}>الاسم:</span>
-            <span style={{ color:"#f1f5f9", fontWeight:600 }}>{userData?.fullName}</span>
+            <span style={{ color:C.dim }}>الاسم:</span>
+            <span style={{ color:C.text, fontWeight:600 }}>{userData?.fullName}</span>
           </div>
           <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8, fontSize:13 }}>
-            <span style={{ color:"#64748b" }}>البريد:</span>
-            <span style={{ color:"#f1f5f9", fontWeight:600 }}>{userData?.email}</span>
+            <span style={{ color:C.dim }}>البريد:</span>
+            <span style={{ color:C.text, fontWeight:600 }}>{userData?.email}</span>
           </div>
           <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8, fontSize:13 }}>
-            <span style={{ color:"#64748b" }}>الدور المطلوب:</span>
-            <span style={{ color:"#f59e0b", fontWeight:600 }}>{userData?.roleAr}</span>
+            <span style={{ color:C.dim }}>الدور المطلوب:</span>
+            <span style={{ color:C.warning, fontWeight:600 }}>{userData?.roleAr}</span>
           </div>
           <div style={{ display:"flex", justifyContent:"space-between", fontSize:13 }}>
-            <span style={{ color:"#64748b" }}>الحالة:</span>
-            <span style={{ color:"#f59e0b", fontWeight:600 }}>⏳ بانتظار الموافقة</span>
+            <span style={{ color:C.dim }}>الحالة:</span>
+            <span style={{ color:C.warning, fontWeight:600 }}>⏳ بانتظار الموافقة</span>
           </div>
         </div>
-        <button onClick={logout} style={{ padding:"12px 30px", borderRadius:10, border:"1px solid #ef444440", background:"#ef444415", color:"#ef4444", cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:F }}>
+        <button onClick={logout} style={{ padding:"12px 30px", borderRadius:10, border:"1px solid #ef444440", background:"#ef444415", color:C.danger, cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:F }}>
           تسجيل خروج
         </button>
       </div>
@@ -8993,74 +9535,74 @@ const AdminPanel = ({ onBack }) => {
   };
 
   const statusBadge = (status) => {
-    const map = { active: { label: "نشط", bg: "#10b98120", color: "#10b981" }, pending: { label: "بانتظار", bg: "#f59e0b20", color: "#f59e0b" }, suspended: { label: "معطّل", bg: "#ef444420", color: "#ef4444" }, rejected: { label: "مرفوض", bg: "#64748b20", color: "#64748b" } };
+    const map = { active: { label: "نشط", bg: "#10b98120", color: C.accent }, pending: { label: "بانتظار", bg: "#f59e0b20", color: C.warning }, suspended: { label: "معطّل", bg: "#ef444420", color: C.danger }, rejected: { label: "مرفوض", bg: "#64748b20", color: C.dim } };
     const s = map[status] || map.suspended;
     return <span style={{ padding:"3px 10px", borderRadius:20, fontSize:10, fontWeight:600, background:s.bg, color:s.color }}>{s.label}</span>;
   };
 
   const roleBadge = (role) => {
-    const map = { executive: { label: "إدارة عليا", bg: "#f59e0b20", color: "#f59e0b" }, employee: { label: "موظف", bg: "#3b82f620", color: "#3b82f6" }, citizen: { label: "مواطن", bg: "#10b98120", color: "#10b981" } };
+    const map = { executive: { label: "إدارة عليا", bg: "#f59e0b20", color: C.warning }, employee: { label: "موظف", bg: "#3b82f620", color: C.info }, citizen: { label: "مواطن", bg: "#10b98120", color: C.accent } };
     const r = map[role] || map.citizen;
     return <span style={{ padding:"3px 10px", borderRadius:20, fontSize:10, fontWeight:600, background:r.bg, color:r.color }}>{r.label}</span>;
   };
 
   return (
-    <div dir="rtl" style={{ minHeight:"100vh", background:"#070b14", fontFamily:F, color:"#f1f5f9" }}>
+    <div dir="rtl" style={{ minHeight:"100vh", background:"#070b14", fontFamily:F, color:C.text }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
       {/* Header */}
-      <header style={{ padding:"14px 28px", background:"linear-gradient(90deg,#111827,#1a1040)", borderBottom:"1px solid #8b5cf630", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+      <header style={{ padding:"14px 28px", background:C.brand, borderBottom:`1px solid ${C.brandSoft}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
         <div style={{ display:"flex", alignItems:"center", gap:14 }}>
           <div style={{ width:42, height:42, borderRadius:12, background:"linear-gradient(135deg,#8b5cf6,#6d28d9)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:22 }}>👑</div>
           <div>
-            <div style={{ fontSize:16, fontWeight:900, color:"#8b5cf6" }}>لوحة إدارة النظام</div>
-            <div style={{ fontSize:10, color:"#94a3b8" }}>إدارة المستخدمين والصلاحيات</div>
+            <div style={{ fontSize:16, fontWeight:900, color:C.purple }}>لوحة إدارة النظام</div>
+            <div style={{ fontSize:10, color:C.muted }}>إدارة المستخدمين والصلاحيات</div>
           </div>
         </div>
-        <button onClick={onBack} style={{ padding:"8px 18px", borderRadius:8, border:"1px solid #1e293b", background:"transparent", color:"#94a3b8", cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:F }}>← العودة للوحة الرئيسية</button>
+        <button onClick={onBack} style={{ padding:"8px 18px", borderRadius:8, border:"1px solid #1e293b", background:"transparent", color:C.muted, cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:F }}>← العودة للوحة الرئيسية</button>
       </header>
 
       <div style={{ padding:"20px 28px" }}>
         {/* Action Message */}
-        {actionMsg && <div style={{ padding:"12px 18px", borderRadius:10, background:"#10b98115", border:"1px solid #10b98130", color:"#10b981", fontSize:13, fontWeight:600, marginBottom:16, textAlign:"center" }}>{actionMsg}</div>}
+        {actionMsg && <div style={{ padding:"12px 18px", borderRadius:10, background:"#10b98115", border:"1px solid #10b98130", color:C.accent, fontSize:13, fontWeight:600, marginBottom:16, textAlign:"center" }}>{actionMsg}</div>}
 
         {/* Stats */}
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:12, marginBottom:20 }}>
           {[
-            { label: "إجمالي المستخدمين", val: stats.total, icon: "👥", color: "#8b5cf6" },
-            { label: "نشط", val: stats.active, icon: "✅", color: "#10b981" },
-            { label: "بانتظار الموافقة", val: stats.pending, icon: "⏳", color: "#f59e0b" },
-            { label: "إدارة عليا", val: stats.executives, icon: "🏛️", color: "#f59e0b" },
-            { label: "موظفون", val: stats.employees, icon: "👷", color: "#3b82f6" },
-            { label: "مواطنون", val: stats.citizens, icon: "🏠", color: "#10b981" },
+            { label: "إجمالي المستخدمين", val: stats.total, icon: "👥", color: C.purple },
+            { label: "نشط", val: stats.active, icon: "✅", color: C.accent },
+            { label: "بانتظار الموافقة", val: stats.pending, icon: "⏳", color: C.warning },
+            { label: "إدارة عليا", val: stats.executives, icon: "🏛️", color: C.warning },
+            { label: "موظفون", val: stats.employees, icon: "👷", color: C.info },
+            { label: "مواطنون", val: stats.citizens, icon: "🏠", color: C.accent },
           ].map((s, i) => (
-            <div key={i} style={{ background:"#111827", border:`1px solid ${s.color}25`, borderRadius:14, padding:16, textAlign:"center" }}>
+            <div key={i} style={{ background:C.card, border:`1px solid ${s.color}25`, borderRadius:14, padding:16, textAlign:"center" }}>
               <div style={{ fontSize:24, marginBottom:4 }}>{s.icon}</div>
               <div style={{ fontSize:24, fontWeight:900, color:s.color }}>{s.val}</div>
-              <div style={{ fontSize:11, color:"#64748b" }}>{s.label}</div>
+              <div style={{ fontSize:11, color:C.dim }}>{s.label}</div>
             </div>
           ))}
         </div>
 
         {/* Pending Approvals */}
         {pendingUsers.length > 0 && (
-          <div style={{ background:"#111827", border:"1px solid #f59e0b30", borderRadius:16, padding:20, marginBottom:20 }}>
-            <div style={{ fontSize:15, fontWeight:700, color:"#f59e0b", marginBottom:14 }}>⏳ طلبات بانتظار الموافقة ({pendingUsers.length})</div>
+          <div style={{ background:C.card, border:"1px solid #f59e0b30", borderRadius:16, padding:20, marginBottom:20 }}>
+            <div style={{ fontSize:15, fontWeight:700, color:C.warning, marginBottom:14 }}>⏳ طلبات بانتظار الموافقة ({pendingUsers.length})</div>
             <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
               {pendingUsers.map(u => (
-                <div key={u.id} style={{ background:"#0a0e1a", borderRadius:12, padding:"14px 18px", display:"flex", justifyContent:"space-between", alignItems:"center", border:"1px solid #1e293b" }}>
+                <div key={u.id} style={{ background:C.bg, borderRadius:12, padding:"14px 18px", display:"flex", justifyContent:"space-between", alignItems:"center", border:"1px solid #1e293b" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:12 }}>
                     <div style={{ width:40, height:40, borderRadius:10, background:"#f59e0b15", display:"flex", alignItems:"center", justifyContent:"center", fontSize:20 }}>
                       {u.role === "executive" ? "🏛️" : "👷"}
                     </div>
                     <div>
-                      <div style={{ fontSize:14, fontWeight:700, color:"#f1f5f9" }}>{u.fullName}</div>
-                      <div style={{ fontSize:11, color:"#64748b" }}>{u.email} • يطلب: <span style={{ color:"#f59e0b" }}>{u.roleAr}</span> • {u.district || "بدون حي"}</div>
+                      <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{u.fullName}</div>
+                      <div style={{ fontSize:11, color:C.dim }}>{u.email} • يطلب: <span style={{ color:C.warning }}>{u.roleAr}</span> • {u.district || "بدون حي"}</div>
                     </div>
                   </div>
                   <div style={{ display:"flex", gap:8 }}>
-                    <button onClick={() => approveUser(u.id)} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:"#10b981", color:"#fff", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F }}>✅ قبول</button>
-                    <button onClick={() => rejectUser(u.id)} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:"#ef4444", color:"#fff", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F }}>❌ رفض</button>
+                    <button onClick={() => approveUser(u.id)} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:C.accent, color:"#fff", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F }}>✅ قبول</button>
+                    <button onClick={() => rejectUser(u.id)} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:C.danger, color:"#fff", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F }}>❌ رفض</button>
                   </div>
                 </div>
               ))}
@@ -9072,25 +9614,25 @@ const AdminPanel = ({ onBack }) => {
         <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
           {["الكل", "إدارة عليا", "موظف", "مواطن", "بانتظار"].map(f => (
             <button key={f} onClick={() => setFilter(f)} style={{
-              padding:"7px 16px", borderRadius:10, border:`1px solid ${filter===f ? "#8b5cf6" : "#1e293b"}`,
-              background: filter===f ? "#8b5cf620" : "transparent", color: filter===f ? "#8b5cf6" : "#94a3b8",
+              padding:"7px 16px", borderRadius:10, border:`1px solid ${filter===f ? C.purple : C.border}`,
+              background: filter===f ? "#8b5cf620" : "transparent", color: filter===f ? C.purple : C.muted,
               cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:F,
             }}>{f}{f==="بانتظار" && stats.pending > 0 ? ` (${stats.pending})` : ""}</button>
           ))}
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 بحث بالاسم أو البريد..." style={{ flex:1, minWidth:200, padding:"8px 14px", borderRadius:10, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:12, fontFamily:F, outline:"none" }} />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 بحث بالاسم أو البريد..." style={{ flex:1, minWidth:200, padding:"8px 14px", borderRadius:10, border:"1px solid #1e293b", background:C.bg, color:C.text, fontSize:12, fontFamily:F, outline:"none" }} />
         </div>
 
         {/* Users Table */}
-        <div style={{ background:"#111827", borderRadius:16, border:"1px solid #1e293b", overflow:"hidden" }}>
+        <div style={{ background:C.card, borderRadius:16, border:"1px solid #1e293b", overflow:"hidden" }}>
           {loadingUsers ? (
-            <div style={{ padding:40, textAlign:"center", color:"#64748b" }}>جاري التحميل...</div>
+            <div style={{ padding:40, textAlign:"center", color:C.dim }}>جاري التحميل...</div>
           ) : (
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr>
                     {["الاسم", "البريد", "الدور", "الحي", "الحالة", "تاريخ التسجيل", "الإجراءات"].map(h => (
-                      <th key={h} style={{ padding:"12px 14px", textAlign:"right", color:"#94a3b8", borderBottom:"1px solid #1e293b", fontWeight:600, fontSize:11, whiteSpace:"nowrap" }}>{h}</th>
+                      <th key={h} style={{ padding:"12px 14px", textAlign:"right", color:C.muted, borderBottom:"1px solid #1e293b", fontWeight:600, fontSize:11, whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -9098,18 +9640,18 @@ const AdminPanel = ({ onBack }) => {
                   {filteredUsers.map(u => (
                     <tr key={u.id} style={{ borderBottom:"1px solid #1e293b10" }}>
                       <td style={{ padding:"12px 14px", fontWeight:600 }}>{u.fullName}</td>
-                      <td style={{ padding:"12px 14px", color:"#94a3b8", direction:"ltr", textAlign:"right" }}>{u.email}</td>
+                      <td style={{ padding:"12px 14px", color:C.muted, direction:"ltr", textAlign:"right" }}>{u.email}</td>
                       <td style={{ padding:"12px 14px" }}>{roleBadge(u.role)}</td>
-                      <td style={{ padding:"12px 14px", color:"#94a3b8" }}>{u.district || "-"}</td>
+                      <td style={{ padding:"12px 14px", color:C.muted }}>{u.district || "-"}</td>
                       <td style={{ padding:"12px 14px" }}>{statusBadge(u.status)}</td>
-                      <td style={{ padding:"12px 14px", color:"#64748b", fontSize:11 }}>{u.createdAt?.split("T")[0]}</td>
+                      <td style={{ padding:"12px 14px", color:C.dim, fontSize:11 }}>{u.createdAt?.split("T")[0]}</td>
                       <td style={{ padding:"12px 14px" }}>
                         <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                           {u.status === "pending" && <>
-                            <button onClick={() => approveUser(u.id)} style={{ padding:"4px 10px", borderRadius:6, border:"none", background:"#10b981", color:"#fff", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>قبول</button>
-                            <button onClick={() => rejectUser(u.id)} style={{ padding:"4px 10px", borderRadius:6, border:"none", background:"#ef4444", color:"#fff", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>رفض</button>
+                            <button onClick={() => approveUser(u.id)} style={{ padding:"4px 10px", borderRadius:6, border:"none", background:C.accent, color:"#fff", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>قبول</button>
+                            <button onClick={() => rejectUser(u.id)} style={{ padding:"4px 10px", borderRadius:6, border:"none", background:C.danger, color:"#fff", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>رفض</button>
                           </>}
-                          <select value={u.role} onChange={e => updateUserRole(u.id, e.target.value)} style={{ padding:"4px 8px", borderRadius:6, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:10, fontFamily:F, cursor:"pointer" }}>
+                          <select value={u.role} onChange={e => updateUserRole(u.id, e.target.value)} style={{ padding:"4px 8px", borderRadius:6, border:"1px solid #1e293b", background:C.bg, color:C.text, fontSize:10, fontFamily:F, cursor:"pointer" }}>
                             <option value="citizen">مواطن</option>
                             <option value="employee">موظف</option>
                             <option value="driver">سائق ميداني</option>
@@ -9117,15 +9659,15 @@ const AdminPanel = ({ onBack }) => {
                             <option value="executive">إدارة عليا</option>
                           </select>
                           {(u.role === "manager" || u.role === "employee" || u.role === "driver") && (
-                            <select value={u.municipalityId || ""} onChange={async (e) => { await setUserMunicipality(u.id, e.target.value || null, { uid: "admin" }); setActionMsg("✅ تم تحديث البلدية"); setTimeout(() => setActionMsg(""), 3000); fetchUsers(); }} title="البلدية الفرعية (نطاق البيانات)" style={{ padding:"4px 8px", borderRadius:6, border:`1px solid ${u.municipalityId ? "#1e293b" : "#f59e0b"}`, background:"#0a0e1a", color:"#f1f5f9", fontSize:10, fontFamily:F, cursor:"pointer" }}>
+                            <select value={u.municipalityId || ""} onChange={async (e) => { await setUserMunicipality(u.id, e.target.value || null, { uid: "admin" }); setActionMsg("✅ تم تحديث البلدية"); setTimeout(() => setActionMsg(""), 3000); fetchUsers(); }} title="البلدية الفرعية (نطاق البيانات)" style={{ padding:"4px 8px", borderRadius:6, border:`1px solid ${u.municipalityId ? C.border : C.warning}`, background:C.bg, color:C.text, fontSize:10, fontFamily:F, cursor:"pointer" }}>
                               <option value="">بلا بلدية (غير منطاق)</option>
                               {MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.shortAr}</option>)}
                             </select>
                           )}
                           {u.status === "active" ? (
-                            <button onClick={() => updateUserStatus(u.id, "suspended")} style={{ padding:"4px 10px", borderRadius:6, border:"1px solid #ef444440", background:"#ef444415", color:"#ef4444", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>تعطيل</button>
+                            <button onClick={() => updateUserStatus(u.id, "suspended")} style={{ padding:"4px 10px", borderRadius:6, border:"1px solid #ef444440", background:"#ef444415", color:C.danger, cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>تعطيل</button>
                           ) : u.status !== "pending" && (
-                            <button onClick={() => updateUserStatus(u.id, "active")} style={{ padding:"4px 10px", borderRadius:6, border:"1px solid #10b98140", background:"#10b98115", color:"#10b981", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>تفعيل</button>
+                            <button onClick={() => updateUserStatus(u.id, "active")} style={{ padding:"4px 10px", borderRadius:6, border:"1px solid #10b98140", background:"#10b98115", color:C.accent, cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>تفعيل</button>
                           )}
                         </div>
                       </td>
@@ -9133,7 +9675,7 @@ const AdminPanel = ({ onBack }) => {
                   ))}
                 </tbody>
               </table>
-              {filteredUsers.length === 0 && <div style={{ padding:30, textAlign:"center", color:"#64748b" }}>لا يوجد نتائج</div>}
+              {filteredUsers.length === 0 && <div style={{ padding:30, textAlign:"center", color:C.dim }}>لا يوجد نتائج</div>}
             </div>
           )}
         </div>
@@ -9145,12 +9687,157 @@ const AdminPanel = ({ onBack }) => {
 // ============================================================
 // 🚀 ROOT APP — ENTRY POINT
 // ============================================================
+// ======================== PUBLIC LANDING PAGE (Phase 2 — government-style identity) ========================
+const PIPELINE_STEPS = [
+  ["📡", "المستشعرات", "قراءات الامتلاء والحرارة والبطارية لكل حاوية"],
+  ["🧮", "تحليل البيانات", "تنقية القراءات وكشف الشذوذ والمستشعرات المنقطعة"],
+  ["🔮", "التنبؤ", "معدل الامتلاء ووقت الوصول للمستوى الحرج مع درجة ثقة"],
+  ["🧭", "تخطيط الجولات", "تجميع الحاويات في جولات محسَّنة بقيود السعة والمناوبة"],
+  ["🚛", "توزيع الموارد", "ترشيح السائق والمركبة، ودعم البلديات المتعثرة"],
+  ["📍", "التنفيذ الميداني", "ملاحة تفاعلية وتأكيد تفريغ وبلاغات عوائق"],
+  ["📊", "قياس الأداء", "مقارنة عادلة بخط الأساس: مسافة، زمن، استجابة، تكلفة تقديرية"],
+];
+const PORTALS = [
+  ["🏛️", "بوابة متخذي القرار — الأمانة", "خريطة البلديات الست، الضغط التشغيلي، توزيع الموارد، مركز محاكاة القرارات والتقارير."],
+  ["🏢", "بوابة متخذي القرار — البلدية", "إشراف على أحياء البلدية وحاوياتها وفرقها، اعتماد الاستثناءات وطلب الدعم."],
+  ["🛠️", "بوابة موظفي العمليات", "مركز التشغيل اليومي: خطة الجمع الذكية، إسناد الجولات، متابعة التنفيذ والبلاغات."],
+  ["🚛", "بوابة الأفراد — البلدية", "السائقون والفرق الميدانية: المهام، الملاحة، تأكيد التفريغ والإبلاغ عن العوائق."],
+];
+const LandingPage = ({ onEnter }) => {
+  const [isNarrow, setIsNarrow] = useState(window.innerWidth < 760);
+  useEffect(() => { const fn = () => setIsNarrow(window.innerWidth < 760); window.addEventListener("resize", fn); return () => window.removeEventListener("resize", fn); }, []);
+  const sec = { maxWidth: 1180, margin: "0 auto", padding: isNarrow ? "28px 16px" : "48px 24px" };
+  const h2 = { fontSize: isNarrow ? 20 : 26, fontWeight: 900, color: C.brand, margin: "0 0 8px" };
+  const demo = DEFAULT_SIM_CONFIG;
+  return (
+    <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+      {/* Official-style top bar */}
+      <div style={{ background: C.brand, color: C.brandText, fontSize: 11.5, padding: "6px 24px", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <span>مشروع مستقل لإدارة النفايات البلدية — نطاق التطبيق: {BRAND.city}</span>
+        <span>بيئة عرض تجريبية: بيانات المستشعرات محاكاة ومصادر التقسيم البلدي موثقة</span>
+      </div>
+      <header style={{ background: C.card, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 20 }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto", padding: "10px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <AppLogo size={44} />
+            <div><div style={{ fontSize: isNarrow ? 14 : 17, fontWeight: 900, color: C.brand }}>{BRAND.ar}</div><div style={{ fontSize: 11, color: C.muted }}>{BRAND.en} · {BRAND.city}</div></div>
+          </div>
+          {!isNarrow && <nav style={{ display: "flex", gap: 18, fontSize: 13, color: C.muted }}>{[["#features", "المزايا"], ["#engine", "العقل التشغيلي"], ["#how", "آلية العمل"], ["#portals", "البوابات"], ["#demo", "بيانات العرض"]].map(([h, l]) => <a key={h} href={h} style={{ color: C.muted, textDecoration: "none" }}>{l}</a>)}</nav>}
+          <button onClick={onEnter} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT, whiteSpace: "nowrap" }}>الدخول إلى المنصة</button>
+        </div>
+      </header>
+
+      {/* Hero */}
+      <section style={{ background: `linear-gradient(160deg, ${C.brand} 0%, ${C.brandSoft} 60%, #1c7a46 100%)`, color: "#fff" }}>
+        <div style={{ ...sec, display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "1.2fr 1fr", gap: 28, alignItems: "center", paddingTop: isNarrow ? 36 : 64, paddingBottom: isNarrow ? 36 : 64 }}>
+          <div>
+            <div style={{ display: "inline-block", fontSize: 11.5, background: "#ffffff1f", border: "1px solid #ffffff40", borderRadius: 20, padding: "4px 12px", marginBottom: 14 }}>{BRAND.engine} · {BRAND.engineEn}</div>
+            <h1 style={{ fontSize: isNarrow ? 28 : 42, fontWeight: 900, lineHeight: 1.3, margin: "0 0 14px" }}>إدارة ذكية للنفايات... وقرارات أكثر كفاءة</h1>
+            <p style={{ fontSize: isNarrow ? 14 : 16, lineHeight: 1.9, color: "#e8f3ed", margin: "0 0 22px" }}>{BRAND.description}</p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button onClick={onEnter} style={{ padding: "12px 22px", borderRadius: 10, border: "none", background: "#fff", color: C.brand, fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: ARABIC_FONT }}>الدخول إلى المنصة</button>
+              <a href="#how" style={{ padding: "12px 22px", borderRadius: 10, border: "1px solid #ffffff70", color: "#fff", fontWeight: 700, fontSize: 14, textDecoration: "none" }}>كيف يعمل النظام؟</a>
+            </div>
+          </div>
+          <div style={{ background: "#ffffff14", border: "1px solid #ffffff33", borderRadius: 16, padding: 18 }}>
+            <div style={{ fontSize: 12, color: "#d6ebe0", marginBottom: 10 }}>من المراقبة إلى القرار الاستباقي</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {[["ماذا سيحدث؟", "تنبؤات ومخاطر قادمة"], ["ما أفضل إجراء؟", "جولات مقترحة وتوزيع موارد"], ["ما أثر القرار؟", "محاكاة ومقارنة بخط الأساس"], ["ماذا تحقق؟", "مؤشرات أداء محسوبة"]].map(([t, d]) => (
+                <div key={t} style={{ background: "#0000002a", borderRadius: 10, padding: "10px 12px" }}><div style={{ fontSize: 13, fontWeight: 800 }}>{t}</div><div style={{ fontSize: 11, color: "#d6ebe0" }}>{d}</div></div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features */}
+      <section id="features" style={sec}>
+        <h2 style={h2}>مزايا المنصة</h2>
+        <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "repeat(3, 1fr)", gap: 12 }}>
+          {[["🔮 تنبؤ استباقي", "وقت الوصول للمستوى الحرج لكل حاوية بدرجة ثقة وسبب مكتوب — ولا تنبؤ من قراءة واحدة."], ["🧭 جولات محسَّنة", "ترتيب الزيارات على مصفوفة أزمنة الطرق الفعلية بقيود السعة والأولوية والمناوبة."], ["🤝 توزيع ذكي للموارد", "ضغط تشغيلي لكل بلدية ومقترحات دعم بين البلديات بأثر محسوب على الطرفين."], ["🧪 محاكاة القرارات", "تجربة تعطل مركبة أو غياب سائق أو إغلاق طريق على نسخة معزولة قبل التنفيذ."], ["📍 تنفيذ ميداني", "بوابة سائق بملاحة تفاعلية وتأكيد تفريغ لا يزوّر قراءات المستشعر."], ["🔐 عزل وصلاحيات خادمية", "كل بلدية ترى بياناتها فقط؛ السائق يرى مهامه فقط؛ القواعد مختبَرة."]].map(([t, d]) => (
+            <div key={t} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 16 }}><div style={{ fontSize: 15, fontWeight: 800, color: C.text, marginBottom: 6 }}>{t}</div><div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.8 }}>{d}</div></div>
+          ))}
+        </div>
+      </section>
+
+      {/* Engine */}
+      <section id="engine" style={{ background: C.card, borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
+        <div style={sec}>
+          <h2 style={h2}>{BRAND.engine}</h2>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{BRAND.engineEn} — الوظيفة المركزية التي تربط المراقبة بالتنبؤ والتخطيط والتنفيذ وقياس النتائج.</div>
+          <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "repeat(3, 1fr)", gap: 12 }}>
+            {[["1 · ماذا سيحدث؟", "محرك التنبؤ يحوّل القراءات إلى مخاطر قادمة: حاويات ستمتلئ خلال ساعات، أحياء تحت ضغط، مستشعرات صامتة."], ["2 · ما أفضل إجراء؟", "محرك التخطيط يقترح جولات وترتيب زيارات وسائقًا مرشحًا، ومحرك الموارد يقترح دعمًا بين البلديات — بأسباب حسابية."], ["3 · ما أثر القرار؟", "مركز المحاكاة يعيد تشغيل التخطيط على نسخة معزولة ويقارن بخط الأساس قبل الاعتماد، ثم يقاس الأثر الفعلي بعد التنفيذ."]].map(([t, d]) => (
+              <div key={t} style={{ background: C.bg, borderRadius: 14, padding: 16, borderTop: `4px solid ${C.accent}` }}><div style={{ fontSize: 15, fontWeight: 800, color: C.brand, marginBottom: 6 }}>{t}</div><div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.8 }}>{d}</div></div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* How it works */}
+      <section id="how" style={sec}>
+        <h2 style={h2}>آلية عمل النظام</h2>
+        <div style={{ display: "flex", flexDirection: isNarrow ? "column" : "row", gap: 0, alignItems: "stretch", overflowX: "auto" }}>
+          {PIPELINE_STEPS.map(([icon, t, d], i) => (
+            <div key={t} style={{ display: "flex", flexDirection: isNarrow ? "column" : "row", alignItems: "center", flex: 1, minWidth: 0 }}>
+              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, flex: 1, width: "100%", textAlign: "center" }}>
+                <div style={{ fontSize: 26 }}>{icon}</div><div style={{ fontSize: 13.5, fontWeight: 800, color: C.text, marginTop: 4 }}>{t}</div><div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, marginTop: 4 }}>{d}</div>
+              </div>
+              {i < PIPELINE_STEPS.length - 1 && <div style={{ color: C.accent, fontSize: 20, padding: isNarrow ? "4px 0" : "0 6px", fontWeight: 900 }}>{isNarrow ? "↓" : "←"}</div>}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Portals */}
+      <section id="portals" style={{ background: C.card, borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
+        <div style={sec}>
+          <h2 style={h2}>البوابات الأربع</h2>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>تسلسل إشرافي وتشغيلي: أمانة منطقة القصيم ← البلديات الفرعية ← مدير البلدية ← موظفو العمليات ← السائقون والفرق الميدانية (ليس هيكلًا وظيفيًا رسميًا معتمدًا).</div>
+          <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "repeat(2, 1fr)", gap: 12 }}>
+            {PORTALS.map(([icon, t, d]) => (
+              <div key={t} style={{ background: C.bg, borderRadius: 14, padding: 16, display: "flex", gap: 12 }}><div style={{ fontSize: 28 }}>{icon}</div><div><div style={{ fontSize: 14.5, fontWeight: 800, color: C.text }}>{t}</div><div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.8 }}>{d}</div></div></div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Demo indicators (source-labelled) */}
+      <section id="demo" style={sec}>
+        <h2 style={h2}>مؤشرات بيئة العرض</h2>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>المصدر: محاكي المستشعرات التجريبي (seed ثابت «{demo.seed}») — أرقام إعدادات عرض قابلة للتعديل، وليست بيانات رسمية. التقسيم البلدي: 6 بلديات فرعية من أمانة منطقة القصيم؛ حدود الأحياء من OpenStreetMap (13 حيًا).</div>
+        <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr 1fr" : "repeat(5, 1fr)", gap: 10 }}>
+          {[["6", "بلديات فرعية (رسمي)"], [String(demo.totalBins), "حاوية افتراضية"], [String(demo.totalBins - demo.offlineSensors - demo.faultSensors), "مستشعر متصل بالمحاكي"], [String(demo.offlineSensors + demo.faultSensors), "منقطع أو معطل (محاكاة)"], ["13 + 1", "حي بمضلع OSM + حي تقريبي"]].map(([v, l]) => (
+            <div key={l} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, textAlign: "center" }}><div style={{ fontSize: 24, fontWeight: 900, color: C.brand }}>{v}</div><div style={{ fontSize: 11.5, color: C.muted }}>{l}</div></div>
+          ))}
+        </div>
+      </section>
+
+      <footer style={{ background: C.brand, color: C.brandText, fontSize: 12, padding: "18px 24px" }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <span>{BRAND.ar} — هوية مستقلة للمشروع؛ لا يمثل نظامًا رسميًا معتمدًا لأي جهة حكومية.</span>
+          <button onClick={onEnter} style={{ background: "none", border: `1px solid ${C.brandText}80`, color: "#fff", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 12 }}>الدخول إلى المنصة</button>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
 function AppRouter() {
+  const [showAuth, setShowAuth] = useState(false);
   const { isAuthenticated, userData, userRole, loading } = useAuth();
   const [showAdmin, setShowAdmin] = useState(false);
 
   if (loading) return <LoadingScreen />;
-  if (!isAuthenticated) return <AuthPage />;
+  if (!isAuthenticated) {
+    if (!showAuth) return <LandingPage onEnter={() => setShowAuth(true)} />;
+    return (
+      <div style={{ position: "relative" }}>
+        <button onClick={() => setShowAuth(false)} style={{ position: "fixed", top: 12, right: 16, zIndex: 30, background: C.card, border: `1px solid ${C.border}`, color: C.brand, borderRadius: 10, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT }}>← الصفحة الرئيسية</button>
+        <AuthPage />
+      </div>
+    );
+  }
 
   // حساب بانتظار الموافقة
   if (userData?.status === "pending") return <PendingApprovalScreen />;
@@ -9160,13 +9847,13 @@ function AppRouter() {
     const SuspendedScreen = () => {
       const { logout: doLogout } = useAuth();
       return (
-        <div dir="rtl" style={{ minHeight:"100vh", background:"#0a0e1a", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Noto Kufi Arabic',sans-serif" }}>
+        <div dir="rtl" style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Noto Kufi Arabic',sans-serif" }}>
           <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-          <div style={{ width:"100%", maxWidth:400, padding:"clamp(20px,5vw,40px)", background:"#111827", borderRadius:24, textAlign:"center", border:"1px solid #ef444430" }}>
+          <div style={{ width:"100%", maxWidth:400, padding:"clamp(20px,5vw,40px)", background:C.card, borderRadius:24, textAlign:"center", border:"1px solid #ef444430" }}>
             <div style={{ fontSize:48, marginBottom:16 }}>⛔</div>
-            <h2 style={{ fontSize:20, fontWeight:900, color:"#ef4444", margin:"0 0 10px" }}>الحساب {userData?.status === "rejected" ? "مرفوض" : "معطّل"}</h2>
-            <p style={{ fontSize:13, color:"#94a3b8", lineHeight:1.7 }}>تواصل مع إدارة النظام لمزيد من المعلومات</p>
-            <button onClick={doLogout} style={{ marginTop:20, padding:"10px 24px", borderRadius:10, border:"1px solid #ef444440", background:"#ef444415", color:"#ef4444", cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:"'Noto Kufi Arabic',sans-serif" }}>تسجيل خروج</button>
+            <h2 style={{ fontSize:20, fontWeight:900, color:C.danger, margin:"0 0 10px" }}>الحساب {userData?.status === "rejected" ? "مرفوض" : "معطّل"}</h2>
+            <p style={{ fontSize:13, color:C.muted, lineHeight:1.7 }}>تواصل مع إدارة النظام لمزيد من المعلومات</p>
+            <button onClick={doLogout} style={{ marginTop:20, padding:"10px 24px", borderRadius:10, border:"1px solid #ef444440", background:"#ef444415", color:C.danger, cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:"'Noto Kufi Arabic',sans-serif" }}>تسجيل خروج</button>
           </div>
         </div>
       );
@@ -9201,15 +9888,15 @@ class ErrorBoundary extends React.Component {
     if (this.state.hasError) {
       return (
         <div dir="rtl" style={{
-          minHeight: "100vh", background: "#0a0e1a", display: "flex",
+          minHeight: "100vh", background: C.bg, display: "flex",
           flexDirection: "column", alignItems: "center", justifyContent: "center",
-          fontFamily: "'Noto Kufi Arabic', sans-serif", color: "#f1f5f9", padding: 24, textAlign: "center",
+          fontFamily: "'Noto Kufi Arabic', sans-serif", color: C.text, padding: 24, textAlign: "center",
         }}>
           <div style={{ fontSize: 56, marginBottom: 16 }}>⚠️</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "#ef4444", marginBottom: 8 }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: C.danger, marginBottom: 8 }}>
             حدث خطأ غير متوقع
           </div>
-          <div style={{ fontSize: 14, color: "#94a3b8", marginBottom: 28, maxWidth: 400 }}>
+          <div style={{ fontSize: 14, color: C.muted, marginBottom: 28, maxWidth: 400 }}>
             {this.state.error?.message || "خطأ غير معروف"}
           </div>
           <button

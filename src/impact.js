@@ -14,6 +14,8 @@ export const ASSUMPTIONS = {
   truckFuelLitersPerKm: 0.35,   // typical 6–8 ton rear-loader in urban stop-and-go traffic
   co2KgPerLiterDiesel: 2.68,    // IPCC default emission factor for diesel
   minutesPerStop: 4,            // average time to service one bin
+  fuelPricePerLiter: 1.15,      // SAR per litre of diesel (announced assumption for estimated cost)
+  crewCostPerHour: 120,         // SAR per crew-hour (driver + vehicle running cost), estimated
   avgUrbanSpeedKmh: 30,
   fixedScheduleVisitsPerDay: 1, // the baseline being replaced: every bin visited once a day regardless of fill
 };

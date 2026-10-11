@@ -9,7 +9,7 @@
  */
 import { initializeTestEnvironment, assertSucceeds, assertFails } from "@firebase/rules-unit-testing";
 import { readFileSync } from "node:fs";
-import { doc, setDoc, getDoc, updateDoc, collection, getDocs, query, where } from "firebase/firestore";
+import { doc, setDoc, getDoc, updateDoc, deleteDoc, collection, getDocs, query, where } from "firebase/firestore";
 
 const PROJECT = "swm-rules-test";
 let env;
@@ -178,6 +178,63 @@ await test("municipalities + neighborhood↔municipality assignment are platform
   await assertSucceeds(setDoc(doc(ctx("mgrE", "manager"), "simulated_readings/s1"), { bin_id: "bE", fill_level_percent: 70, source: "SIMULATED" }));
   await assertFails(setDoc(doc(ctx("mgrE", "manager"), "sensor_readings/s1"), { bin_id: "bE", fill_level_percent: 70 }));
   await assertFails(setDoc(doc(ctx("admin1", "executive"), "sensor_readings/s2"), { bin_id: "bE", fill_level_percent: 70 }));
+});
+
+
+await test("support requests: manager files one for OWN municipality only (status open); Amanah reviews; cross-municipality read/create/review denied", async () => {
+  const mgr = ctx("mgrE", "manager");
+  await assertSucceeds(setDoc(doc(mgr, "support_requests/S1"), { municipalityId: "east", need: "مركبة", status: "open", requestedBy: "mgrE" }));
+  await assertFails(setDoc(doc(mgr, "support_requests/S2"), { municipalityId: "north", need: "مركبة", status: "open", requestedBy: "mgrE" }));   // other municipality
+  await assertFails(setDoc(doc(mgr, "support_requests/S3"), { municipalityId: "east", need: "x", status: "approved", requestedBy: "mgrE" }));   // cannot self-approve on create
+  await assertFails(updateDoc(doc(mgr, "support_requests/S1"), { status: "approved" }));                                                      // cannot self-approve
+  await assertSucceeds(updateDoc(doc(mgr, "support_requests/S1"), { status: "withdrawn", withdrawnAt: "now" }));
+  await env.withSecurityRulesDisabled(async (c) => { await setDoc(doc(c.firestore(), "support_requests/SN"), { municipalityId: "north", need: "x", status: "open" }); });
+  await assertFails(getDoc(doc(mgr, "support_requests/SN")));
+  await assertFails(updateDoc(doc(ctx("empN", "employee"), "support_requests/S1"), { status: "open" }));
+  await assertFails(setDoc(doc(ctx("admin1", "executive"), "support_requests/SA"), { municipalityId: "east", need: "x", status: "open" }));   // the Amanah does not file requests to itself
+  await assertSucceeds(updateDoc(doc(ctx("admin1", "executive"), "support_requests/SN"), { status: "approved", decidedBy: "admin1", resolution: "ok" }));
+  await assertSucceeds(getDocs(query(collection(mgr, "support_requests"), where("municipalityId", "==", "east"))));
+  await assertFails(getDocs(collection(mgr, "support_requests")));
+  await assertFails(getDoc(doc(ctx("drv1", "driver"), "support_requests/S1")));
+  await assertFails(deleteDoc(doc(ctx("admin1", "executive"), "support_requests/S1")));
+});
+
+await test("resource transfers: only the Amanah proposes/approves/executes; both sides read (constrained list), third municipality denied", async () => {
+  const admin = ctx("admin1", "executive");
+  const t = { resourceType: "crew", vehicleId: "VE", driverId: "drv1", fromMunicipalityId: "east", toMunicipalityId: "north", status: "proposed" };
+  await assertSucceeds(setDoc(doc(admin, "resource_transfers/T1"), t));
+  await assertSucceeds(updateDoc(doc(admin, "resource_transfers/T1"), { status: "approved", decidedBy: "admin1" }));
+  await assertFails(setDoc(doc(ctx("mgrE", "manager"), "resource_transfers/T2"), { ...t, fromMunicipalityId: "north", toMunicipalityId: "east" }));  // a manager cannot pull resources
+  await assertFails(updateDoc(doc(ctx("mgrE", "manager"), "resource_transfers/T1"), { status: "executed" }));
+  await assertSucceeds(getDoc(doc(ctx("mgrE", "manager"), "resource_transfers/T1")));      // sender side
+  await assertSucceeds(getDoc(doc(ctx("empN", "employee"), "resource_transfers/T1")));     // receiver side
+  await env.withSecurityRulesDisabled(async (c) => { await setDoc(doc(c.firestore(), "users/mgrW"), { uid: "mgrW", role: "manager", status: "active", municipalityId: "west" }); });
+  await assertFails(getDoc(doc(ctx("mgrW", "manager"), "resource_transfers/T1")));        // uninvolved municipality
+  await assertSucceeds(getDocs(query(collection(ctx("mgrE", "manager"), "resource_transfers"), where("fromMunicipalityId", "==", "east"))));
+  await assertSucceeds(getDocs(query(collection(ctx("mgrE", "manager"), "resource_transfers"), where("toMunicipalityId", "==", "east"))));
+  await assertFails(getDocs(collection(ctx("mgrE", "manager"), "resource_transfers")));
+  await assertSucceeds(getDocs(collection(admin, "resource_transfers")));
+  await assertFails(deleteDoc(doc(admin, "resource_transfers/T1")));
+  // executing a transfer re-homes the vehicle + driver: the Amanah may, a manager may not move resources across municipalities
+  await assertSucceeds(updateDoc(doc(admin, "vehicles/VE"), { municipalityId: "north", homeMunicipalityId: "east", transferId: "T1" }));
+  await assertFails(updateDoc(doc(ctx("mgrE", "manager"), "vehicles/VE"), { municipalityId: "east" }));   // VE now lives in north → east manager loses it
+  await assertSucceeds(updateDoc(doc(admin, "vehicles/VE"), { municipalityId: "east", transferId: null }));
+});
+
+await test("optimization runs + simulation scenarios: scoped creators, scoped readers, immutable; decision makers only run simulations", async () => {
+  const mgr = ctx("mgrE", "manager");
+  await assertSucceeds(setDoc(doc(mgr, "optimization_runs/O1"), { municipalityId: "east", summary: { routes: 2 } }));
+  await assertFails(setDoc(doc(mgr, "optimization_runs/O2"), { municipalityId: "north", summary: { routes: 2 } }));
+  await assertFails(updateDoc(doc(mgr, "optimization_runs/O1"), { summary: { routes: 9 } }));
+  await assertFails(getDoc(doc(ctx("empN", "employee"), "optimization_runs/O1")));
+  await assertSucceeds(getDoc(doc(ctx("admin1", "executive"), "optimization_runs/O1")));
+  await assertSucceeds(setDoc(doc(ctx("empN", "employee"), "optimization_runs/O3"), { municipalityId: "north" }));
+  await assertSucceeds(setDoc(doc(mgr, "simulation_scenarios/Z1"), { municipalityId: "east", scenario: { type: "vehicle_down" }, verdict: "worse" }));
+  await assertSucceeds(setDoc(doc(ctx("admin1", "executive"), "simulation_scenarios/Z2"), { municipalityId: "north", scenario: { type: "transfer_vehicle" }, verdict: "better" }));
+  await assertFails(setDoc(doc(ctx("empN", "employee"), "simulation_scenarios/Z3"), { municipalityId: "north", scenario: { type: "vehicle_down" } }));   // operations staff view only
+  await assertFails(setDoc(doc(ctx("drv1", "driver"), "simulation_scenarios/Z4"), { municipalityId: "east" }));
+  await assertFails(updateDoc(doc(mgr, "simulation_scenarios/Z1"), { verdict: "better" }));
+  await assertFails(getDoc(doc(ctx("cit1", "citizen"), "simulation_scenarios/Z1")));
 });
 
 await env.cleanup();
