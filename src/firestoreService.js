@@ -36,7 +36,7 @@ import { getStatus, getStatusColor, getBinStatus, THRESHOLDS } from "./config";
 // that phase, not a nice-to-have.
 // ══════════════════════════════════════════════════════════════════════
 export const COLLECTIONS = {
-  STATIONS:        "stations",     // deprecated — retired in Phase 3, still read live by several pages
+  STATIONS:        "stations",     // deprecated — still read live by a few out-of-scope legacy pages (see Phase 3 report)
   NEIGHBORHOODS:   "neighborhoods", // replaces the old unused "districts" collection
   BINS:            "bins",          // replaces embedded stations[].containers[]
   IOT_DEVICES:     "iot_devices",
@@ -48,7 +48,13 @@ export const COLLECTIONS = {
   REQUESTS:        "requests",
   CITIZEN_REPORTS: "citizen_reports",
   USERS:           "users",
-  SUCTION_JOBS:    "suctionJobs", // deprecated — retired in Phase 3
+  SUCTION_JOBS:    "suctionJobs", // deprecated — replaced by COLLECTION_ROUTES below
+  // Phase 3 — decision support / route management
+  VEHICLES:          "vehicles",
+  COLLECTION_ROUTES: "collection_routes",
+  ROUTE_BINS:        "route_bins",
+  COLLECTION_EVENTS: "collection_events",
+  AUDIT_LOG:         "audit_log",
 };
 
 // ══════════════════════════════════════════════════════════════════════
@@ -115,7 +121,10 @@ export function useCollectionWhere(col, field, value, sortField = "createdAt") {
   const [error, setError]     = useState(null);
 
   useEffect(() => {
-    if (!col || !value) { setLoading(false); return; }
+    // value == null (not just falsy) — a legitimate filter value can be
+    // `false`, `0`, or `""` (e.g. querying resolved:false alerts), and
+    // treating those as "missing" would silently never query at all.
+    if (!col || value == null) { setLoading(false); return; }
 
     // NOTE: no orderBy here — combining where+orderBy requires a composite
     // Firestore index. We sort client-side instead to avoid SDK assertion errors.
@@ -173,6 +182,91 @@ export function useAnalyticsDoc(docId) {
   }, [docId]);
 
   return { data, loading };
+}
+
+/**
+ * Live subscription to all neighborhoods. Thin typed wrapper over
+ * useCollection so every page that needs neighborhoods shares one
+ * subscription pattern instead of each writing its own onSnapshot call.
+ */
+export function useNeighborhoods() {
+  const { data, loading, error } = useCollection(COLLECTIONS.NEIGHBORHOODS, "name");
+  return { neighborhoods: data, loading, error };
+}
+
+/**
+ * Live subscription to all bins. Thin typed wrapper over useCollection —
+ * reads the denormalized latest-reading fields on each bin doc directly,
+ * never sensor_readings history (per the performance guidance: the
+ * dashboard/map must only ever need the latest value per bin).
+ */
+export function useBins() {
+  const { data, loading, error } = useCollection(COLLECTIONS.BINS, "name");
+  return { bins: data, loading, error };
+}
+
+/**
+ * Bounded per-bin reading history — ONLY for a single bin's detail view
+ * (never for a list), and only the last `windowHours` worth, with a hard
+ * limit, so predictions/fill-rate never load a bin's full history (§39).
+ */
+export function useBinReadings(binId, windowHours = THRESHOLDS.predictionWindowHours) {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!binId) return; // nothing to fetch — loading/readings are computed below without a setState call here
+    const cutoff = new Date(Date.now() - windowHours * 3600000).toISOString();
+    // No composite index needed: filter client-side by timestamp after an
+    // unordered equality query, same no-orderBy pattern as useCollectionWhere.
+    const q = query(collection(db, COLLECTIONS.SENSOR_READINGS), where("bin_id", "==", binId));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const readings = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter((r) => r.timestamp >= cutoff)
+          .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1))
+          .slice(-50); // hard cap regardless of window
+        setData(readings);
+        setLoading(false);
+      },
+      (err) => { console.error(`[useBinReadings:${binId}]`, err); setLoading(false); }
+    );
+    return () => unsub();
+  }, [binId, windowHours]);
+
+  return { readings: binId ? data : [], loading: binId ? loading : false };
+}
+
+/**
+ * ALL sensor_readings within the last `windowHours` — ONE bounded,
+ * time-windowed query for the whole fleet (not per-bin), used by views that
+ * need every bin's recent trend at once (the map's future-state toggle,
+ * §8). At demo/hackathon scale this is cheap; the ceiling to watch if the
+ * fleet grows is this collection-wide scan itself, not N+1 per-bin reads.
+ */
+export function useRecentReadings(windowHours = THRESHOLDS.predictionWindowHours) {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const cutoff = new Date(Date.now() - windowHours * 3600000).toISOString();
+    const unsub = onSnapshot(
+      collection(db, COLLECTIONS.SENSOR_READINGS),
+      (snap) => {
+        const readings = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter((r) => r.timestamp >= cutoff);
+        setData(readings);
+        setLoading(false);
+      },
+      (err) => { console.error("[useRecentReadings]", err); setLoading(false); }
+    );
+    return () => unsub();
+  }, [windowHours]);
+
+  return { readings: data, loading };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -541,3 +635,242 @@ export const recordDailyStationHistory = async (stations = []) => {
   localStorage.setItem(storageKey, "1");
   console.log(`[history] station_history recorded for ${todayKey}`);
 };
+
+// ══════════════════════════════════════════════════════════════════════
+// 17. Vehicles — §19
+// ══════════════════════════════════════════════════════════════════════
+export function useVehicles() {
+  const { data, loading, error } = useCollection(COLLECTIONS.VEHICLES, "vehicleNumber");
+  return { vehicles: data, loading, error };
+}
+
+export const addVehicle = (data) =>
+  addItem(COLLECTIONS.VEHICLES, {
+    vehicleNumber:  data.vehicleNumber  || "",
+    driverName:     data.driverName     || null,
+    status:         data.status         || "available", // available | on_route | maintenance | offline
+    capacityLiters: Number(data.capacityLiters) || 6000,
+    depotLat:       data.depotLat ?? null, // where the vehicle starts its day — the driver portal's fallback position when GPS is unavailable
+    depotLng:       data.depotLng ?? null,
+    currentRouteId: null,
+    lastActiveAt:   null,
+  });
+
+export const updateVehicleStatus = (id, status, currentRouteId = null) =>
+  updateItem(COLLECTIONS.VEHICLES, id, { status, currentRouteId, lastActiveAt: ts() });
+
+export const deleteVehicle = (id) => deleteItem(COLLECTIONS.VEHICLES, id);
+
+// ══════════════════════════════════════════════════════════════════════
+// 18. Collection routes + route bins — §15/§17/§18
+//    status lifecycle: suggested → approved → in_progress → completed
+//                                 ↘ rejected / deferred
+//    The engine (src/decisionEngine.js) only ever proposes "suggested" —
+//    every later transition requires an explicit employee/driver action
+//    from the UI, never a side effect of a snapshot listener.
+// ══════════════════════════════════════════════════════════════════════
+export function useCollectionRoutes() {
+  const { data, loading, error } = useCollection(COLLECTIONS.COLLECTION_ROUTES);
+  return { routes: data, loading, error };
+}
+
+/** Persists engine-recommended routes as "suggested" — skips any route whose binIds set already matches an existing open (non-completed/rejected) suggestion, so re-running the engine doesn't spam duplicates. */
+export const createSuggestedRoutes = async (recommended = []) => {
+  const openSnap = await getDocs(
+    query(collection(db, COLLECTIONS.COLLECTION_ROUTES), where("status", "in", ["suggested", "approved", "in_progress"]))
+  );
+  const openBinSets = openSnap.docs.map((d) => new Set(d.data().binIds || []));
+  const sameSet = (a, b) => a.size === b.length && b.every((id) => a.has(id));
+
+  let created = 0;
+  for (const route of recommended) {
+    if (openBinSets.some((set) => sameSet(set, route.binIds))) continue;
+    await addItem(COLLECTIONS.COLLECTION_ROUTES, { ...route, approvedBy: null, approvedAt: null, startedAt: null, completedAt: null, vehicleId: null });
+    created += 1;
+  }
+  return created;
+};
+
+/**
+ * Applies a decisionEngine.reconcileRecommendations() result: new suggestions
+ * are created, existing suggestions are refreshed in place (no duplicates per
+ * neighborhood), and suggestions whose bins no longer qualify are marked
+ * "withdrawn" — kept in the history, never silently deleted. Approved and
+ * in-progress routes are never part of the input, so they are never touched.
+ */
+export const applyRouteReconciliation = async ({ toCreate = [], toUpdate = [], toWithdraw = [] }, meta = {}) => {
+  for (const route of toCreate) {
+    await addItem(COLLECTIONS.COLLECTION_ROUTES, { ...route, manualBinIds: [], approvedBy: null, approvedAt: null, startedAt: null, completedAt: null, vehicleId: null, ...meta });
+  }
+  for (const { id, data } of toUpdate) {
+    await updateItem(COLLECTIONS.COLLECTION_ROUTES, id, data);
+  }
+  for (const id of toWithdraw) {
+    await updateItem(COLLECTIONS.COLLECTION_ROUTES, id, { status: "withdrawn", withdrawnAt: ts(), withdrawReason: "لم تعد هناك حاويات مؤهلة للجمع في هذا الحي — سُحب الاقتراح تلقائيًا" });
+  }
+  return { created: toCreate.length, updated: toUpdate.length, withdrawn: toWithdraw.length };
+};
+
+export const updateRoute = (id, data) => updateItem(COLLECTIONS.COLLECTION_ROUTES, id, data);
+
+export const approveRoute = (id, uid, vehicleId) =>
+  updateItem(COLLECTIONS.COLLECTION_ROUTES, id, { status: "approved", approvedBy: uid, approvedAt: ts(), vehicleId });
+
+export const rejectRoute = (id, uid, reason = "") =>
+  updateItem(COLLECTIONS.COLLECTION_ROUTES, id, { status: "rejected", rejectedBy: uid, rejectedAt: ts(), rejectReason: reason });
+
+export const deferRoute = (id, uid) =>
+  updateItem(COLLECTIONS.COLLECTION_ROUTES, id, { status: "deferred", deferredBy: uid, deferredAt: ts() });
+
+export const startRoute = async (id, vehicleId) => {
+  await updateItem(COLLECTIONS.COLLECTION_ROUTES, id, { status: "in_progress", startedAt: ts() });
+  if (vehicleId) await updateVehicleStatus(vehicleId, "on_route", id);
+};
+
+export const completeRoute = async (id, vehicleId) => {
+  await updateItem(COLLECTIONS.COLLECTION_ROUTES, id, { status: "completed", completedAt: ts() });
+  if (vehicleId) await updateVehicleStatus(vehicleId, "available", null);
+};
+
+export const deleteRoute = (id) => deleteItem(COLLECTIONS.COLLECTION_ROUTES, id);
+
+// ══════════════════════════════════════════════════════════════════════
+// 19. Collection events — §26/§27
+// ══════════════════════════════════════════════════════════════════════
+export function useCollectionEvents() {
+  const { data, loading, error } = useCollection(COLLECTIONS.COLLECTION_EVENTS);
+  return { events: data, loading, error };
+}
+
+/**
+ * Records a collection event AND updates bin.lastCollectionAt — does NOT
+ * touch sensor_readings (§27: history is never rewritten/deleted). If no
+ * fresh reading has arrived since, the bin's lastFillLevelPercent stays
+ * as the last pre-collection value — the UI is responsible for labeling
+ * it "قبل التفريغ" rather than implying it's a fresh live reading.
+ */
+export const recordCollectionEvent = async (binId, routeId, vehicleId, operatorId, fillBefore) => {
+  const batch = writeBatch(db);
+  const eventRef = doc(collection(db, COLLECTIONS.COLLECTION_EVENTS));
+  batch.set(eventRef, {
+    binId, routeId, vehicleId, operatorId,
+    fillBefore: Number(fillBefore) || 0,
+    fillAfter: 0,
+    source: "route",
+    collectedAt: ts(),
+    createdAt: ts(),
+  });
+  batch.update(doc(db, COLLECTIONS.BINS, binId), { lastCollectionAt: ts() });
+  await batch.commit();
+  return eventRef.id;
+};
+
+// ══════════════════════════════════════════════════════════════════════
+// 20. Audit log — §37
+// ══════════════════════════════════════════════════════════════════════
+export function useAuditLog() {
+  const { data, loading, error } = useCollection(COLLECTIONS.AUDIT_LOG);
+  return { auditLog: data, loading, error };
+}
+
+export const writeAuditLog = (action, actorId, actorName, details = {}) =>
+  addItem(COLLECTIONS.AUDIT_LOG, { action, actorId: actorId || "", actorName: actorName || "", details });
+
+// ══════════════════════════════════════════════════════════════════════
+// 21. Alerts sync from Decision Engine candidates — §28/§29
+//    Mirrors the existing syncAlertsFromStations() dedup pattern above,
+//    but keyed by the engine's dedupKey instead of stationId, and covers
+//    every Phase 3 alert type (bin/neighborhood/route/vehicle), not just
+//    station fill-level.
+// ══════════════════════════════════════════════════════════════════════
+export const syncAlertsFromCandidates = async (candidates = []) => {
+  if (candidates.length === 0) return { created: 0 };
+
+  const openSnap = await getDocs(
+    query(collection(db, COLLECTIONS.ALERTS), where("resolved", "==", false))
+  );
+  const openDedupKeys = new Set(openSnap.docs.map((d) => d.data().dedupKey).filter(Boolean));
+
+  let created = 0;
+  for (const c of candidates) {
+    if (openDedupKeys.has(c.dedupKey)) continue;
+    await addItem(COLLECTIONS.ALERTS, {
+      type: c.type, severity: c.severity, sourceId: c.sourceId, sourceName: c.sourceName,
+      message: c.message, dedupKey: c.dedupKey, resolved: false,
+    });
+    openDedupKeys.add(c.dedupKey); // guard against duplicate candidates within this same call
+    created += 1;
+  }
+  return { created };
+};
+
+// ══════════════════════════════════════════════════════════════════════
+// 22. Demo Mode actions — §32/§33
+//    Every write here is explicitly tagged demo:true / source:"demo" so it
+//    is never mistaken for a real device reading (§33's Live-vs-Demo rule).
+//    Unlike recordSensorReading(), demoSetFault() deliberately writes an
+//    out-of-range value — recordSensorReading's validation exists to reject
+//    exactly that from a real device; here it's the intended simulated state.
+// ══════════════════════════════════════════════════════════════════════
+const HOUR_MS_FS = 60 * 60 * 1000;
+
+export const demoSetReading = async (binId, fillLevelPercent, temperatureCelsius) => {
+  const timestamp = ts();
+  const batch = writeBatch(db);
+  const readingRef = doc(collection(db, COLLECTIONS.SENSOR_READINGS));
+  batch.set(readingRef, {
+    bin_id: binId, device_id: "DEMO", fill_level_percent: Number(fillLevelPercent), temperature_celsius: Number(temperatureCelsius),
+    battery_level: null, signal: null, timestamp, receivedAt: timestamp, demo: true, source: "demo",
+  });
+  batch.update(doc(db, COLLECTIONS.BINS, binId), {
+    lastFillLevelPercent: Number(fillLevelPercent), lastTemperatureCelsius: Number(temperatureCelsius), lastReadingAt: timestamp,
+  });
+  await batch.commit();
+};
+
+export const demoSetOffline = (binId) =>
+  updateItem(COLLECTIONS.BINS, binId, { lastReadingAt: new Date(Date.now() - 2 * HOUR_MS_FS).toISOString() });
+
+export const demoSetFault = async (binId) => {
+  const timestamp = ts();
+  const batch = writeBatch(db);
+  const readingRef = doc(collection(db, COLLECTIONS.SENSOR_READINGS));
+  batch.set(readingRef, {
+    bin_id: binId, device_id: "DEMO", fill_level_percent: 240, temperature_celsius: 25,
+    battery_level: null, signal: null, timestamp, receivedAt: timestamp, demo: true, source: "demo",
+  });
+  batch.update(doc(db, COLLECTIONS.BINS, binId), { lastFillLevelPercent: 240, lastTemperatureCelsius: 25, lastReadingAt: timestamp });
+  await batch.commit();
+};
+
+export const demoReset = (binId) => demoSetReading(binId, 20, 25);
+
+// ══════════════════════════════════════════════════════════════════════
+// 23. IoT device registry + per-device keys
+//    The plain key is generated in the browser, shown ONCE to the employee,
+//    and only its SHA-256 hash is stored — the server ingest route
+//    (/api/iot/readings) compares hashes. The demo seed's placeholder key is
+//    explicitly rejected by that route.
+// ══════════════════════════════════════════════════════════════════════
+export function useIotDevices() {
+  const { data, loading, error } = useCollection(COLLECTIONS.IOT_DEVICES, "label");
+  return { devices: data, loading, error };
+}
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Generates a new 32-byte key for a device, stores only its hash, and returns the plain key for one-time display. */
+export const rotateDeviceKey = async (deviceDocId) => {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const plainKey = "swm_" + [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const deviceKeyHash = await sha256Hex(plainKey);
+  await updateItem(COLLECTIONS.IOT_DEVICES, deviceDocId, { deviceKeyHash, deviceKey: null, keyRotatedAt: ts() });
+  return plainKey;
+};
+
+export const setDeviceDisabled = (deviceDocId, disabled) =>
+  updateItem(COLLECTIONS.IOT_DEVICES, deviceDocId, { disabled: !!disabled });

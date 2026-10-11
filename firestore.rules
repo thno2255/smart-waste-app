@@ -1,0 +1,107 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────
+// Smart Waste MIS — Firestore security rules (DRAFT, versioned in-repo).
+//
+// NOT DEPLOYED AUTOMATICALLY. Deploy explicitly with:
+//   firebase deploy --only firestore:rules
+// after reviewing against the console's current rules. Deploying changes
+// who can read/write production data — do it deliberately.
+//
+// Model:
+//   - Roles live on users/{uid}.role  (citizen | employee | executive | driver)
+//     and users/{uid}.status must be "active".
+//   - Operational collections are readable by staff, writable by employees.
+//   - sensor_readings are NEVER writable from a client: the only ingest path
+//     is the server-side /api/iot/readings function (firebase-admin bypasses
+//     these rules after validating the per-device key).
+//   - iot_devices key hashes are never readable by clients.
+// ─────────────────────────────────────────────────────────────────────
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function active() { return signedIn() && me().status == "active"; }
+    function role() { return me().role; }
+    function isStaff() { return active() && role() in ["employee", "executive", "driver"]; }
+    function isEmployee() { return active() && role() in ["employee", "executive"]; }
+    function isDriver() { return active() && role() == "driver"; }
+
+    // Users: a user reads/updates their own profile; employees/executives manage roles & status.
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isEmployee());
+      allow create: if signedIn() && request.auth.uid == uid
+                    && request.resource.data.status == (request.resource.data.role == "citizen" ? "active" : "pending");
+      allow update: if signedIn() && (
+        (request.auth.uid == uid && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["role", "status"]))
+        || isEmployee()
+      );
+      allow delete: if false;
+    }
+
+    match /neighborhoods/{id} { allow read: if signedIn(); allow write: if isEmployee(); }
+
+    match /bins/{id} {
+      allow read: if signedIn();
+      allow create, delete: if isEmployee();
+      // Drivers may only stamp a collection (lastCollectionAt); the reading fields are server-only.
+      allow update: if isEmployee()
+                    || (isDriver() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["lastCollectionAt"]));
+    }
+
+    // Readings: append-only history, written ONLY by the server ingest route.
+    match /sensor_readings/{id} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+
+    // Device registry: only a SHA-256 hash of each device key is ever stored
+    // (set by an employee from Settings when a key is generated); the plain
+    // key is shown once and lives on the ESP32 only.
+    match /iot_devices/{id} {
+      allow read: if isStaff();
+      allow write: if isEmployee();
+    }
+
+    match /vehicles/{id} { allow read: if isStaff(); allow write: if isEmployee(); }
+
+    match /collection_routes/{id} {
+      allow read: if isStaff();
+      allow create, delete: if isEmployee();
+      // Drivers advance only the execution fields of a route; approval/rejection stays with employees.
+      allow update: if isEmployee()
+                    || (isDriver() && resource.data.status in ["approved", "in_progress"]
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "startedAt", "completedAt", "collectedBinIds"])
+                        && request.resource.data.status in ["in_progress", "completed"]);
+    }
+
+    match /collection_events/{id} { allow read: if isStaff(); allow create: if isStaff(); allow update, delete: if false; }
+    match /audit_log/{id}         { allow read: if isEmployee(); allow create: if isStaff(); allow update, delete: if false; }
+    match /alerts/{id}            { allow read: if isStaff(); allow write: if isEmployee(); }
+    match /fire_sensors/{id}      { allow read: if signedIn(); allow write: if isEmployee(); }
+    match /fire_alerts/{id}       { allow read: if isStaff(); allow write: if isEmployee(); }
+
+    // Citizens create their own requests/reports and read them; employees manage them.
+    match /requests/{id} {
+      allow read: if signedIn() && (resource.data.userId == request.auth.uid || isEmployee());
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isEmployee();
+    }
+    match /citizen_reports/{id} {
+      allow read: if signedIn() && (resource.data.userId == request.auth.uid || isStaff());
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isEmployee();
+    }
+
+    match /analytics/{doc}  { allow read: if signedIn(); allow write: if isEmployee(); }
+
+    // Legacy suction-model collections — read-only until retired.
+    match /stations/{id}     { allow read: if signedIn(); allow write: if isEmployee(); }
+    match /suctionJobs/{id}  { allow read: if isStaff();  allow write: if false; }
+    match /containers/{id}   { allow read: if isStaff();  allow write: if false; }
+    match /districts/{id}    { allow read: if isStaff();  allow write: if false; }
+    match /sensors/{id}      { allow read: if isStaff();  allow write: if false; }
+    match /reports/{id}      { allow read: if isStaff();  allow write: if isEmployee(); }
+  }
+}

@@ -12,9 +12,12 @@
  * ─────────────────────────────────────────────────────────────────────
  */
 
-import { collection, addDoc, getDocs, query, limit, doc, setDoc, getDoc } from "firebase/firestore";
+import { collection, addDoc, getDocs, query, limit, doc, setDoc, getDoc, updateDoc, writeBatch, where } from "firebase/firestore";
 import { db } from "./firebase";
-import { COLLECTIONS } from "./firestoreService";
+import { COLLECTIONS, applyRouteReconciliation } from "./firestoreService";
+import { normalizeNeighborhoodName } from "./config";
+import { getBinPriority, pointInPolygon, polygonCentroid, reconcileRecommendations } from "./decisionEngine";
+import buraidahNeighborhoodsGeo from "./buraidahNeighborhoods.geo.json";
 
 const ts = () => new Date().toISOString();
 
@@ -494,4 +497,447 @@ export async function migrateStationsToBinsAndNeighborhoods() {
 
   console.log(`[migrate] ${neighborhoodsCreated} neighborhoods + ${binsCreated} bins created (${binsSkipped} skipped, already migrated) from ${stations.length} stations ✓`);
   return { stationsRead: stations.length, neighborhoodsCreated, binsCreated, binsSkipped };
+}
+
+/**
+ * seedCityDemoData()
+ * ─────────────────────────────────────────────────────────────────────
+ * City-scale demo dataset for the smart-bin model — ~100 bins across all
+ * 14 real Buraidah neighborhoods in buraidahNeighborhoods.geo.json, every
+ * bin placed INSIDE its neighborhood's real polygon, with a deliberate
+ * operational story so a judging panel sees the problem at a glance:
+ *   - 3 neighborhoods in a critical state (clusters of nearly-full bins,
+ *     one of them far from the depot to show distance-aware ordering)
+ *   - 2 neighborhoods at high priority, 2 with active thermal alerts
+ *   - one offline-heavy neighborhood (renders grey — "no reliable data")
+ *   - bins with rising sensor history (prediction engine), a collection
+ *     reset, a fault reading, no-sensor bins, a low-battery device
+ *   - 4 vehicles with a depot position + suggested routes already linked
+ *     to the critical/high bins (status "suggested" only — approval stays
+ *     a human action).
+ *
+ * Re-runnable: every doc is tagged demo:true/_demoSeedVersion, and a run
+ * first removes the previous demo set, then collapses duplicate neighborhood
+ * docs (migration + older seeds created several docs with the same name,
+ * which drew the same map polygon twice and hid its real color).
+ * Legacy migrated bins and the human-approved routes are left untouched.
+ */
+const DEMO_SEED_VERSION = "v2-city";
+
+/** Small deterministic PRNG (mulberry32) so bin positions/fills are stable between runs. */
+function rngFor(seedText) {
+  let h = 1779033703 ^ seedText.length;
+  for (let i = 0; i < seedText.length; i++) {
+    h = Math.imul(h ^ seedText.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  let a = h >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function featureFor(baseName) {
+  return buraidahNeighborhoodsGeo.features.find((f) => f.properties.baseName === baseName) || null;
+}
+
+/** A point inside the neighborhood's real polygon (rejection sampling over its bbox), deterministic per bin. */
+function positionInside(baseName, index) {
+  const feature = featureFor(baseName);
+  if (!feature) return { lat: 26.3612, lng: 43.9744 };
+  const ring = feature.geometry.coordinates[0];
+  const lats = ring.map((c) => c[1]), lngs = ring.map((c) => c[0]);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats), minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+  const rand = rngFor(`${baseName}#${index}`);
+  for (let tries = 0; tries < 200; tries++) {
+    const lat = minLat + rand() * (maxLat - minLat);
+    const lng = minLng + rand() * (maxLng - minLng);
+    if (pointInPolygon(lat, lng, feature.geometry)) return { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)) };
+  }
+  const c = polygonCentroid(feature.geometry);
+  return { lat: Number(c.lat.toFixed(6)), lng: Number(c.lng.toFixed(6)) };
+}
+
+const hoursAgoIso = (h) => new Date(Date.now() - h * 3600000).toISOString();
+
+/** Rising history ending at `endPct` now — gives the prediction engine a real slope. */
+function risingHistory(startPct, endPct, hoursSpan, points = 5) {
+  return Array.from({ length: points }, (_, i) => {
+    const frac = i / (points - 1);
+    return { fill_level_percent: Math.round(startPct + (endPct - startPct) * frac), temperature_celsius: 26 + Math.round(frac * 3), hoursAgo: hoursSpan * (1 - frac) };
+  });
+}
+
+/** Flat history — a normal bin must not trigger a "soon full" prediction. */
+function stableHistory(pct, hoursSpan = 4, points = 4) {
+  return Array.from({ length: points }, (_, i) => ({ fill_level_percent: pct + (i % 2 === 0 ? 0 : 1), temperature_celsius: 25, hoursAgo: hoursSpan * (1 - i / (points - 1)) }));
+}
+
+/** One collection reset inside the window — fill-rate must ignore the pre-reset segment. */
+function resetHistory(currentPct) {
+  return [
+    { fill_level_percent: 81, temperature_celsius: 27, hoursAgo: 8 },
+    { fill_level_percent: 93, temperature_celsius: 28, hoursAgo: 6 },
+    { fill_level_percent: 5, temperature_celsius: 25, hoursAgo: 5.5 },
+    { fill_level_percent: Math.max(6, currentPct - 9), temperature_celsius: 25, hoursAgo: 3 },
+    { fill_level_percent: currentPct, temperature_celsius: 26, hoursAgo: 0.2 },
+  ];
+}
+
+// Bin "kinds" — each expands into fill/temp/connectivity/history. `fill` may be a [min,max] range (deterministic pick).
+const KIND = {
+  normal:   (r) => ({ fill: 10 + Math.round(r() * 35), temp: 24 + Math.round(r() * 5), connectivity: "online", history: "stable" }),
+  medium:   (r) => ({ fill: 60 + Math.round(r() * 12), temp: 26 + Math.round(r() * 6), connectivity: "online", history: "stable" }),
+  high:     (r) => ({ fill: 76 + Math.round(r() * 8), temp: 27 + Math.round(r() * 6), connectivity: "online", history: "rising-slow" }),
+  critical: (r) => ({ fill: 87 + Math.round(r() * 11), temp: 28 + Math.round(r() * 8), connectivity: "online", history: "rising" }),
+  soon:     (r) => ({ fill: 66 + Math.round(r() * 6), temp: 27, connectivity: "online", history: "rising-fast" }),
+  hot:      (r) => ({ fill: 70 + Math.round(r() * 12), temp: 58 + Math.round(r() * 8), connectivity: "online", history: "stable" }),
+  offline:  (r) => ({ fill: 58 + Math.round(r() * 22), temp: 26, connectivity: "offline" }),
+  fault:    () => ({ fill: 150, temp: 27, connectivity: "fault" }),
+  noSensor: (r) => ({ fill: 15 + Math.round(r() * 30), temp: null, connectivity: "no_sensor" }),
+  reset:    () => ({ fill: 24, temp: 26, connectivity: "online", history: "reset" }),
+  lowBatt:  (r) => ({ fill: 30 + Math.round(r() * 20), temp: 25, connectivity: "online", history: "stable", battery: 9 }),
+};
+
+// The city story. Thermal alerts come from the existing fire_sensors seed
+// (حي السالمية / حي النقع = "خطر عالي", حي الإسكان = "خطر متوسط").
+const CITY_SPECS = [
+  { baseName: "الإسكان", story: "حي حرج — تجمّع حاويات شبه ممتلئة",            kinds: ["critical", "critical", "critical", "critical", "critical", "high", "medium", "normal"] },
+  { baseName: "النقع",   story: "حي حرج + تنبيه حراري + مستشعر معطّل",           kinds: ["critical", "critical", "critical", "high", "medium", "fault", "normal"] },
+  { baseName: "الروابي", story: "حي حرج بعيد عن المستودع — ترتيب حسب المسافة",  kinds: ["critical", "critical", "critical", "high", "high", "normal", "normal"] },
+  { baseName: "الحمراء", story: "أولوية مرتفعة + حاوية متوقع امتلاؤها قريبًا",  kinds: ["high", "high", "high", "soon", "medium", "medium", "normal", "normal"] },
+  { baseName: "السالمية", story: "تنبيه حراري نشط + حاويات ساخنة",               kinds: ["hot", "hot", "medium", "medium", "reset", "normal"] },
+  { baseName: "الفايزية", story: "يحتاج متابعة + تنبؤ امتلاء",                   kinds: ["medium", "medium", "medium", "soon", "normal", "normal", "normal", "noSensor"] },
+  { baseName: "الخليج",  story: "أغلب المستشعرات غير متصلة — بيانات غير موثوقة", kinds: ["offline", "offline", "offline", "offline", "normal", "normal"] },
+  { baseName: "الريان",  story: "حي طبيعي — يحوي حاوية العرض BIN-001",            kinds: ["bin001", "normal", "normal", "normal", "normal", "lowBatt"] },
+  { baseName: "الأفق",   story: "حي طبيعي",                                      kinds: ["normal", "normal", "normal", "normal", "normal", "medium"] },
+  { baseName: "النخيل",  story: "مختلط",                                         kinds: ["normal", "normal", "normal", "normal", "medium", "medium", "noSensor", "offline"] },
+  { baseName: "الشروق",  story: "حي طبيعي",                                      kinds: ["normal", "normal", "normal", "normal", "normal", "medium"] },
+  { baseName: "البساتين", story: "يحتاج متابعة",                                 kinds: ["medium", "medium", "medium", "high", "normal", "normal", "normal"] },
+  { baseName: "النقيب",  story: "حي طبيعي في أقصى الشمال + مستشعر غير متصل",     kinds: ["normal", "normal", "normal", "normal", "medium", "offline"] },
+  { baseName: "السلامة", story: "يحتاج متابعة",                                  kinds: ["medium", "medium", "high", "normal", "normal", "normal"] },
+];
+
+const DEPOT = { lat: 26.3340, lng: 43.9720, label: "المستودع الرئيسي — بريدة (موقع افتراضي للعرض)" };
+
+const DEMO_VEHICLES = [
+  { vehicleNumber: "مركبة جمع 1", status: "available",   capacityLiters: 6000, driverName: "سائق تجريبي" },
+  { vehicleNumber: "مركبة جمع 2", status: "available",   capacityLiters: 6000, driverName: null },
+  { vehicleNumber: "مركبة جمع 3", status: "maintenance", capacityLiters: 5000, driverName: null },
+  { vehicleNumber: "مركبة جمع 4", status: "available",   capacityLiters: 8000, driverName: null },
+];
+
+function expandKind(kind, rand, baseName, index) {
+  if (kind === "bin001") return { label: "BIN-001", fill: 55, temp: 27, connectivity: "online", history: "stable" };
+  const spec = KIND[kind](rand);
+  return { label: `حاوية ${baseName} ${index + 1}`, ...spec };
+}
+
+function historyFor(spec) {
+  switch (spec.history) {
+    case "rising":      return risingHistory(Math.max(5, spec.fill - 45), spec.fill, 7);
+    case "rising-slow": return risingHistory(Math.max(5, spec.fill - 20), spec.fill, 8);
+    case "rising-fast": return risingHistory(Math.max(5, spec.fill - 30), spec.fill, 2.5, 6);
+    case "stable":      return stableHistory(spec.fill);
+    case "reset":       return resetHistory(spec.fill);
+    default:            return null;
+  }
+}
+
+async function deleteDocsInBatches(refs) {
+  for (let i = 0; i < refs.length; i += 400) {
+    const batch = writeBatch(db);
+    refs.slice(i, i + 400).forEach((ref) => batch.delete(ref));
+    await batch.commit();
+  }
+}
+
+/** Step 1 — remove the previous demo set (any version). Legacy/migrated docs and human-approved routes are never touched. */
+async function removePreviousDemoData() {
+  const deletedBinIds = new Set();
+  let deleted = 0;
+
+  const demoBins = await getDocs(query(collection(db, COLLECTIONS.BINS), where("demo", "==", true)));
+  demoBins.docs.forEach((d) => deletedBinIds.add(d.id));
+
+  for (const col of [COLLECTIONS.BINS, COLLECTIONS.IOT_DEVICES, COLLECTIONS.SENSOR_READINGS, COLLECTIONS.VEHICLES]) {
+    const snap = await getDocs(query(collection(db, col), where("demo", "==", true)));
+    await deleteDocsInBatches(snap.docs.map((d) => d.ref));
+    deleted += snap.size;
+  }
+
+  // Routes/events that referenced the removed bins would otherwise dangle.
+  const routesSnap = await getDocs(collection(db, COLLECTIONS.COLLECTION_ROUTES));
+  const danglingRoutes = routesSnap.docs.filter((d) => {
+    const r = d.data();
+    if (r.demo === true) return true;
+    const referencesDeleted = (r.binIds || []).some((id) => deletedBinIds.has(id));
+    return referencesDeleted && r.status !== "completed"; // completed history stays as a record
+  });
+  await deleteDocsInBatches(danglingRoutes.map((d) => d.ref));
+  deleted += danglingRoutes.length;
+
+  const eventsSnap = await getDocs(collection(db, COLLECTIONS.COLLECTION_EVENTS));
+  const danglingEvents = eventsSnap.docs.filter((d) => deletedBinIds.has(d.data().binId) || d.data().demo === true);
+  await deleteDocsInBatches(danglingEvents.map((d) => d.ref));
+  deleted += danglingEvents.length;
+
+  for (const col of [COLLECTIONS.CITIZEN_REPORTS, COLLECTIONS.AUDIT_LOG]) {
+    const snap = await getDocs(query(collection(db, col), where("demo", "==", true)));
+    await deleteDocsInBatches(snap.docs.map((d) => d.ref));
+    deleted += snap.size;
+  }
+
+  // Open alerts are derived state — they regenerate from live bins within seconds (syncAlertsFromCandidates).
+  const alertsSnap = await getDocs(query(collection(db, COLLECTIONS.ALERTS), where("resolved", "==", false)));
+  await deleteDocsInBatches(alertsSnap.docs.map((d) => d.ref));
+  deleted += alertsSnap.size;
+
+  return { deleted };
+}
+
+/**
+ * Step 2 — one neighborhood doc per real neighborhood. Duplicates (same
+ * normalized name) are collapsed: bins are re-pointed to the kept doc and
+ * the extras are deleted. Missing ones of the 14 real polygons are created.
+ * Every kept doc gets its real polygon centroid and a standard "حي X" name.
+ */
+async function reconcileNeighborhoodDocs() {
+  const snap = await getDocs(collection(db, COLLECTIONS.NEIGHBORHOODS));
+  const all = snap.docs.map((d) => ({ id: d.id, ref: d.ref, ...d.data() }));
+  const byKey = new Map();
+  for (const n of all) {
+    const key = normalizeNeighborhoodName(n.name);
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(n);
+  }
+
+  const keptIdByKey = {};
+  let merged = 0, created = 0;
+
+  for (const [key, docs] of byKey.entries()) {
+    docs.sort((a, b) => (Number(!!a.demo) - Number(!!b.demo)) || ((a.createdAt || "") < (b.createdAt || "") ? -1 : 1));
+    const keep = docs[0];
+    keptIdByKey[key] = keep.id;
+    const extras = docs.slice(1);
+    if (extras.length > 0) {
+      const binsSnap = await getDocs(query(collection(db, COLLECTIONS.BINS), where("neighborhoodId", "in", extras.map((e) => e.id).slice(0, 10))));
+      const batch = writeBatch(db);
+      binsSnap.docs.forEach((b) => batch.update(b.ref, { neighborhoodId: keep.id }));
+      extras.forEach((e) => batch.delete(e.ref));
+      await batch.commit();
+      merged += extras.length;
+    }
+    const feature = featureFor(key);
+    const center = feature ? polygonCentroid(feature.geometry) : null;
+    await updateDoc(keep.ref, {
+      name: `حي ${key}`, city: "بريدة",
+      centerLat: center ? Number(center.lat.toFixed(6)) : keep.centerLat ?? null,
+      centerLng: center ? Number(center.lng.toFixed(6)) : keep.centerLng ?? null,
+      boundarySource: feature ? (feature.properties.source || "openstreetmap") : null,
+      demo: false,
+    });
+  }
+
+  for (const feature of buraidahNeighborhoodsGeo.features) {
+    const key = feature.properties.baseName;
+    if (keptIdByKey[key]) continue;
+    const center = polygonCentroid(feature.geometry);
+    const ref = await addDoc(collection(db, COLLECTIONS.NEIGHBORHOODS), {
+      name: `حي ${key}`, city: "بريدة", boundary: null,
+      centerLat: Number(center.lat.toFixed(6)), centerLng: Number(center.lng.toFixed(6)),
+      boundarySource: feature.properties.source || "openstreetmap",
+      demo: false, createdAt: ts(),
+    });
+    keptIdByKey[key] = ref.id;
+    created += 1;
+  }
+
+  return { keptIdByKey, merged, created };
+}
+
+export async function seedCityDemoData() {
+  const cleanup = await removePreviousDemoData();
+  const { keptIdByKey, merged, created: neighborhoodsCreated } = await reconcileNeighborhoodDocs();
+
+  let binsCreated = 0, readingsCreated = 0;
+  const seededBins = [];      // {bin, readings} — scored below to build the linked suggested routes
+  const neighborhoodDocs = []; // minimal {id, name} for the route engine
+
+  for (const spec of CITY_SPECS) {
+    const neighborhoodId = keptIdByKey[spec.baseName];
+    if (!neighborhoodId) continue;
+    neighborhoodDocs.push({ id: neighborhoodId, name: `حي ${spec.baseName}` });
+
+    const batch = writeBatch(db);
+    const rand = rngFor(`city-${spec.baseName}`);
+    spec.kinds.forEach((kind, i) => {
+      const s = expandKind(kind, rand, spec.baseName, i);
+      const pos = positionInside(spec.baseName, i);
+      const hasDevice = s.connectivity !== "no_sensor";
+      const isStale = s.connectivity === "offline";
+      const lastReadingAt = hasDevice ? (isStale ? hoursAgoIso(2 + (i % 3)) : hoursAgoIso(0.02 + (i % 4) * 0.05)) : null;
+      const deviceId = hasDevice ? `DEV-${spec.baseName}-${String(i + 1).padStart(2, "0")}` : null;
+
+      const binRef = doc(collection(db, COLLECTIONS.BINS));
+      const bin = {
+        name: s.label, neighborhoodId, lat: pos.lat, lng: pos.lng,
+        wasteType: ["مختلط", "عضوية", "بلاستيك", "ورق"][i % 4], capacityLiters: i % 5 === 0 ? 2400 : 1100,
+        deviceId, status: "normal",
+        lastFillLevelPercent: s.fill, lastTemperatureCelsius: s.temp, lastReadingAt,
+        lastBatteryLevel: hasDevice ? (s.battery ?? 60 + ((i * 11) % 38)) : null,
+        lastCollectionAt: hoursAgoIso(12 + (i * 9) % 80),
+        demo: true, _demoSeedVersion: DEMO_SEED_VERSION, _demoStory: spec.story, createdAt: ts(),
+      };
+      batch.set(binRef, bin);
+      binsCreated += 1;
+
+      if (hasDevice) {
+        batch.set(doc(collection(db, COLLECTIONS.IOT_DEVICES)), {
+          binId: binRef.id, deviceId, deviceKey: "demo-key-not-for-production", deviceKeyHash: null, disabled: false, label: `ESP32-${deviceId}`,
+          lastSeenAt: lastReadingAt, demo: true, _demoSeedVersion: DEMO_SEED_VERSION, createdAt: ts(),
+        });
+      }
+
+      const history = hasDevice && !isStale ? historyFor(s) : null;
+      const readings = [];
+      if (history) {
+        for (const h of history) {
+          const reading = {
+            bin_id: binRef.id, device_id: deviceId,
+            fill_level_percent: h.fill_level_percent, temperature_celsius: h.temperature_celsius,
+            battery_level: null, signal: null,
+            timestamp: hoursAgoIso(h.hoursAgo), receivedAt: hoursAgoIso(h.hoursAgo),
+            demo: true, _demoSeedVersion: DEMO_SEED_VERSION,
+          };
+          batch.set(doc(collection(db, COLLECTIONS.SENSOR_READINGS)), reading);
+          readings.push(reading);
+          readingsCreated += 1;
+        }
+      }
+      seededBins.push({ bin: { id: binRef.id, ...bin }, readings });
+    });
+    await batch.commit();
+  }
+
+  for (const v of DEMO_VEHICLES) {
+    await addDoc(collection(db, COLLECTIONS.VEHICLES), {
+      ...v, depotLat: DEPOT.lat, depotLng: DEPOT.lng, depotLabel: DEPOT.label,
+      currentRouteId: null, lastActiveAt: null,
+      demo: true, _demoSeedVersion: DEMO_SEED_VERSION, createdAt: ts(),
+    });
+  }
+
+  // ── Last-7-days history: completed routes, collection events, skips/incidents —
+  // so "أداء السائقين والمركبات" and response-time metrics have real rows to compute from.
+  const vehiclesSnap = await getDocs(query(collection(db, COLLECTIONS.VEHICLES), where("demo", "==", true)));
+  const vehicleIds = vehiclesSnap.docs.map((d) => d.id);
+  const history = await seedFleetHistory(seededBins, neighborhoodDocs, vehicleIds);
+
+  // ── Open citizen reports that CONFIRM sensor data (§19 secondary signal):
+  // two on الحمراء bins, one on النقع — the bins/neighborhood get a visible bump + reason.
+  const reportTargets = [
+    { base: "الحمراء", idx: 0, text: "الحاوية ممتلئة والأكياس على الأرض منذ أمس" },
+    { base: "الحمراء", idx: 1, text: "رائحة قوية والحاوية لا تُغلق من الامتلاء" },
+    { base: "النقع", idx: 3, text: "حاوية ممتلئة أمام المسجد" },
+  ];
+  let reportsCreated = 0;
+  for (const t of reportTargets) {
+    const target = seededBins.find(({ bin }) => bin.name === `حاوية ${t.base} ${t.idx + 1}`);
+    if (!target) continue;
+    await addDoc(collection(db, COLLECTIONS.CITIZEN_REPORTS), {
+      userId: "demo-citizen", userName: "مواطن (تجريبي)", district: `حي ${t.base}`, type: "حاوية ممتلئة",
+      description: t.text, location: `حي ${t.base} - بريدة`, binId: target.bin.id, binName: target.bin.name,
+      status: "قيد المعالجة", response: "", demo: true, _demoSeedVersion: DEMO_SEED_VERSION, createdAt: hoursAgoIso(3 + reportsCreated),
+    });
+    reportsCreated += 1;
+  }
+
+  // Link the full bins to suggested routes right away (status "suggested" only —
+  // approving/dispatching stays an explicit human action in the UI).
+  const fireSnap = await getDocs(collection(db, "fire_sensors"));
+  const thermal = new Set(fireSnap.docs.map((d) => d.data()).filter((s) => s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط").map((s) => normalizeNeighborhoodName(s.district)));
+  const nameById = Object.fromEntries(neighborhoodDocs.map((n) => [n.id, n.name]));
+  const scored = seededBins.map(({ bin, readings }) => ({
+    bin, priority: getBinPriority(bin, null, readings, { thermalAlert: thermal.has(normalizeNeighborhoodName(nameById[bin.neighborhoodId] || "")) }),
+  }));
+  const openSnap = await getDocs(query(collection(db, COLLECTIONS.COLLECTION_ROUTES), where("status", "in", ["suggested", "approved", "in_progress"])));
+  const openRoutes = openSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const plan = reconcileRecommendations(neighborhoodDocs, scored, openRoutes);
+  const routeResult = await applyRouteReconciliation(plan, { demo: true, _demoSeedVersion: DEMO_SEED_VERSION });
+
+  console.log(`[city-seed] cleaned ${cleanup.deleted} old docs, merged ${merged} duplicate neighborhoods, created ${neighborhoodsCreated} missing neighborhoods, ${binsCreated} bins, ${readingsCreated} readings, ${DEMO_VEHICLES.length} vehicles, ${routeResult.created} suggested routes, ${history.routes} completed routes, ${reportsCreated} citizen reports ✓`);
+  return {
+    neighborhoodsCreated, neighborhoodsMerged: merged, binsCreated, readingsCreated,
+    vehiclesCreated: DEMO_VEHICLES.length, routesCreated: routeResult.created, cleaned: cleanup.deleted,
+    historyRoutes: history.routes, citizenReports: reportsCreated,
+  };
+}
+
+/**
+ * Seven days of completed demo routes (one or two per day) with their
+ * collection events and a few skips/incidents in the audit log — realistic
+ * enough for per-vehicle/per-driver performance, on-time rates and the
+ * approval→start response time to mean something. All tagged demo:true.
+ */
+async function seedFleetHistory(seededBins, neighborhoodDocs, vehicleIds) {
+  if (vehicleIds.length === 0 || seededBins.length === 0) return { routes: 0 };
+  const rand = rngFor("fleet-history");
+  const drivers = [
+    { id: "demo-driver-1", name: "سائق تجريبي" },
+    { id: "demo-driver-2", name: "خالد (سائق تجريبي)" },
+  ];
+  const byNeighborhood = {};
+  for (const { bin } of seededBins) (byNeighborhood[bin.neighborhoodId] ||= []).push(bin);
+  const nIds = Object.keys(byNeighborhood);
+  let created = 0;
+
+  for (let day = 7; day >= 1; day--) {
+    const runs = day % 3 === 0 ? 1 : 2;
+    for (let k = 0; k < runs; k++) {
+      const nid = nIds[Math.floor(rand() * nIds.length)];
+      const nBins = byNeighborhood[nid].slice(0, 3 + Math.floor(rand() * 3));
+      const vehicleId = vehicleIds[(day + k) % vehicleIds.length];
+      const driver = drivers[(day + k) % drivers.length];
+      const plannedKm = Math.round((2 + rand() * 6) * 10) / 10;
+      const approvedAt = hoursAgoIso(day * 24 + 3 + k * 4);
+      const startedAt = hoursAgoIso(day * 24 + 3 + k * 4 - (0.2 + rand() * 1.5));
+      const durationH = (plannedKm / 30) + nBins.length * (4 / 60) + (rand() < 0.3 ? 0.6 : 0.1);
+      const completedAt = new Date(new Date(startedAt).getTime() + durationH * 3600000).toISOString();
+      const skipIdx = rand() < 0.35 ? Math.floor(rand() * nBins.length) : -1;
+
+      const routeRef = await addDoc(collection(db, COLLECTIONS.COLLECTION_ROUTES), {
+        routeName: `جولة ${neighborhoodDocs.find((n) => n.id === nid)?.name || "حي"} — ${day} يوم مضى`,
+        neighborhoodIds: [nid], binIds: nBins.map((b) => b.id),
+        orderedStops: nBins.map((b, i) => ({ order: i + 1, binId: b.id, binName: b.name, priorityTier: i === 0 ? "critical" : "high", priorityScore: 80 - i * 6, hasCoords: true })),
+        priorityTier: "high", totalPriorityScore: 70 * nBins.length, estimatedDistanceKm: plannedKm, estimatedWasteLiters: nBins.length * 900,
+        reasons: ["جولة تاريخية للعرض"], status: "completed", manualBinIds: [],
+        approvedBy: "demo-supervisor", approvedAt, startedAt, completedAt, vehicleId, driverId: driver.id, driverName: driver.name,
+        collectedBinIds: nBins.filter((_, i) => i !== skipIdx).map((b) => b.id),
+        demo: true, _demoSeedVersion: DEMO_SEED_VERSION, createdAt: approvedAt,
+      });
+      const batch = writeBatch(db);
+      nBins.forEach((b, i) => {
+        if (i === skipIdx) {
+          batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "route_stop_skipped", actorId: driver.id, actorName: driver.name, details: { routeId: routeRef.id, binId: b.id, routeName: "" }, demo: true, createdAt: completedAt });
+          return;
+        }
+        batch.set(doc(collection(db, COLLECTIONS.COLLECTION_EVENTS)), {
+          binId: b.id, routeId: routeRef.id, vehicleId, operatorId: driver.id,
+          fillBefore: 72 + Math.round(rand() * 26), fillAfter: 0, source: "route",
+          collectedAt: completedAt, createdAt: completedAt, demo: true, _demoSeedVersion: DEMO_SEED_VERSION,
+        });
+      });
+      if (rand() < 0.25) {
+        batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: rand() < 0.5 ? "route_obstacle_reported" : "route_fault_reported", actorId: driver.id, actorName: driver.name, details: { routeId: routeRef.id, routeName: "" }, demo: true, createdAt: completedAt });
+      }
+      batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "route_completed", actorId: driver.id, actorName: driver.name, details: { routeId: routeRef.id, by: "driver" }, demo: true, createdAt: completedAt });
+      await batch.commit();
+      created += 1;
+    }
+  }
+  return { routes: created };
 }

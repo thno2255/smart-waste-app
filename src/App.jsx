@@ -1,5 +1,5 @@
 // ============================================================
-// نظام إدارة شفط النفايات الذكي - بريدة
+// نظام إدارة الحاويات الذكية - بريدة
 // ملف واحد كامل مع Firebase Auth + Firestore + Role-based Routing
 // ============================================================
 //
@@ -11,7 +11,7 @@
 //
 // ============================================================
 
-import React, { useState, useEffect, useMemo, useRef, createContext, useContext } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } from "react";
 
 import {
   BarChart2, DollarSign, TrendingUp, TrendingDown, Zap,
@@ -26,7 +26,13 @@ import {
   Bookmark, LayoutDashboard, Inbox, Sliders, ClipboardList,
   Home, HardHat, ShieldCheck, Eye, EyeOff, Mail, KeyRound,
   ChevronRight, X, BellRing, ShieldAlert,
+  Wifi, WifiOff, Battery, Search, Filter, Navigation, Route as RouteIcon,
+  Layers, Map as MapGlyph,
 } from "lucide-react";
+
+import { MapContainer, TileLayer, GeoJSON, CircleMarker, Polyline, Popup, useMap } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import buraidahNeighborhoodsGeo from "./buraidahNeighborhoods.geo.json";
 
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -52,7 +58,6 @@ import {
   getDoc,
   collection,
   getDocs,
-  addDoc,
   onSnapshot,
   updateDoc,
   query,
@@ -74,10 +79,66 @@ import {
   deleteCitizenReport,
   syncDistrictsPerfFromStations,
   recordDailyStationHistory,
+  useNeighborhoods,
+  useBins,
+  useBinReadings,
+  useRecentReadings,
+  useVehicles,
+  useCollectionRoutes,
+  useCollectionEvents,
+  useAuditLog,
+  addVehicle,
+  updateVehicleStatus,
+  applyRouteReconciliation,
+  updateRoute,
+  approveRoute,
+  rejectRoute,
+  deferRoute,
+  startRoute,
+  completeRoute,
+  recordCollectionEvent,
+  writeAuditLog,
+  syncAlertsFromCandidates,
+  demoSetReading,
+  demoSetOffline,
+  demoSetFault,
+  demoReset,
+  useIotDevices,
+  rotateDeviceKey,
+  setDeviceDisabled,
   COLLECTIONS,
 } from "./firestoreService";
-import { getStatus } from "./config";
-import { seedAllCollections, migrateStationsToBinsAndNeighborhoods } from "./seedFirestore";
+import {
+  getStatus,
+  THRESHOLDS,
+  STATUS_COLORS,
+  STATE_LABELS,
+  CONFIDENCE_LABELS,
+  ROUTE_STATUS_LABELS,
+  VEHICLE_STATUS_LABELS,
+  getSensorConnectivity,
+  getBinTier,
+  getReadingAgeLabel,
+  normalizeNeighborhoodName,
+} from "./config";
+import {
+  getBinPriority,
+  getNeighborhoodPriority,
+  routePreCheck,
+  haversineDistanceKm,
+  polygonCentroid,
+  orderStopsFrom,
+  estimateTravelMinutes,
+  groupNeighborhoodsByName,
+  findOpenRouteForBin,
+  rankNeighborhoodsForCollection,
+  reconcileRecommendations,
+} from "./decisionEngine";
+import { predictFutureState, computeFillRate } from "./prediction";
+import { generateAlertCandidates, ALERT_TYPE_LABELS, ALERT_TYPE_ICONS } from "./alertsEngine";
+import { useRoadRoute } from "./roadRouting";
+import { computeImpactMetrics, computeFleetPerformance } from "./impact";
+import { seedAllCollections, migrateStationsToBinsAndNeighborhoods, seedCityDemoData } from "./seedFirestore";
 import { exportAllDataToExcel } from "./exportAllDataToExcel";
 // ============================================================
 // 🔐 AUTH CONTEXT
@@ -119,12 +180,13 @@ const AuthProvider = ({ children }) => {
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(cred.user, { displayName: fullName });
-      // المواطن يدخل مباشرة، الموظف والإدارة العليا ينتظرون الموافقة
-      const needsApproval = role === "employee" || role === "executive";
+      // المواطن يدخل مباشرة، بقية الأدوار (موظف/سائق/إدارة عليا) تنتظر الموافقة
+      const needsApproval = role === "employee" || role === "executive" || role === "driver";
+      const roleArMap = { executive: "إدارة عليا", employee: "موظف", driver: "سائق ميداني", citizen: "مواطن" };
       const userDocData = {
         uid: cred.user.uid, email, fullName, phone: phone || "", district: district || "",
         role: role || "citizen",
-        roleAr: role === "executive" ? "إدارة عليا" : role === "employee" ? "موظف" : "مواطن",
+        roleAr: roleArMap[role] || "مواطن",
         status: needsApproval ? "pending" : "active",
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       };
@@ -233,7 +295,8 @@ const AuthProvider = ({ children }) => {
 const DISTRICTS = ["حي الخليج","حي الفايزية","حي الإسكان","حي الريان","حي السالمية","حي الحمر","حي المنتزه","حي الأفق","حي النقع","حي الضاحي","حي الهلالية","حي البصيرة"];
 const ROLES_LIST = [
   { value: "citizen",   label: "الأفراد",    icon: <Home size={22} />,       desc: "طلب حاويات ومتابعة الخدمات", color: "#10b981" },
-  { value: "employee",  label: "موظف",       icon: <HardHat size={22} />,    desc: "إدارة المحطات والعمليات",    color: "#3b82f6" },
+  { value: "employee",  label: "موظف",       icon: <HardHat size={22} />,    desc: "إدارة الأحياء والعمليات",    color: "#3b82f6" },
+  { value: "driver",    label: "سائق ميداني", icon: <Truck size={22} />,     desc: "تنفيذ جولات الجمع ميدانيًا",  color: "#8b5cf6" },
   { value: "executive", label: "إدارة عليا", icon: <Landmark size={22} />,   desc: "لوحة متخذي القرار",          color: "#f59e0b" },
 ];
 
@@ -810,29 +873,6 @@ const generateMonthlyTrend = () =>
     التكلفة: Math.round(5000 + Math.random() * 10000),
   }));
 
-const generateHourlyData = () =>
-  Array.from({ length: 24 }, (_, i) => ({
-    hour: `${String(i).padStart(2, "0")}:00`,
-    الشفط: Math.round(Math.sin((i - 6) * 0.3) * 40 + 50 + Math.random() * 20),
-    الضغط: +(1 + Math.sin((i - 8) * 0.25) * 2 + Math.random() * 0.5).toFixed(1),
-  }));
-
-const generateAlerts = (stations = []) => {
-  const alerts = [];
-  stations.forEach((s) => {
-    const status = getStatus(s.fillLevel);
-    if (status === "حرج") {
-      alerts.push({ id: `${s.id}_c`, type: "حرج", message: `${s.name} - مستوى الامتلاء وصل ${s.fillLevel}%`, time: "الآن", icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} /> });
-    } else if (status === "تحذير") {
-      alerts.push({ id: `${s.id}_w`, type: "تحذير", message: `${s.name} - مستوى الامتلاء ${s.fillLevel}%`, time: "الآن", icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} /> });
-    }
-  });
-  if (alerts.length === 0) {
-    alerts.push({ id: "ok", type: "معلومة", message: "جميع المحطات تعمل بشكل طبيعي ✅", time: "الآن", icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#10b981",flexShrink:0}} /> });
-  }
-  return alerts;
-};
-
 // --- Colors ---
 const C = {
   bg: "#0a0e1a", card: "#111827", cardHover: "#1a2337", border: "#1e293b",
@@ -935,36 +975,820 @@ const ChartBox = ({ height = 280, children }) => {
   );
 };
 
+// ======================== SHARED: STATE BADGE / EMPTY STATE ========================
+// Unified badge for the new 7-state vocabulary (normal/warning/high/critical/
+// offline/fault/no_sensor) — separate from the legacy Arabic-keyed StatusBadge
+// above, which existing station/container UI still relies on untouched.
+const StateBadge = ({ state }) => {
+  const color = STATUS_COLORS[state] || STATUS_COLORS.offline;
+  const label = STATE_LABELS[state] || state;
+  return (
+    <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: color + "20", color, border: `1px solid ${color}40`, whiteSpace: "nowrap" }}>
+      {label}
+    </span>
+  );
+};
+
+/** §33 — every demo-tagged bin/neighborhood/route must carry a visible "تجريبي" marker, never blended silently with live data. */
+const DemoBadge = () => (
+  <span style={{ padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: "#8b5cf620", color: "#8b5cf6", border: "1px solid #8b5cf640", whiteSpace: "nowrap" }}>
+    تجريبي
+  </span>
+);
+
+const EmptyState = ({ icon, title, desc }) => (
+  <div style={{ textAlign: "center", padding: "40px 20px", color: C.dim }}>
+    <div style={{ fontSize: 34, marginBottom: 10, opacity: 0.6 }}>{icon}</div>
+    <div style={{ fontSize: 14, fontWeight: 700, color: C.muted, marginBottom: 4 }}>{title}</div>
+    {desc && <div style={{ fontSize: 12, color: C.dim }}>{desc}</div>}
+  </div>
+);
+
+/**
+ * decisionEngine's getNeighborhoodPriority() tier vocabulary is strictly
+ * low/medium/high/critical (per spec) — it never classifies a neighborhood
+ * as "offline". But the map/list UI still needs a 5th grey "no data / mostly
+ * offline" display state (§9), so that's a presentation-layer rule applied
+ * on top of the engine's output here, not baked into the engine itself.
+ */
+function neighborhoodDisplayTier(priorityResult) {
+  if (!priorityResult || priorityResult.total === 0) return "offline";
+  if (priorityResult.offlineCount / priorityResult.total >= 0.5) return "offline";
+  return priorityResult.tier;
+}
+
+// ======================== OPERATIONAL MAP ========================
+const BURAIDAH_CENTER = [26.3612, 43.9744]; // centroid of the 14 real neighborhood polygons in buraidahNeighborhoods.geo.json
+
+function neighborhoodFeatureFor(neighborhood) {
+  if (!neighborhood) return null;
+  const base = normalizeNeighborhoodName(neighborhood.name);
+  return buraidahNeighborhoodsGeo.features.find((f) => f.properties.baseName === base) || null;
+}
+
+// Demo-only fallback position for bins with no real lat/lng yet — deterministic
+// (same bin always lands in the same spot) so markers don't jump between renders.
+// Clearly flagged in the popup as approximate whenever used.
+function demoPositionForBin(bin, feature) {
+  if (bin.lat != null && bin.lng != null) return { pos: [bin.lat, bin.lng], demo: false };
+  if (!feature) return null;
+  const coords = feature.geometry.coordinates[0];
+  const lats = coords.map((c) => c[1]), lngs = coords.map((c) => c[0]);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+  const seed = String(bin.id || bin.name || "x").split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+  const fracLat = ((seed * 9301 + 49297) % 233280) / 233280;
+  const fracLng = ((seed * 4321 + 12345) % 233280) / 233280;
+  return { pos: [minLat + fracLat * (maxLat - minLat), minLng + fracLng * (maxLng - minLng)], demo: true };
+}
+
+const MAP_FILTERS = [
+  { key: "all", label: "عرض الكل" },
+  { key: "critical", label: "الحاويات الحرجة" },
+  { key: "offline", label: "Offline" },
+  { key: "thermal", label: "تنبيه حراري" },
+  { key: "needsCollection", label: "تحتاج جمع" },
+];
+
+const MAP_LEGEND = [
+  ["طبيعي", "normal"], ["يحتاج متابعة", "warning"], ["أولوية مرتفعة", "high"],
+  ["حرج", "critical"], ["بدون بيانات كافية", "offline"],
+];
+
+function FlyTo({ target }) {
+  const map = useMap();
+  useEffect(() => {
+    if (target) map.flyTo(target.center, target.zoom ?? 14, { duration: 0.8 });
+  }, [target, map]);
+  return null;
+}
+
+/**
+ * Reusable operational map — embedded (compact) in the Dashboard and shown
+ * full-size on its own "الخريطة التشغيلية" page.
+ * Neighborhood polygons come from buraidahNeighborhoods.geo.json — clearly
+ * labeled in-UI as approximate/demo, not surveyed boundaries (see footnote).
+ */
+const HORIZONS = [
+  { key: 0, label: "الآن" },
+  { key: 1, label: "بعد ساعة" },
+  { key: 3, label: "بعد 3 ساعات" },
+  { key: 6, label: "بعد 6 ساعات" },
+];
+
+/** Map positions for a route's ordered stops (deterministic demo fallback for bins without coords). */
+function routeStopPositions(route, bins, neighborhoods) {
+  if (!route) return [];
+  return (route.orderedStops || [])
+    .map((s) => {
+      const bin = bins.find((b) => b.id === s.binId);
+      if (!bin) return null;
+      const n = neighborhoods.find((n2) => n2.id === bin.neighborhoodId);
+      const pos = demoPositionForBin(bin, neighborhoodFeatureFor(n));
+      return pos ? { ...s, pos: pos.pos, approximate: pos.demo, bin } : null;
+    })
+    .filter(Boolean);
+}
+
+const OPEN_ROUTE_STATUSES_UI = ["suggested", "approved", "in_progress"];
+
+const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], height = 440, onViewBins, onAddToRoute, onOpenRoute, compact = false, initialSelectedKey = null }) => {
+  const [filter, setFilter] = useState("all");
+  const [horizon, setHorizon] = useState(0);
+  const [selectedKey, setSelectedKey] = useState(initialSelectedKey);
+  const [flyTarget, setFlyTarget] = useState(null);
+
+  const readingsByBin = useMemo(() => {
+    const map = {};
+    for (const r of recentReadings) {
+      if (!r.bin_id) continue;
+      if (!map[r.bin_id]) map[r.bin_id] = [];
+      map[r.bin_id].push(r);
+    }
+    return map;
+  }, [recentReadings]);
+
+  // At horizon=0, bins render as-is. At horizon>0, each bin becomes its
+  // PROJECTED state (§7/§8) — if no reliable prediction exists for that bin,
+  // it's flagged _noForecast so it renders grey rather than a fabricated color.
+  const projectedBins = useMemo(() => {
+    if (horizon === 0) return bins.map((b) => ({ ...b, _noForecast: false }));
+    return bins.map((b) => {
+      const readings = readingsByBin[b.id] || [];
+      const future = predictFutureState(b, readings, horizon);
+      if (!future.predictionAvailable) return { ...b, _noForecast: true };
+      return { ...b, lastFillLevelPercent: future.predictedFillLevel, _noForecast: false };
+    });
+  }, [bins, horizon, readingsByBin]);
+
+  const binsByNeighborhood = useMemo(() => {
+    const map = {};
+    for (const b of projectedBins) {
+      const key = b.neighborhoodId || "__none";
+      if (!map[key]) map[key] = [];
+      map[key].push(b);
+    }
+    return map;
+  }, [projectedBins]);
+
+  const isThermalAlert = (neighborhoodName) =>
+    fireSensors.some((s) =>
+      normalizeNeighborhoodName(s.district) === normalizeNeighborhoodName(neighborhoodName) &&
+      (s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط")
+    );
+
+  const openRoutes = useMemo(() => routes.filter((r) => OPEN_ROUTE_STATUSES_UI.includes(r.status)), [routes]);
+  const binCtx = useMemo(() => makeBinContext(fireSensors, citizenReports, neighborhoods), [fireSensors, citizenReports, neighborhoods]);
+
+  // ONE entry per real neighborhood: duplicate Firestore docs with the same
+  // name are merged (their bins summed), so the same polygon is never drawn
+  // twice with an empty duplicate's grey covering the real color.
+  const neighborhoodStats = useMemo(() => {
+    const groups = groupNeighborhoodsByName(neighborhoods, projectedBins);
+    return groups.map((g) => {
+      const nBins = g.ids.flatMap((id) => binsByNeighborhood[id] || []);
+      const thermalAlert = isThermalAlert(g.name);
+      const scoredBins = nBins.map((bin) => ({
+        bin,
+        priority: bin._noForecast ? { score: 0, tier: "low", reasons: [], sensorHealth: { connectivity: "offline" }, prediction: { predictionAvailable: false } } : getBinPriority(bin, null, [], binCtx.forBin(bin)),
+      }));
+      const nhCtx = binCtx.forNeighborhoodName(g.name);
+      const citizenReportCount = nhCtx.citizenReportCount + nBins.reduce((a, b) => a + binCtx.reportCountForBin(b.id), 0);
+      const result = getNeighborhoodPriority(scoredBins, { thermalAlert, citizenReportCount });
+      const status = horizon > 0 && nBins.length > 0 && nBins.every((b) => b._noForecast) ? "offline" : neighborhoodDisplayTier(result);
+      const feature = buraidahNeighborhoodsGeo.features.find((f) => f.properties.baseName === g.key) || null;
+      const route = openRoutes.find((r) => (r.neighborhoodIds || []).some((id) => g.ids.includes(id))) || null;
+      return { key: g.key, id: g.primary.id, ids: g.ids, name: g.name, ...result, status, bins: nBins, feature, thermalAlert, route };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [neighborhoods, projectedBins, binsByNeighborhood, fireSensors, horizon, openRoutes, binCtx]);
+
+  const filteredBins = useMemo(() => {
+    return projectedBins.filter((b) => {
+      if (filter === "all") return true;
+      const priority = b._noForecast ? null : getBinPriority(b, null, []);
+      if (filter === "critical") return priority?.tier === "critical";
+      if (filter === "offline") { const c = getSensorConnectivity(b); return c === "offline" || c === "fault" || b._noForecast; }
+      if (filter === "needsCollection") return priority && (priority.tier === "high" || priority.tier === "critical");
+      if (filter === "thermal") {
+        const n = neighborhoods.find((n2) => n2.id === b.neighborhoodId);
+        return n ? isThermalAlert(n.name) : false;
+      }
+      return true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectedBins, filter, neighborhoods, fireSensors]);
+
+  const selectedStats = neighborhoodStats.find((n) => n.key === selectedKey);
+  const hasAnyGeo = neighborhoodStats.some((n) => n.feature);
+
+  // Route overlay: the selected neighborhood's open route drawn as a dashed
+  // line through its ordered stops — the visible link between full bins and
+  // the route that will collect them.
+  const selectedRoutePoints = useMemo(
+    () => (selectedStats?.route ? routeStopPositions(selectedStats.route, bins, neighborhoods) : []),
+    [selectedStats, bins, neighborhoods]
+  );
+  const routeOrderByBinId = useMemo(() => {
+    const m = {};
+    for (const r of openRoutes) for (const s of r.orderedStops || []) m[s.binId] = { route: r, order: s.order };
+    return m;
+  }, [openRoutes]);
+  const { route: selectedRoad, status: selectedRoadStatus } = useRoadRoute(selectedRoutePoints.map((p) => ({ lat: p.pos[0], lng: p.pos[1] })));
+
+  const focusNeighborhood = (n) => {
+    setSelectedKey(n.key);
+    if (!n.feature) return;
+    const c = polygonCentroid(n.feature.geometry);
+    if (c) setFlyTarget({ center: [c.lat, c.lng], zoom: 14, _t: Date.now() });
+  };
+
+  // Deep link (dashboard banner → "عرض على الخريطة"): fly to the requested neighborhood once its data is in.
+  const [consumedInitialKey, setConsumedInitialKey] = useState(null);
+  if (initialSelectedKey && initialSelectedKey !== consumedInitialKey && neighborhoodStats.length > 0) {
+    setConsumedInitialKey(initialSelectedKey);
+    const n = neighborhoodStats.find((x) => x.key === initialSelectedKey);
+    if (n) focusNeighborhood(n);
+  }
+
+  const routeStatusNote = (route) => route ? `${ROUTE_STATUS_LABELS[route.status] || route.status}` : null;
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+        {HORIZONS.map((h) => (
+          <button key={h.key} onClick={() => setHorizon(h.key)} style={{
+            padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+            border: `1px solid ${horizon === h.key ? C.info : C.border}`,
+            background: horizon === h.key ? C.info + "20" : "transparent",
+            color: horizon === h.key ? C.info : C.muted, fontFamily: ARABIC_FONT,
+          }}>{h.label}</button>
+        ))}
+      </div>
+      {horizon > 0 && (
+        <div style={{ marginBottom: 8, fontSize: 11, color: C.dim }}>
+          ⏱️ الألوان المعروضة تمثل حالة متوقعة {HORIZONS.find((h) => h.key === horizon)?.label} — الحاويات الرمادية بلا بيانات كافية للتنبؤ حاليًا.
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+        {MAP_FILTERS.map((f) => (
+          <button key={f.key} onClick={() => setFilter(f.key)} style={{
+            padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+            border: `1px solid ${filter === f.key ? C.accent : C.border}`,
+            background: filter === f.key ? C.accent + "20" : "transparent",
+            color: filter === f.key ? C.accent : C.muted, fontFamily: ARABIC_FONT,
+          }}>{f.label}</button>
+        ))}
+      </div>
+
+      {!hasAnyGeo && neighborhoods.length > 0 && (
+        <div style={{ marginBottom: 10, fontSize: 12, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 10, padding: "8px 12px" }}>
+          ⚠️ لا تتطابق أسماء الأحياء الحالية مع حدود الأحياء المتوفرة — الخريطة ستظهر بلا تلوين للأحياء حتى تُحدَّث الأسماء.
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 14, flexWrap: compact ? "nowrap" : "wrap-reverse" }}>
+        <div style={{ flex: "1 1 320px", minWidth: 260, height, borderRadius: 14, overflow: "hidden", border: `1px solid ${C.border}` }}>
+          <MapContainer center={BURAIDAH_CENTER} zoom={12} style={{ width: "100%", height: "100%", background: C.bg }} scrollWheelZoom>
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
+            <FlyTo target={flyTarget} />
+            {neighborhoodStats.filter((n) => n.feature).map((n) => (
+              <GeoJSON
+                key={n.key}
+                data={n.feature}
+                style={() => ({
+                  color: STATUS_COLORS[n.status] || STATUS_COLORS.offline,
+                  weight: selectedKey === n.key ? 3.5 : 2,
+                  fillColor: STATUS_COLORS[n.status] || STATUS_COLORS.offline,
+                  fillOpacity: selectedKey === n.key ? 0.6 : 0.4,
+                })}
+                eventHandlers={{ click: () => focusNeighborhood(n) }}
+              >
+                <Popup>
+                  <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 190 }}>
+                    <b>{n.name}</b> — {STATE_LABELS[n.status] || n.status}<br />
+                    عدد الحاويات: {n.total}<br />
+                    متوسط الامتلاء: {n.avgFill != null ? `${n.avgFill}%` : "—"}<br />
+                    حرجة: {n.criticalCount} · مرتفعة: {n.highCount || 0} · غير متصلة: {n.offlineCount}<br />
+                    {n.citizenReportCount > 0 && <span style={{ color: "#b45309" }}>📣 {n.citizenReportCount} بلاغ مواطن مفتوح<br /></span>}
+                    {n.route ? (
+                      <span>🧭 {n.route.routeName} ({routeStatusNote(n.route)}) — {n.route.binIds?.length || 0} حاوية<br /></span>
+                    ) : (n.criticalCount > 0 || n.highCount > 0) ? (
+                      <span style={{ color: "#b45309" }}>لا توجد جولة مقترحة بعد لهذا الحي<br /></span>
+                    ) : null}
+                    {n.route && onOpenRoute && (
+                      <button onClick={() => onOpenRoute(n.route.id)} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 8, border: "1px solid #3b82f6", background: "#3b82f620", color: "#3b82f6", fontSize: 11, cursor: "pointer" }}>فتح الجولة</button>
+                    )}
+                  </div>
+                </Popup>
+              </GeoJSON>
+            ))}
+
+            {selectedRoutePoints.length > 1 && (
+              selectedRoad
+                ? <Polyline positions={selectedRoad.coordinates} pathOptions={{ color: C.info, weight: 5, opacity: 0.9 }} />
+                : <Polyline positions={selectedRoutePoints.map((p) => p.pos)} pathOptions={{ color: C.info, weight: 4, dashArray: "8 8", opacity: 0.9 }} />
+            )}
+
+            {filteredBins.map((b) => {
+              const n = neighborhoods.find((n2) => n2.id === b.neighborhoodId);
+              const posInfo = demoPositionForBin(b, neighborhoodFeatureFor(n));
+              if (!posInfo) return null;
+              const priority = b._noForecast ? null : getBinPriority(b, null, [], binCtx.forBin(b));
+              const markerState = b._noForecast ? "offline" : (priority.sensorHealth.status !== "healthy" ? priority.sensorHealth.connectivity : priority.tier);
+              const markerColor = STATUS_COLORS[markerState] || STATUS_COLORS.no_sensor;
+              const inRoute = routeOrderByBinId[b.id];
+              const highlighted = inRoute && selectedStats?.route?.id === inRoute.route.id;
+              return (
+                <CircleMarker key={b.id} center={posInfo.pos} radius={highlighted ? 10 : 7}
+                  pathOptions={{ color: highlighted ? C.info : "#fff", weight: highlighted ? 3 : 1, fillColor: markerColor, fillOpacity: b._noForecast ? 0.5 : 0.95 }}>
+                  <Popup>
+                    <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 180 }}>
+                      <b>{b.name}</b>{posInfo.demo && <span style={{ color: "#999", fontSize: 11 }}> (موقع تقريبي)</span>}<br />
+                      الحي: {n?.name || "—"}<br />
+                      الامتلاء: {b.lastFillLevelPercent != null ? `${b.lastFillLevelPercent}%` : "—"}{horizon > 0 && !b._noForecast && <span style={{ color: "#999" }}> (متوقع)</span>}<br />
+                      الحرارة: {b.lastTemperatureCelsius != null ? `${b.lastTemperatureCelsius}°` : "—"}<br />
+                      حالة المستشعر: {STATE_LABELS[getSensorConnectivity(b)]}<br />
+                      آخر قراءة: {getReadingAgeLabel(b.lastReadingAt)}<br />
+                      الأولوية: {b._noForecast ? "لا توجد بيانات كافية للتنبؤ" : (STATE_LABELS[priority.tier] || priority.tier)}<br />
+                      {binCtx.reportCountForBin(b.id) > 0 && <span style={{ color: "#b45309" }}>📣 {binCtx.reportCountForBin(b.id)} بلاغ مواطن على هذه الحاوية<br /></span>}
+                      الجولة: {inRoute ? `${inRoute.route.routeName} — التوقف #${inRoute.order} (${routeStatusNote(inRoute.route)})` : "خارج أي جولة حاليًا"}<br />
+                      <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                        {inRoute && onOpenRoute && (
+                          <button onClick={() => onOpenRoute(inRoute.route.id)} style={{ padding: "4px 10px", borderRadius: 8, border: "1px solid #3b82f6", background: "#3b82f620", color: "#3b82f6", fontSize: 11, cursor: "pointer" }}>فتح الجولة</button>
+                        )}
+                        {!inRoute && onAddToRoute && (
+                          <button onClick={() => onAddToRoute(b)} style={{ padding: "4px 10px", borderRadius: 8, border: "1px solid #10b981", background: "#10b98120", color: "#10b981", fontSize: 11, cursor: "pointer" }}>إضافة للجولة</button>
+                        )}
+                      </div>
+                    </div>
+                  </Popup>
+                </CircleMarker>
+              );
+            })}
+          </MapContainer>
+        </div>
+
+        <div style={{ flex: "1 1 240px", minWidth: 220 }}>
+          <div style={{ fontSize: 11, color: C.dim, marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 10 }}>
+            {MAP_LEGEND.map(([label, key]) => (
+              <span key={key} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: STATUS_COLORS[key], display: "inline-block" }} />{label}
+              </span>
+            ))}
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 16, height: 0, borderTop: `3px dashed ${C.info}`, display: "inline-block" }} />مسار جولة
+            </span>
+          </div>
+
+          {selectedStats ? (
+            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{selectedStats.name}</div>
+                <StateBadge state={selectedStats.status} />
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, lineHeight: 2 }}>
+                عدد الحاويات: <b style={{ color: C.text }}>{selectedStats.total}</b><br />
+                متوسط الامتلاء: <b style={{ color: C.text }}>{selectedStats.avgFill != null ? `${selectedStats.avgFill}%` : "—"}</b><br />
+                حاويات حرجة: <b style={{ color: C.danger }}>{selectedStats.criticalCount}</b> · مرتفعة: <b style={{ color: STATUS_COLORS.high }}>{selectedStats.highCount || 0}</b><br />
+                غير متصلة: <b style={{ color: C.dim }}>{selectedStats.offlineCount}</b><br />
+                تنبيه حراري: <b style={{ color: selectedStats.thermalAlert ? C.danger : C.accent }}>{selectedStats.thermalAlert ? "نعم" : "لا"}</b><br />
+                بلاغات مواطنين مفتوحة: <b style={{ color: selectedStats.citizenReportCount > 0 ? C.warning : C.text }}>{selectedStats.citizenReportCount || 0}</b>
+              </div>
+              {selectedStats.reasons?.length > 0 && (
+                <ul style={{ margin: "10px 0 0", paddingInlineStart: 18, fontSize: 12, color: C.muted }}>
+                  {selectedStats.reasons.map((r, i) => (<li key={i}>{r}</li>))}
+                </ul>
+              )}
+
+              <div style={{ marginTop: 12, padding: 10, borderRadius: 10, background: selectedStats.route ? C.info + "12" : C.card, border: `1px solid ${selectedStats.route ? C.info + "40" : C.border}` }}>
+                {selectedStats.route ? (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: C.info, marginBottom: 4 }}>🧭 {selectedStats.route.routeName}</div>
+                    <div style={{ fontSize: 11, color: C.muted }}>
+                      {ROUTE_STATUS_LABELS[selectedStats.route.status] || selectedStats.route.status} · {selectedStats.route.binIds?.length || 0} حاوية · {selectedRoad ? `${selectedRoad.distanceKm} كم طرق فعلية · ~${selectedRoad.durationMin} د` : `${selectedStats.route.estimatedDistanceKm} كم تقريبًا`}
+                    </div>
+                    {selectedRoutePoints.length > 1 && <RoadRouteNote road={selectedRoad} status={selectedRoadStatus} />}
+                    <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
+                      {(selectedStats.route.orderedStops || []).slice(0, 4).map((s) => `#${s.order} ${s.binName}`).join(" ← ")}
+                      {(selectedStats.route.orderedStops || []).length > 4 ? " …" : ""}
+                    </div>
+                    {onOpenRoute && (
+                      <button onClick={() => onOpenRoute(selectedStats.route.id)} style={{ marginTop: 8, padding: "7px 14px", borderRadius: 8, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>
+                        فتح الجولة
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 11.5, color: (selectedStats.criticalCount > 0 || selectedStats.highCount > 0) ? C.warning : C.dim }}>
+                    {(selectedStats.criticalCount > 0 || selectedStats.highCount > 0)
+                      ? "⚠️ حاويات مؤهلة للجمع بلا جولة مقترحة بعد — ولّد الجولات من صفحة إدارة الجولات."
+                      : "لا توجد جولة مفتوحة لهذا الحي — الوضع ضمن المعدل الطبيعي."}
+                  </div>
+                )}
+              </div>
+
+              {onViewBins && (
+                <button onClick={() => onViewBins(selectedStats.id)} style={{ marginTop: 10, padding: "8px 16px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>
+                  عرض الحاويات
+                </button>
+              )}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: C.dim, padding: 16, border: `1px dashed ${C.border}`, borderRadius: 12, textAlign: "center" }}>
+              اضغط على أي حي بالخريطة لعرض تفاصيله والجولة المرتبطة به
+            </div>
+          )}
+
+          <div style={{ marginTop: 10, fontSize: 10.5, color: C.dim, lineHeight: 1.8 }}>
+            حدود الأحياء من بيانات OpenStreetMap الفعلية (حي السلامة موضع تقريبي). المواقع المعلَّمة بـ"(موقع تقريبي)" لحاويات لم تُسجَّل لها إحداثيات حقيقية بعد. خط الجولة يُرسم على الطرق الفعلية عبر OSRM عند توفره، وإلا يُعرض خطًا مستقيمًا مع تنبيه.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ======================== STANDALONE MAP PAGE ========================
+const MapPage = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], loading, onViewBins, onAddToRoute, onOpenRoute, initialSelectedKey = null }) => {
+  if (loading) return <EmptyState icon="⏳" title="جاري تحميل الخريطة…" />;
+  if (neighborhoods.length === 0) {
+    return <EmptyState icon="🗺️" title="لا توجد أحياء مسجلة بعد" desc="شغّل ترحيل البيانات من صفحة الإعدادات لإنشاء الأحياء والحاويات من بيانات المحطات القديمة." />;
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div>
+        <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>الخريطة التشغيلية لمدينة بريدة</div>
+        <div style={{ fontSize: 12, color: C.dim, marginTop: 2 }}>حالة الأحياء والحاويات الذكية لحظيًا — اضغط على حي لعرض الجولة المرتبطة به على الخريطة.</div>
+      </div>
+      <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} height={620} onViewBins={onViewBins} onAddToRoute={onAddToRoute} onOpenRoute={onOpenRoute} initialSelectedKey={initialSelectedKey} />
+    </div>
+  );
+};
+
+// ======================== BROWSER NOTIFICATIONS (shared) ========================
+/**
+ * Local browser notifications (Notification API) for NEW items only: the
+ * first snapshot is treated as "already seen" so a login never fires a burst.
+ * These are in-browser notifications — no push server — so they fire while the
+ * app is open (even in a background tab); real Web Push needs a backend + VAPID.
+ */
+function useBrowserNotifications(items, makeNotification, enabled = true) {
+  const seen = useRef(null);
+  useEffect(() => {
+    if (!enabled || typeof Notification === "undefined") return;
+    if (seen.current === null) { seen.current = new Set(items.map((i) => i.key)); return; }
+    for (const item of items) {
+      if (seen.current.has(item.key)) continue;
+      seen.current.add(item.key);
+      if (Notification.permission !== "granted") continue;
+      const n = makeNotification(item);
+      if (!n) continue;
+      try { new Notification(n.title, { body: n.body, tag: item.key, lang: "ar", dir: "rtl" }); } catch { /* unsupported context */ }
+    }
+  }, [items, makeNotification, enabled]);
+}
+
+const NotificationPermissionButton = ({ compact = false }) => {
+  const [perm, setPerm] = useState(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+  if (perm === "unsupported") return null;
+  if (perm === "granted") return <span style={{ fontSize: 11, color: C.accent }}>🔔 الإشعارات مفعّلة</span>;
+  return (
+    <button onClick={() => Notification.requestPermission().then(setPerm)} style={{ padding: compact ? "4px 10px" : "6px 12px", borderRadius: 8, border: `1px solid ${C.info}`, background: C.info + "15", color: C.info, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT, fontWeight: 700 }}>
+      🔔 {perm === "denied" ? "الإشعارات محظورة من المتصفح" : "تفعيل إشعارات المتصفح"}
+    </button>
+  );
+};
+
+// ======================== "NEEDS COLLECTION NOW" BANNER (shared: dashboard + driver portal) ========================
+/**
+ * One ranked answer to "which neighborhoods need a collection run right now?"
+ * (decisionEngine.rankNeighborhoodsForCollection) rendered the same way for
+ * the supervisor's dashboard and the driver's portal, so both roles look at
+ * the same list. Each row links straight to its neighborhood on the map and
+ * to the open route that covers it — or says plainly that none exists yet.
+ */
+const NeedsCollectionBanner = ({ ranked = [], onShowOnMap, onOpenRoute, onGoToRoutes, onSelect, compact = false }) => {
+  if (ranked.length === 0) {
+    return (
+      <div style={{ background: C.accent + "12", border: `1px solid ${C.accent}40`, borderRadius: 14, padding: "12px 16px", fontSize: 13, color: C.accent, fontWeight: 600 }}>
+        ✅ لا توجد أحياء تحتاج جمعًا الآن — جميع الحاويات ضمن المعدل الطبيعي.
+      </div>
+    );
+  }
+  const withoutRoute = ranked.filter((r) => !r.openRoute).length;
+  return (
+    <div style={{ background: C.danger + "10", border: `1px solid ${C.danger}50`, borderRadius: 14, padding: compact ? 12 : 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        <div style={{ fontSize: compact ? 14 : 15, fontWeight: 800, color: C.text, display: "flex", alignItems: "center", gap: 8 }}>
+          <BellRing size={16} color={C.danger} /> {ranked.length} {ranked.length === 1 ? "حي يحتاج" : "أحياء تحتاج"} جمعًا الآن
+        </div>
+        {withoutRoute > 0 && onGoToRoutes && (
+          <button onClick={onGoToRoutes} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.warning}`, background: C.warning + "15", color: C.warning, fontWeight: 700, fontSize: 11.5, cursor: "pointer", fontFamily: ARABIC_FONT }}>
+            {withoutRoute} بلا جولة مقترحة — ولّد الجولات
+          </button>
+        )}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "repeat(auto-fill, minmax(250px, 1fr))", gap: 8 }}>
+        {ranked.map((r) => (
+          <div key={r.group.key} onClick={onSelect ? () => onSelect(r) : undefined} style={{ background: C.card, border: `1px solid ${STATUS_COLORS[r.priority.tier] || C.border}50`, borderRadius: 12, padding: "10px 12px", cursor: onSelect ? "pointer" : "default" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.group.name}</div>
+              <StateBadge state={r.priority.tier} />
+            </div>
+            <div style={{ fontSize: 11.5, color: C.muted }}>
+              {r.criticalCount > 0 && <span style={{ color: C.danger, fontWeight: 700 }}>{r.criticalCount} حرجة · </span>}
+              {r.highCount > 0 && <span style={{ color: STATUS_COLORS.high, fontWeight: 700 }}>{r.highCount} مرتفعة · </span>}
+              {r.eligibleBins.length} مؤهلة للجمع من أصل {r.total}
+              {r.thermalAlert && <span style={{ color: C.danger }}> · 🔥 تنبيه حراري</span>}
+            </div>
+            {r.distanceKm != null && (
+              <div style={{ fontSize: 11, color: C.info, marginTop: 2 }}>📍 يبعد {r.distanceKm} كم · ~{r.etaMinutes} دقيقة</div>
+            )}
+            <div style={{ fontSize: 11, color: r.openRoute ? C.info : C.warning, marginTop: 4 }}>
+              {r.openRoute ? `🧭 ${r.openRoute.routeName} — ${ROUTE_STATUS_LABELS[r.openRoute.status] || r.openRoute.status}` : "لا توجد جولة مقترحة بعد"}
+            </div>
+            {(onShowOnMap || (r.openRoute && onOpenRoute)) && (
+              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                {onShowOnMap && (
+                  <button onClick={(e) => { e.stopPropagation(); onShowOnMap(r.group.key); }} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>عرض على الخريطة</button>
+                )}
+                {r.openRoute && onOpenRoute && (
+                  <button onClick={(e) => { e.stopPropagation(); onOpenRoute(r.openRoute.id); }} style={{ padding: "5px 10px", borderRadius: 8, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>فتح الجولة</button>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/** Shared helper: thermal-alert lookup for a neighborhood name from the fire_sensors feed. */
+const makeThermalAlertFor = (fireSensors = []) => (name) =>
+  fireSensors.some((s) => normalizeNeighborhoodName(s.district) === normalizeNeighborhoodName(name) && (s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط"));
+
+/**
+ * Per-bin scoring context shared by every page: thermal alert for the bin's
+ * neighborhood + open citizen reports pointing at the bin (or, for reports
+ * without a bin id, at its neighborhood). Keeps all pages scoring identically.
+ */
+const makeBinContext = (fireSensors = [], citizenReports = [], neighborhoods = []) => {
+  const thermalFor = makeThermalAlertFor(fireSensors);
+  const open = citizenReports.filter((r) => r.status !== "تم الحل" && r.status !== "مرفوض" && r.status !== "مغلق");
+  const byBin = {}, byNeighborhoodKey = {};
+  for (const r of open) {
+    if (r.binId) byBin[r.binId] = (byBin[r.binId] || 0) + 1;
+    else if (r.district) { const k = normalizeNeighborhoodName(r.district); byNeighborhoodKey[k] = (byNeighborhoodKey[k] || 0) + 1; }
+  }
+  const nameById = Object.fromEntries(neighborhoods.map((n) => [n.id, n.name]));
+  return {
+    forBin: (bin) => {
+      const name = nameById[bin.neighborhoodId] || "";
+      return { thermalAlert: name ? thermalFor(name) : false, citizenReportCount: byBin[bin.id] || 0 };
+    },
+    forNeighborhoodName: (name) => ({ thermalAlert: thermalFor(name), citizenReportCount: byNeighborhoodKey[normalizeNeighborhoodName(name)] || 0 }),
+    reportCountForBin: (binId) => byBin[binId] || 0,
+    reportCountForNeighborhood: (name) => (byNeighborhoodKey[normalizeNeighborhoodName(name)] || 0) + open.filter((r) => r.binId && nameById[r.binNeighborhoodId || ""] === name).length,
+    openCount: open.length,
+  };
+};
+
+/** Centroid of a neighborhood group's real polygon (null when the name has no polygon). */
+const centroidForGroup = (group) => {
+  const feature = buraidahNeighborhoodsGeo.features.find((f) => f.properties.baseName === group.key);
+  return feature ? polygonCentroid(feature.geometry) : (group.primary?.centerLat != null ? { lat: group.primary.centerLat, lng: group.primary.centerLng } : null);
+};
+
+// ======================== IMPACT CARD (shared: dashboard, reports, executive) ========================
+/** "What did data-driven collection save TODAY vs a fixed daily schedule?" — every figure traces to computeImpactMetrics() and its stated assumptions. */
+const ImpactCard = ({ impact, compact = false, accent = C.accent }) => {
+  const tiles = [
+    { label: "زيارات غير ضرورية تم تجنبها اليوم", value: impact.stopsAvoided, unit: "حاوية", color: accent },
+    { label: "أحياء لا تحتاج أي جولة اليوم", value: impact.neighborhoodsSkipped, unit: "حي", color: C.info },
+    { label: "كيلومترات موفّرة", value: impact.kmSaved, unit: "كم", color: C.info, sub: `${impact.dataDrivenKm} بدل ${impact.baselineKm} كم (−${impact.reductionPct}%)` },
+    { label: "وقود موفّر", value: impact.fuelSavedL, unit: "لتر", color: C.warning },
+    { label: "انبعاثات CO₂ موفّرة", value: impact.co2SavedKg, unit: "كجم", color: accent },
+    { label: "وقت تشغيل موفّر", value: impact.minutesSaved, unit: "دقيقة", color: C.purple },
+    { label: "فيضانات مُنعت (حاويات حرجة مغطاة بجولة)", value: impact.overflowsPrevented, unit: "حاوية", color: C.danger },
+  ];
+  return (
+    <Card title="💡 ماذا وفّرنا اليوم؟ — الجمع بالبيانات مقابل الجدول الثابت" icon={<Leaf size={16} color="#94a3b8" />}>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${compact ? 150 : 180}px, 1fr))`, gap: 10 }}>
+        {tiles.map((t) => (
+          <div key={t.label} style={{ background: C.bg, border: `1px solid ${t.color}30`, borderRadius: 12, padding: "12px 14px" }}>
+            <div style={{ fontSize: compact ? 22 : 26, fontWeight: 800, color: t.color }}>{t.value} <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>{t.unit}</span></div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{t.label}</div>
+            {t.sub && <div style={{ fontSize: 10.5, color: C.dim, marginTop: 2 }}>{t.sub}</div>}
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 10.5, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
+        الأساس المقارن: جدول ثابت يزور كل حاوية مرة يوميًا (مسار لكل حي يمر بكل حاوياته من المستودع). المنهج بالبيانات: فقط الحاويات المؤهلة الآن.
+        الافتراضات: {impact.assumptions.truckFuelLitersPerKm} لتر/كم، {impact.assumptions.co2KgPerLiterDiesel} كجم CO₂/لتر ديزل، {impact.assumptions.minutesPerStop} دقائق لكل حاوية، {impact.assumptions.avgUrbanSpeedKmh} كم/س. المسافات جوية (Haversine) وليست مسافات طرق.
+      </div>
+    </Card>
+  );
+};
+
 // ======================== DASHBOARD ========================
-const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData }) => {
-  const criticalCount = stations.filter((s) => getStatus(s.fillLevel) === "حرج").length;
-  const avgFill = stations.length ? Math.round(stations.reduce((a, s) => a + (s.fillLevel || 0), 0) / stations.length) : 0;
-  const totalDaily = stations.reduce((a, s) => a + (s.dailyWaste || 0), 0);
-  const avgEff = monthlyTrend.length ? Math.round(monthlyTrend.reduce((a, m) => a + m.الكفاءة, 0) / monthlyTrend.length) : 0;
+const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], loadingBins, loadingNeighborhoods, onViewBins, onViewRoutes, onOpenRoute, onShowOnMap }) => {
+  const readingsByBin = useMemo(() => {
+    const map = {};
+    for (const r of recentReadings) { if (!r.bin_id) continue; (map[r.bin_id] ||= []).push(r); }
+    return map;
+  }, [recentReadings]);
+
+  const isThermalAlert = (name) =>
+    fireSensors.some((s) => normalizeNeighborhoodName(s.district) === normalizeNeighborhoodName(name) && (s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط"));
+
+  const ctx = useMemo(() => makeBinContext(fireSensors, citizenReports, neighborhoods), [fireSensors, citizenReports, neighborhoods]);
+  const scoredBins = useMemo(() => bins.map((bin) => {
+    const n = neighborhoods.find((n2) => n2.id === bin.neighborhoodId);
+    return { bin, neighborhood: n, priority: getBinPriority(bin, null, readingsByBin[bin.id] || [], ctx.forBin(bin)) };
+  }), [bins, neighborhoods, readingsByBin, ctx]);
+
+  const totalBins = bins.length;
+  const criticalBins = scoredBins.filter((x) => x.priority.tier === "critical");
+  const warningBins = scoredBins.filter((x) => x.priority.tier === "high" || x.priority.tier === "medium");
+  const normalBins = scoredBins.filter((x) => x.priority.tier === "low");
+  const offlineBins = bins.filter((b) => { const c = getSensorConnectivity(b); return c === "offline" || c === "fault"; });
+
+  const fillValues = bins.map((b) => b.lastFillLevelPercent).filter((v) => v != null);
+  const avgFill = fillValues.length ? Math.round(fillValues.reduce((a, v) => a + v, 0) / fillValues.length) : null;
 
   const fillDistribution = [
-    { name: "0-30%", value: stations.filter(s => s.fillLevel <= 30).length, fill: C.accent },
-    { name: "31-60%", value: stations.filter(s => s.fillLevel > 30 && s.fillLevel <= 60).length, fill: C.info },
-    { name: "61-85%", value: stations.filter(s => s.fillLevel > 60 && s.fillLevel <= 85).length, fill: C.warning },
-    { name: "86-100%", value: stations.filter(s => s.fillLevel > 85).length, fill: C.danger },
+    { name: "0-30%", value: bins.filter((b) => b.lastFillLevelPercent != null && b.lastFillLevelPercent <= 30).length, fill: C.accent },
+    { name: "31-60%", value: bins.filter((b) => b.lastFillLevelPercent > 30 && b.lastFillLevelPercent <= 60).length, fill: C.info },
+    { name: "61-85%", value: bins.filter((b) => b.lastFillLevelPercent > 60 && b.lastFillLevelPercent <= 85).length, fill: C.warning },
+    { name: "86-100%", value: bins.filter((b) => b.lastFillLevelPercent > 85).length, fill: C.danger },
   ];
 
-  // suctionRate / motorHealth: إذا غير موجودَين في Firestore نشتقهما من بيانات حقيقية
-  const stationPerformance = stations.map(s => ({
-    name: s.district.replace("حي ", ""),
-    الامتلاء: s.fillLevel,
-    الشفط:    s.suctionRate  ?? Math.max(60, 100 - Math.round(s.fillLevel * 0.35)),
-    المحرك:   s.motorHealth  ?? Math.max(70, 95  - Math.round(((s.pressure || 2) - 1) * 5)),
-  }));
+  const neighborhoodFillBars = neighborhoods.map((n) => {
+    const nBins = bins.filter((b) => b.neighborhoodId === n.id);
+    const vals = nBins.map((b) => b.lastFillLevelPercent).filter((v) => v != null);
+    return {
+      name: normalizeNeighborhoodName(n.name),
+      متوسط_الامتلاء: vals.length ? Math.round(vals.reduce((a, v) => a + v, 0) / vals.length) : 0,
+    };
+  }).sort((a, b) => b.متوسط_الامتلاء - a.متوسط_الامتلاء).slice(0, 10);
+
+  const criticalList = [...scoredBins]
+    .filter((x) => x.priority.tier === "critical" || x.priority.tier === "high")
+    .sort((a, b) => b.priority.score - a.priority.score)
+    .slice(0, 6);
+
+  // "ماذا نبدأ به الآن؟" (§10) — top-ranked, cross-cutting operational priorities:
+  // critical neighborhoods, soon-to-be-full bins, and active thermal alerts,
+  // merged into one ranked list rather than three separate disconnected widgets.
+  const neighborhoodPriorities = useMemo(() => neighborhoods.map((n) => {
+    const nScored = scoredBins.filter((x) => x.bin.neighborhoodId === n.id);
+    return { neighborhood: n, priority: getNeighborhoodPriority(nScored, { thermalAlert: isThermalAlert(n.name) }) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [neighborhoods, scoredBins, fireSensors]);
+
+  const nowPriorities = useMemo(() => {
+    const items = [];
+    neighborhoodPriorities
+      .filter((x) => x.priority.tier === "critical" && x.priority.criticalCount > 0)
+      .forEach((x) => items.push({ kind: "neighborhood", score: x.priority.score, text: `${x.neighborhood.name} — ${x.priority.criticalCount} حاوية حرجة` }));
+    scoredBins
+      .filter((x) => x.priority.prediction?.predictionAvailable && x.priority.prediction.hoursToFull <= THRESHOLDS.predictedFullSoonHours)
+      .forEach((x) => items.push({ kind: "bin", score: x.priority.score, text: `${x.bin.name} — متوقع الامتلاء خلال ${x.priority.prediction.hoursToFull.toFixed(1)} ساعة` }));
+    neighborhoodPriorities
+      .filter((x) => x.priority.reasons.some((r) => r.includes("تنبيه حراري")))
+      .forEach((x) => items.push({ kind: "thermal", score: x.priority.score + 5, text: `${x.neighborhood.name} — تنبيه حراري مرتفع` }));
+    return items.sort((a, b) => b.score - a.score).slice(0, 8);
+  }, [neighborhoodPriorities, scoredBins]);
+
+  const suggestedRoutes = routes.filter((r) => r.status === "suggested");
+  const approvedRoutesCount = routes.filter((r) => r.status === "approved").length;
+  const activeRoutesCount = routes.filter((r) => r.status === "in_progress").length;
+
+  // The single "needs collection now" ranking shared with the driver portal —
+  // per real neighborhood (duplicate docs merged), with its linked open route.
+  const rankedNeighborhoods = useMemo(() => {
+    const groups = groupNeighborhoodsByName(neighborhoods, bins);
+    return rankNeighborhoodsForCollection(groups, scoredBins, routes, { thermalAlertFor: makeThermalAlertFor(fireSensors), centroidFor: centroidForGroup });
+  }, [neighborhoods, bins, scoredBins, routes, fireSensors]);
+  const eligibleOutsideRoutes = useMemo(
+    () => rankedNeighborhoods.flatMap((r) => r.eligibleBins).filter((s) => !findOpenRouteForBin(s.bin.id, routes)).length,
+    [rankedNeighborhoods, routes]
+  );
+  const binById = useMemo(() => Object.fromEntries(bins.map((b) => [b.id, b])), [bins]);
+  const impact = useMemo(() => computeImpactMetrics(groupNeighborhoodsByName(neighborhoods, bins), scoredBins, routes, { depot: DEFAULT_DEPOT }), [neighborhoods, bins, scoredBins, routes]);
+
+  const loading = loadingBins || loadingNeighborhoods;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-        <StatCard title="إجمالي المحطات" value={stations.length} icon={<Factory size={22} color="#fff" />} gradient={C.g1} />
-        <StatCard title="متوسط الامتلاء" value={avgFill} unit="%" icon={<BarChart2 size={22} color="#fff" />} gradient={C.g2} trend={-5.2} />
-        <StatCard title="الكمية اليومية" value={totalDaily} unit="كجم" icon={<Recycle size={22} color="#fff" />} gradient={C.g3} trend={12.8} />
-        <StatCard title="كفاءة التشغيل" value={avgEff} unit="%" icon={<Zap size={22} color="#fff" />} gradient={C.g4} trend={3.1} />
+      {!loading && totalBins > 0 && (
+        <NeedsCollectionBanner ranked={rankedNeighborhoods} onShowOnMap={onShowOnMap} onOpenRoute={onOpenRoute} onGoToRoutes={onViewRoutes} />
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
+        <StatCard title="إجمالي الأحياء" value={groupNeighborhoodsByName(neighborhoods, bins).length} icon={<Home size={22} color="#fff" />} gradient={C.g1} />
+        <StatCard title="إجمالي الحاويات" value={totalBins} icon={<Trash2 size={22} color="#fff" />} gradient={C.g2} />
+        <StatCard title="الحاويات الحرجة" value={criticalBins.length} icon={<AlertTriangle size={22} color="#fff" />} gradient={C.g4} />
+        <StatCard title="متوسط الامتلاء" value={avgFill ?? "—"} unit={avgFill != null ? "%" : ""} icon={<BarChart2 size={22} color="#fff" />} gradient={C.g2} />
+        <StatCard title="كفاءة الجمع" value="—" icon={<Zap size={22} color="#fff" />} gradient={C.g3} />
+        <StatCard title="الأجهزة غير المتصلة" value={offlineBins.length} icon={<WifiOff size={22} color="#fff" />} gradient={C.g4} />
       </div>
+      {!loading && totalBins === 0 && (
+        <div style={{ fontSize: 12, color: C.muted, background: C.panel2 || C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px" }}>
+          "كفاءة الجمع" غير متاحة بعد لعدم وجود بيانات جولات جمع حقيقية — ستُفعَّل في مرحلة إدارة الجولات.
+        </div>
+      )}
+
+      <Card title="🗺️ الخريطة التشغيلية لمدينة بريدة" icon={<MapGlyph size={16} color="#94a3b8" />}>
+        {loading ? (
+          <EmptyState icon="⏳" title="جاري تحميل بيانات الأحياء والحاويات…" />
+        ) : neighborhoods.length === 0 ? (
+          <EmptyState icon="🗺️" title="لا توجد أحياء مسجلة بعد" desc="شغّل الترحيل من صفحة الإعدادات لإنشاء الأحياء والحاويات من بيانات المحطات القديمة." />
+        ) : (
+          <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} height={380} compact onViewBins={onViewBins} onOpenRoute={onOpenRoute} />
+        )}
+      </Card>
+
+      <Card title="🎯 أولويات التشغيل الآن — ماذا نبدأ به؟" icon={<Target size={16} color="#94a3b8" />}>
+        {nowPriorities.length === 0 ? (
+          <EmptyState icon="✅" title="لا توجد أولويات تشغيلية عاجلة الآن" />
+        ) : (
+          <ol style={{ margin: 0, paddingInlineStart: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+            {nowPriorities.map((p, i) => (
+              <li key={i} style={{ fontSize: 13, color: C.text, paddingBottom: i < nowPriorities.length - 1 ? 8 : 0, borderBottom: i < nowPriorities.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                {p.text}
+              </li>
+            ))}
+          </ol>
+        )}
+      </Card>
+
+      <Card title="🧭 الجولات المقترحة الآن — وما الحاويات التي تغطيها" icon={<RouteIcon size={16} color="#94a3b8" />}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: suggestedRoutes.length > 0 ? 12 : 0 }}>
+          <div style={{ fontSize: 13, color: C.muted }}>
+            مقترحة: <b style={{ color: C.text }}>{suggestedRoutes.length}</b> · معتمدة بانتظار البدء: <b style={{ color: C.text }}>{approvedRoutesCount}</b> · نشطة: <b style={{ color: C.text }}>{activeRoutesCount}</b>
+            {eligibleOutsideRoutes > 0 && <span style={{ color: C.warning, fontWeight: 700 }}> · {eligibleOutsideRoutes} حاوية مؤهلة خارج أي جولة</span>}
+          </div>
+          {onViewRoutes && (
+            <button onClick={onViewRoutes} style={{ padding: "8px 16px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>
+              {eligibleOutsideRoutes > 0 ? "توليد/تحديث الجولات" : "فتح إدارة الجولات"}
+            </button>
+          )}
+        </div>
+        {suggestedRoutes.length === 0 ? (
+          <div style={{ fontSize: 12, color: C.dim }}>لا توجد جولات مقترحة حاليًا{eligibleOutsideRoutes > 0 ? " — رغم وجود حاويات مؤهلة للجمع. ولّد الجولات من صفحة إدارة الجولات." : "."}</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+            {suggestedRoutes.slice(0, 6).map((r) => (
+              <div key={r.id} onClick={onOpenRoute ? () => onOpenRoute(r.id) : undefined} style={{ background: C.bg, border: `1px solid ${STATUS_COLORS[r.priorityTier] || C.border}50`, borderRadius: 12, padding: "10px 12px", cursor: onOpenRoute ? "pointer" : "default" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.routeName}</div>
+                  <StateBadge state={r.priorityTier} />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {(r.orderedStops || []).slice(0, 4).map((st) => {
+                    const b = binById[st.binId];
+                    return (
+                      <div key={st.binId} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: C.muted }}>
+                        <span>#{st.order} {st.binName}</span>
+                        <span style={{ color: STATUS_COLORS[st.priorityTier] || C.text, fontWeight: 700 }}>{b?.lastFillLevelPercent != null ? `${b.lastFillLevelPercent}%` : "—"}</span>
+                      </div>
+                    );
+                  })}
+                  {(r.orderedStops || []).length > 4 && <div style={{ fontSize: 11, color: C.dim }}>+{r.orderedStops.length - 4} حاوية أخرى</div>}
+                </div>
+                <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6 }}>{r.binIds?.length || 0} حاوية · {r.estimatedDistanceKm} كم تقريبًا · بانتظار اعتماد موظف</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {!loading && totalBins > 0 && <ImpactCard impact={impact} />}
+
+      <Card title="أبرز الحاويات الحرجة الآن" icon={<AlertTriangle size={16} color="#94a3b8" />}>
+        {criticalList.length === 0 ? (
+          <EmptyState icon="✅" title="لا توجد حاويات بأولوية حرجة أو مرتفعة حاليًا" />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {criticalList.map(({ bin, neighborhood: n, priority }) => (
+              <div key={bin.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: 10, background: C.bg, border: `1px solid ${C.border}`, fontSize: 12, gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: C.text }}>{bin.name} <span style={{ color: C.dim, fontWeight: 400 }}>· {n?.name || "—"}</span></div>
+                  <div style={{ color: C.muted, marginTop: 2 }}>
+                    الامتلاء: {bin.lastFillLevelPercent != null ? `${bin.lastFillLevelPercent}%` : "—"} ·
+                    {" "}الحرارة: {bin.lastTemperatureCelsius != null ? `${bin.lastTemperatureCelsius}°` : "—"} ·
+                    {" "}{getReadingAgeLabel(bin.lastReadingAt)}
+                  </div>
+                </div>
+                <StateBadge state={priority.sensorHealth.status !== "healthy" ? priority.sensorHealth.connectivity : priority.tier} />
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
         <Card title="توزيع النفايات الأسبوعي (كجم)" icon={<BarChart2 size={16} color="#94a3b8" />}>
@@ -982,23 +1806,27 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
           </ResponsiveContainer></ChartBox>
         </Card>
 
-        <Card title="توزيع مستويات الامتلاء" icon={<Target size={16} color="#94a3b8" />}>
-          <ChartBox height={220}><ResponsiveContainer>
-            <PieChart>
-              <Pie data={fillDistribution} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={4}
-                label={({ name, value }) => `${name}: ${value}`}>
-                {fillDistribution.map((e, i) => <Cell key={i} fill={e.fill} />)}
-              </Pie>
-              <Tooltip content={<CustomTooltip />} />
-            </PieChart>
-          </ResponsiveContainer></ChartBox>
-          <div style={{ display: "flex", justifyContent: "center", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
-            {fillDistribution.map((d, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: C.muted }}>
-                <div style={{ width: 8, height: 8, borderRadius: 2, background: d.fill }} /> {d.name}
+        <Card title="توزيع مستويات الامتلاء (الحاويات)" icon={<Target size={16} color="#94a3b8" />}>
+          {totalBins === 0 ? <EmptyState icon="📦" title="لا توجد حاويات بعد" /> : (
+            <>
+              <ChartBox height={220}><ResponsiveContainer>
+                <PieChart>
+                  <Pie data={fillDistribution} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={4}
+                    label={({ name, value }) => `${name}: ${value}`}>
+                    {fillDistribution.map((e, i) => <Cell key={i} fill={e.fill} />)}
+                  </Pie>
+                  <Tooltip content={<CustomTooltip />} />
+                </PieChart>
+              </ResponsiveContainer></ChartBox>
+              <div style={{ display: "flex", justifyContent: "center", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
+                {fillDistribution.map((d, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: C.muted }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 2, background: d.fill }} /> {d.name}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          )}
         </Card>
       </div>
 
@@ -1018,55 +1846,40 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
           </ResponsiveContainer></ChartBox>
         </Card>
 
-        <Card title="نشاط الشفط على مدار الساعة" icon={<Clock size={16} color="#94a3b8" />}>
-          <ChartBox height={260}><ResponsiveContainer>
-            <AreaChart data={hourlyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-              <defs>
-                <linearGradient id="gS" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={C.accent} stopOpacity={0.4} />
-                  <stop offset="95%" stopColor={C.accent} stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="gP" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={C.warning} stopOpacity={0.4} />
-                  <stop offset="95%" stopColor={C.warning} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-              <XAxis dataKey="hour" tick={{ fill: C.muted, fontSize: 9 }} interval={2} />
-              <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-              <Area type="monotone" dataKey="الشفط" stroke={C.accent} fill="url(#gS)" strokeWidth={2} name="معدل الشفط" />
-              <Area type="monotone" dataKey="الضغط" stroke={C.warning} fill="url(#gP)" strokeWidth={2} name="الضغط (بار)" />
-            </AreaChart>
-          </ResponsiveContainer></ChartBox>
+        <Card title="نشاط عمليات الجمع على مدار الساعة" icon={<Clock size={16} color="#94a3b8" />}>
+          {/* لا توجد بعد بيانات collection_events حقيقية (تأتي في مرحلة إدارة الجولات) —
+              عُرض Empty State بدل اختلاق رقم إنتاجي، بدلاً من إعادة تسمية الرسم القديم "نشاط الشفط" فقط. */}
+          <EmptyState icon="🚚" title="لا تتوفر بيانات عمليات جمع حقيقية بعد" desc="سيظهر هذا الرسم بمجرد تفعيل تتبع الجولات والجمع في مرحلة إدارة الجولات." />
         </Card>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-        <Card title="أداء المحطات - بريدة" icon={<Target size={16} color="#94a3b8" />}>
-          <ChartBox height={300}><ResponsiveContainer>
-            <RadarChart cx="50%" cy="50%" outerRadius="70%" data={stationPerformance}>
-              <PolarGrid stroke={C.border} />
-              <PolarAngleAxis dataKey="name" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
-              <PolarRadiusAxis tick={{ fill: C.dim, fontSize: 9 }} />
-              <Radar name="الامتلاء" dataKey="الامتلاء" stroke={C.danger} fill={C.danger} fillOpacity={0.2} />
-              <Radar name="الشفط" dataKey="الشفط" stroke={C.accent} fill={C.accent} fillOpacity={0.2} />
-              <Radar name="المحرك" dataKey="المحرك" stroke={C.info} fill={C.info} fillOpacity={0.2} />
-              <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-              <Tooltip content={<CustomTooltip />} />
-            </RadarChart>
-          </ResponsiveContainer></ChartBox>
+        <Card title="متوسط الامتلاء حسب الحي" icon={<Target size={16} color="#94a3b8" />}>
+          {neighborhoodFillBars.length === 0 ? <EmptyState icon="🏘️" title="لا توجد أحياء بعد" /> : (
+            <ChartBox height={300}><ResponsiveContainer>
+              <BarChart data={neighborhoodFillBars} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
+                <YAxis type="category" dataKey="name" width={80} tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="متوسط_الامتلاء" radius={[0, 4, 4, 0]}>
+                  {neighborhoodFillBars.map((d, i) => (
+                    <Cell key={i} fill={d.متوسط_الامتلاء >= THRESHOLDS.fillCriticalPct ? C.danger : d.متوسط_الامتلاء >= THRESHOLDS.fillWarningPct ? C.warning : C.accent} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer></ChartBox>
+          )}
         </Card>
 
         <Card title="التنبيهات" icon={<Bell size={16} color="#94a3b8" />}>
-          {criticalCount > 0 && (
+          {criticalBins.length > 0 && (
             <span style={{ background: C.danger + "30", color: C.danger, fontSize: 11, padding: "2px 8px", borderRadius: 10, fontWeight: 600, marginBottom: 12, display: "inline-block" }}>
-              {criticalCount} حرج
+              {criticalBins.length} حرج
             </span>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 280, overflowY: "auto" }}>
-            {alerts.map((a) => (
+            {alerts.length === 0 ? <EmptyState icon="🔔" title="لا توجد تنبيهات حاليًا" /> : alerts.map((a) => (
               <div key={a.id} style={{ padding: "10px 12px", borderRadius: 10, background: C.bg, border: `1px solid ${C.border}`, fontSize: 12 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                   <span style={{ fontWeight: 600, color: C.text }}>{a.icon} {a.type}</span>
@@ -1081,9 +1894,9 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
         {[
-          { label: "محطات طبيعية", count: stations.filter((s) => getStatus(s.fillLevel) === "طبيعي").length, color: C.accent, icon: <CheckCircle size={32} color={C.accent} /> },
-          { label: "محطات تحت التحذير", count: stations.filter((s) => getStatus(s.fillLevel) === "تحذير").length, color: C.warning, icon: <AlertTriangle size={32} color={C.warning} /> },
-          { label: "محطات حرجة", count: criticalCount, color: C.danger, icon: <AlertTriangle size={32} color={C.danger} /> },
+          { label: "حاويات طبيعية", count: normalBins.length, color: C.accent, icon: <CheckCircle size={32} color={C.accent} /> },
+          { label: "حاويات تحتاج متابعة", count: warningBins.length, color: C.warning, icon: <AlertTriangle size={32} color={C.warning} /> },
+          { label: "حاويات حرجة", count: criticalBins.length, color: C.danger, icon: <AlertTriangle size={32} color={C.danger} /> },
         ].map((item, i) => (
           <div key={i} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 16, padding: 20, textAlign: "center" }}>
             <div style={{ marginBottom: 6, display: "flex", justifyContent: "center" }}>{item.icon}</div>
@@ -1096,548 +1909,401 @@ const DashboardPage = ({ stations, weeklyData, monthlyTrend, alerts, hourlyData 
   );
 };
 
-// ======================== STATIONS ========================
-const StationsPage = ({ stations, stationHistoryByDistrict = {} }) => {
-  const [selectedId, setSelectedId] = useState(null);
-  const [filter, setFilter] = useState("الكل");
-  const [sort, setSort]   = useState("fillDesc"); // fillDesc | fillAsc | containers
+// ======================== NEIGHBORHOODS (replaces old STATIONS page) ========================
+const NEIGHBORHOOD_FILTERS = [
+  { key: "all",      label: "الكل" },
+  { key: "low",      label: "طبيعي" },
+  { key: "medium",   label: "يحتاج متابعة" },
+  { key: "high",     label: "أولوية مرتفعة" },
+  { key: "critical", label: "حرج" },
+  { key: "offline",  label: "بلا بيانات / Offline" },
+];
 
-  // ─── Add Station ───────────────────────────────────────────
-  const [showAddStation, setShowAddStation] = useState(false);
-  const emptyStation = { name: "", district: "", fillLevel: "", pressure: "", wasteType: "عضوية", dailyWaste: "" };
-  const [stationForm, setStationForm] = useState(emptyStation);
-  const [stationLoading, setStationLoading] = useState(false);
-  const [stationError, setStationError] = useState("");
+const NeighborhoodsPage = ({ neighborhoods = [], bins = [], fireSensors = [], routes = [], citizenReports = [], loading, onViewBins, onOpenRoute, onShowOnMap }) => {
+  const binCtx = useMemo(() => makeBinContext(fireSensors, citizenReports, neighborhoods), [fireSensors, citizenReports, neighborhoods]);
+  const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
 
-  // ─── Container Modal ───────────────────────────────────────
-  const [showContainerModal, setShowContainerModal] = useState(false);
-  const [editingContainer, setEditingContainer] = useState(null);
-  const [containerForm, setContainerForm] = useState({ name: "", fillLevel: "" });
-  const [containerLoading, setContainerLoading] = useState(false);
-  const [containerError, setContainerError] = useState("");
-  const [deletingContainerId, setDeletingContainerId] = useState(null);
+  const isThermalAlert = (name) =>
+    fireSensors.some((s) =>
+      normalizeNeighborhoodName(s.district) === normalizeNeighborhoodName(name) &&
+      (s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط")
+    );
 
-  // Keep selected station live from onSnapshot feed
-  const currentSelected = selectedId ? (stations.find(s => s.id === selectedId) || null) : null;
+  // One row per real neighborhood (duplicate docs with the same name are merged, bins summed).
+  const rows = useMemo(() => groupNeighborhoodsByName(neighborhoods, bins).map((g) => {
+    const n = g.primary;
+    const idSet = new Set(g.ids);
+    const nBins = bins.filter((b) => idSet.has(b.neighborhoodId));
+    const thermalAlert = isThermalAlert(g.name);
+    const scoredBins = nBins.map((bin) => ({ bin, priority: getBinPriority(bin, null, [], binCtx.forBin(bin)) }));
+    const citizenReportCount = binCtx.forNeighborhoodName(g.name).citizenReportCount + nBins.reduce((a, b) => a + binCtx.reportCountForBin(b.id), 0);
+    const result = getNeighborhoodPriority(scoredBins, { thermalAlert, citizenReportCount });
+    const connected = nBins.filter((b) => getSensorConnectivity(b) === "online").length;
+    const lastReadingAt = nBins.reduce((latest, b) => {
+      if (!b.lastReadingAt) return latest;
+      return !latest || new Date(b.lastReadingAt) > new Date(latest) ? b.lastReadingAt : latest;
+    }, null);
+    const openRoute = routes.find((r) => ["suggested", "approved", "in_progress"].includes(r.status) && (r.neighborhoodIds || []).some((id) => idSet.has(id))) || null;
+    return { ...n, key: g.key, name: g.name, ...result, status: neighborhoodDisplayTier(result), connected, disconnected: nBins.length - connected, lastReadingAt, thermalAlert, openRoute, demo: nBins.length > 0 && nBins.every((b) => b.demo) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [neighborhoods, bins, fireSensors, routes, binCtx]);
 
-  const filtered = useMemo(() => {
-    const base = filter === "الكل" ? [...stations] : stations.filter(s => getStatus(s.fillLevel) === filter);
-    if (sort === "fillDesc")    return base.sort((a,b) => b.fillLevel - a.fillLevel);
-    if (sort === "fillAsc")     return base.sort((a,b) => a.fillLevel - b.fillLevel);
-    if (sort === "containers")  return base.sort((a,b) => (b.containers?.length||0) - (a.containers?.length||0));
-    return base;
-  }, [stations, filter, sort]);
+  const filtered = rows.filter((n) => {
+    if (search && !n.name.includes(search)) return false;
+    if (filter === "all") return true;
+    return n.status === filter;
+  });
 
-  // سجل تاريخي ثابت يُستخدم كـ fallback إذا لم يكن الحي في analytics
-  const defaultHistory = useMemo(() => [
-    { day:"الأحد",    الامتلاء:40, الضغط:1.8, الكمية:120 },
-    { day:"الإثنين",  الامتلاء:48, الضغط:2.0, الكمية:135 },
-    { day:"الثلاثاء", الامتلاء:55, الضغط:2.2, الكمية:148 },
-    { day:"الأربعاء", الامتلاء:62, الضغط:2.4, الكمية:160 },
-    { day:"الخميس",   الامتلاء:70, الضغط:2.6, الكمية:175 },
-    { day:"الجمعة",   الامتلاء:38, الضغط:1.6, الكمية:95  },
-    { day:"السبت",    الامتلاء:44, الضغط:1.9, الكمية:115 },
-  ], []);
-
-  // السجل الأسبوعي الحقيقي من Firestore (أو الافتراضي)
-  const stationHistory = (currentSelected && stationHistoryByDistrict[currentSelected.district])
-    || defaultHistory;
-
-  // ─── Handlers: Station ────────────────────────────────────
-  const handleAddStation = async () => {
-    const { name, district, fillLevel, pressure, wasteType, dailyWaste } = stationForm;
-    const fl = Number(fillLevel);
-    const pr = Number(pressure);
-    const dw = Number(dailyWaste);
-    if (!name.trim())    { setStationError("يرجى إدخال اسم المحطة"); return; }
-    if (!district.trim()){ setStationError("يرجى إدخال اسم الحي"); return; }
-    if (fillLevel === "" || isNaN(fl) || fl < 0 || fl > 100) { setStationError("مستوى الامتلاء يجب أن يكون بين 0 و 100"); return; }
-    if (pressure === "" || isNaN(pr) || pr < 0 || pr > 20)   { setStationError("الضغط يجب أن يكون بين 0 و 20 بار"); return; }
-    if (dailyWaste === "" || isNaN(dw) || dw <= 0)            { setStationError("الكمية اليومية يجب أن تكون أكبر من صفر"); return; }
-    setStationLoading(true); setStationError("");
-    try {
-      await addDoc(collection(db, "stations"), {
-        name: name.trim(),
-        district: district.trim(),
-        fillLevel: Number(fillLevel),
-        pressure: Number(pressure),
-        wasteType,
-        dailyWaste: Number(dailyWaste),
-        containers: [],
-        createdAt: new Date().toISOString(),
-      });
-      setShowAddStation(false);
-      setStationForm(emptyStation);
-    } catch (e) {
-      setStationError("حدث خطأ: " + e.message);
-    } finally {
-      setStationLoading(false);
-    }
-  };
-
-  // ─── Handlers: Containers ─────────────────────────────────
-  const handleSaveContainer = async () => {
-    const fl = Number(containerForm.fillLevel);
-    if (!containerForm.name.trim()) { setContainerError("يرجى إدخال اسم الحاوية"); return; }
-    if (containerForm.fillLevel === "" || isNaN(fl) || fl < 0 || fl > 100) { setContainerError("مستوى الامتلاء يجب أن يكون بين 0 و 100"); return; }
-    if (!currentSelected) return;
-    setContainerError("");
-    setContainerLoading(true);
-    try {
-      const containers = [...(currentSelected.containers || [])];
-      if (editingContainer) {
-        const idx = containers.findIndex(c => c.id === editingContainer.id);
-        if (idx !== -1) containers[idx] = { ...containers[idx], name: containerForm.name, fillLevel: Number(containerForm.fillLevel) };
-      } else {
-        containers.push({ id: `C${Date.now()}`, name: containerForm.name, fillLevel: Number(containerForm.fillLevel) });
-      }
-      await updateDoc(doc(db, "stations", currentSelected.id), { containers });
-      setShowContainerModal(false);
-      setEditingContainer(null);
-      setContainerForm({ name: "", fillLevel: "" });
-      setContainerError("");
-    } catch (e) {
-      setContainerError("حدث خطأ: " + e.message);
-    } finally {
-      setContainerLoading(false);
-    }
-  };
-
-  const handleDeleteContainer = async (containerId) => {
-    if (!currentSelected) return;
-    const containers = (currentSelected.containers || []).filter(c => c.id !== containerId);
-    try {
-      await updateDoc(doc(db, "stations", currentSelected.id), { containers });
-    } catch (e) {
-      console.error("خطأ في حذف الحاوية:", e);
-    }
-    setDeletingContainerId(null);
-  };
-
-  const openAddContainer = () => {
-    setEditingContainer(null);
-    setContainerForm({ name: "", fillLevel: "" });
-    setContainerError("");
-    setShowContainerModal(true);
-  };
-
-  const openEditContainer = (c) => {
-    setEditingContainer(c);
-    setContainerForm({ name: c.name, fillLevel: String(c.fillLevel) });
-    setContainerError("");
-    setShowContainerModal(true);
-  };
-
-  const F = ARABIC_FONT;
-  const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: F, outline: "none", boxSizing: "border-box" };
+  if (loading) return <EmptyState icon="⏳" title="جاري تحميل الأحياء…" />;
+  if (neighborhoods.length === 0) {
+    return <EmptyState icon="🏘️" title="لا توجد أحياء مسجلة بعد" desc="شغّل ترحيل البيانات من صفحة الإعدادات لإنشاء الأحياء من بيانات المحطات القديمة." />;
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
-      {/* ─── Toolbar ─────────────────────────────────────── */}
-      {!currentSelected && (
-        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-          {/* Row 1: Filter + Add */}
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
-            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-              {[
-                { key:"الكل",    color:C.accent },
-                { key:"طبيعي",  color:C.accent },
-                { key:"تحذير",  color:C.warning },
-                { key:"حرج",    color:C.danger  },
-              ].map(({key,color}) => (
-                <button key={key} onClick={() => setFilter(key)} style={{
-                  padding:"8px 18px", borderRadius:10,
-                  border:`1px solid ${filter===key ? color : C.border}`,
-                  background: filter===key ? color+"20" : "transparent",
-                  color: filter===key ? color : C.muted,
-                  cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:F,
-                }}>{key}</button>
-              ))}
-            </div>
-            <button onClick={() => { setShowAddStation(true); setStationError(""); setStationForm(emptyStation); }} style={{
-              padding:"10px 20px", borderRadius:10, border:"none",
-              background:"linear-gradient(135deg,#10b981,#059669)", color:"#000",
-              fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:F,
-            }}>➕ إضافة محطة</button>
-          </div>
-
-          {/* Row 2: Sort */}
-          <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-            <span style={{ fontSize:12, color:C.dim, fontFamily:F }}>ترتيب:</span>
-            {[
-              { key:"fillDesc",   label:"⬇ الأعلى امتلاءً" },
-              { key:"fillAsc",    label:"⬆ الأقل امتلاءً"  },
-              { key:"containers", label:"📦 عدد الحاويات"   },
-            ].map(({key,label}) => (
-              <button key={key} onClick={() => setSort(key)} style={{
-                padding:"6px 14px", borderRadius:8,
-                border:`1px solid ${sort===key ? C.info : C.border}`,
-                background: sort===key ? C.info+"20" : "transparent",
-                color: sort===key ? C.info : C.muted,
-                cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:F,
-              }}>{label}</button>
-            ))}
-          </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 220px" }}>
+          <Search size={15} color={C.dim} style={{ position: "absolute", insetInlineStart: 12, top: "50%", transform: "translateY(-50%)" }} />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث عن حي…"
+            style={{ width: "100%", padding: "9px 36px 9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT }} />
         </div>
-      )}
-
-      {/* ─── Add Station Modal ───────────────────────────── */}
-      {showAddStation && (
-        <div style={{ position:"fixed", inset:0, background:"#000b", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }} onClick={() => setShowAddStation(false)}>
-          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:20, padding:28, width:500, maxWidth:"95vw", direction:"rtl" }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize:18, fontWeight:800, color:C.text, marginBottom:20, fontFamily:F }}>🏭 إضافة محطة جديدة</div>
-            {stationError && <div style={{ fontSize:12, color:C.danger, background:C.danger+"15", padding:"8px 12px", borderRadius:8, marginBottom:14, border:`1px solid ${C.danger}30` }}>⚠️ {stationError}</div>}
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:12 }}>
-              <div style={{ gridColumn:"1/-1" }}>
-                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>اسم المحطة *</label>
-                <input value={stationForm.name} onChange={e => setStationForm(p=>({...p,name:e.target.value}))} placeholder="مثال: محطة حي الخليج" style={inp} />
-              </div>
-              <div style={{ gridColumn:"1/-1" }}>
-                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>الحي *</label>
-                <input value={stationForm.district} onChange={e => setStationForm(p=>({...p,district:e.target.value}))} placeholder="اكتب اسم الحي" style={inp} />
-              </div>
-              <div>
-                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>مستوى الامتلاء (%) *</label>
-                <input type="number" min="0" max="100" value={stationForm.fillLevel} onChange={e => setStationForm(p=>({...p,fillLevel:e.target.value}))} placeholder="0–100" style={inp} />
-              </div>
-              <div>
-                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>الضغط (بار) *</label>
-                <input type="number" step="0.1" min="0" value={stationForm.pressure} onChange={e => setStationForm(p=>({...p,pressure:e.target.value}))} placeholder="مثال: 2.5" style={inp} />
-              </div>
-              <div>
-                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>نوع النفايات *</label>
-                <select value={stationForm.wasteType} onChange={e => setStationForm(p=>({...p,wasteType:e.target.value}))} style={{...inp,appearance:"auto"}}>
-                  {["عضوية","بلاستيك","ورق","زجاج","معادن","مختلط"].map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>الكمية اليومية (كجم) *</label>
-                <input type="number" min="0" value={stationForm.dailyWaste} onChange={e => setStationForm(p=>({...p,dailyWaste:e.target.value}))} placeholder="مثال: 150" style={inp} />
-              </div>
-            </div>
-            <div style={{ display:"flex", gap:10, marginTop:20 }}>
-              <button onClick={handleAddStation} disabled={stationLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:stationLoading?"#334155":"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontWeight:700, cursor:stationLoading?"not-allowed":"pointer", fontFamily:F, fontSize:13 }}>
-                {stationLoading ? "جاري الحفظ..." : "💾 حفظ المحطة"}
-              </button>
-              <button onClick={() => setShowAddStation(false)} style={{ padding:"12px 20px", borderRadius:10, border:`1px solid ${C.border}`, background:"transparent", color:C.muted, cursor:"pointer", fontFamily:F, fontSize:13 }}>إلغاء</button>
-            </div>
-          </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {NEIGHBORHOOD_FILTERS.map((f) => (
+            <button key={f.key} onClick={() => setFilter(f.key)} style={{
+              padding: "7px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: ARABIC_FONT,
+              border: `1px solid ${filter === f.key ? C.accent : C.border}`,
+              background: filter === f.key ? C.accent + "20" : "transparent",
+              color: filter === f.key ? C.accent : C.muted,
+            }}>{f.label}</button>
+          ))}
         </div>
-      )}
+      </div>
 
-      {/* ─── Container Add/Edit Modal ────────────────────── */}
-      {showContainerModal && (
-        <div style={{ position:"fixed", inset:0, background:"#000b", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }} onClick={() => setShowContainerModal(false)}>
-          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:20, padding:28, width:380, maxWidth:"95vw", direction:"rtl" }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:20, fontFamily:F }}>
-              {editingContainer ? "✏️ تعديل الحاوية" : "➕ إضافة حاوية جديدة"}
-            </div>
-            <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-              <div>
-                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>اسم الحاوية *</label>
-                <input value={containerForm.name} onChange={e => setContainerForm(p=>({...p,name:e.target.value}))} placeholder="مثال: حاوية منزل 5" style={inp} />
+      {filtered.length === 0 ? <EmptyState icon="🔎" title="لا توجد نتائج مطابقة" /> : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
+          {filtered.map((n) => (
+            <div key={n.key} style={{ background: C.card, border: `1px solid ${STATUS_COLORS[n.status]}40`, borderRadius: 16, padding: 18 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>{n.name} {n.demo && <DemoBadge />}</div>
+                <StateBadge state={n.status} />
               </div>
-              <div>
-                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>مستوى الامتلاء (%) *</label>
-                <input type="number" min="0" max="100" value={containerForm.fillLevel} onChange={e => setContainerForm(p=>({...p,fillLevel:e.target.value}))} placeholder="0–100" style={inp} />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, color: C.muted, marginBottom: 10 }}>
+                <div>عدد الحاويات: <b style={{ color: C.text }}>{n.total}</b></div>
+                <div>متوسط الامتلاء: <b style={{ color: C.text }}>{n.avgFill != null ? `${n.avgFill}%` : "—"}</b></div>
+                <div>متصلة: <b style={{ color: C.accent }}>{n.connected}</b></div>
+                <div>غير متصلة: <b style={{ color: C.dim }}>{n.disconnected}</b></div>
+                <div>حرجة: <b style={{ color: C.danger }}>{n.criticalCount}</b></div>
+                <div>تنبيه حراري: <b style={{ color: n.thermalAlert ? C.danger : C.accent }}>{n.thermalAlert ? "نعم" : "لا"}</b></div>
+                <div style={{ gridColumn: "1 / -1" }}>بلاغات مواطنين مفتوحة: <b style={{ color: n.citizenReportCount > 0 ? C.warning : C.text }}>{n.citizenReportCount || 0}</b></div>
               </div>
-            </div>
-            {containerError && (
-              <div style={{ marginTop:10, padding:"8px 12px", borderRadius:8, background:C.danger+"20", border:`1px solid ${C.danger}40`, color:C.danger, fontSize:12, fontFamily:F }}>
-                ⚠️ {containerError}
+              <div style={{ fontSize: 11, color: C.dim, marginBottom: 10 }}>آخر قراءة: {getReadingAgeLabel(n.lastReadingAt)}</div>
+              {n.reasons?.length > 0 && (
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>{n.reasons[0]}</div>
+              )}
+              <div style={{ fontSize: 11, marginBottom: 10, padding: "6px 8px", borderRadius: 8, background: n.openRoute ? C.info + "12" : C.bg, color: n.openRoute ? C.info : ((n.criticalCount > 0 || n.highCount > 0) ? C.warning : C.dim), border: `1px solid ${n.openRoute ? C.info + "30" : C.border}` }}>
+                {n.openRoute ? `🧭 ${n.openRoute.routeName} — ${ROUTE_STATUS_LABELS[n.openRoute.status] || n.openRoute.status} · ${n.openRoute.binIds?.length || 0} حاوية` : ((n.criticalCount > 0 || n.highCount > 0) ? "⚠️ يحتاج جمعًا — لا توجد جولة مقترحة بعد" : "لا توجد جولة مفتوحة")}
               </div>
-            )}
-            <div style={{ display:"flex", gap:10, marginTop:14 }}>
-              <button onClick={handleSaveContainer} disabled={containerLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:containerLoading?"#334155":"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontWeight:700, cursor:containerLoading?"not-allowed":"pointer", fontFamily:F, fontSize:13 }}>
-                {containerLoading ? "جاري الحفظ..." : "💾 حفظ"}
-              </button>
-              <button onClick={() => { setShowContainerModal(false); setEditingContainer(null); setContainerError(""); }} style={{ padding:"12px 20px", borderRadius:10, border:`1px solid ${C.border}`, background:"transparent", color:C.muted, cursor:"pointer", fontFamily:F, fontSize:13 }}>إلغاء</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ─── Station Detail View ─────────────────────────── */}
-      {currentSelected ? (
-        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-          <button onClick={() => { setSelectedId(null); setDeletingContainerId(null); }} style={{ alignSelf:"flex-start", padding:"6px 16px", borderRadius:8, border:`1px solid ${C.border}`, background:"transparent", color:C.accent, cursor:"pointer", fontSize:13, fontFamily:F }}>
-            ← العودة للقائمة
-          </button>
-
-          {/* Station Info */}
-          <Card>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
-              <div>
-                <h2 style={{ fontSize:22, fontWeight:800, color:C.text, margin:0 }}>{currentSelected.name}</h2>
-                <span style={{ fontSize:13, color:C.muted }}>{currentSelected.district} | بريدة</span>
-              </div>
-              <StatusBadge status={getStatus(currentSelected.fillLevel)} />
-            </div>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px,1fr))", gap:16, marginBottom:24 }}>
-              <div style={{ background:C.bg, borderRadius:12, padding:16, textAlign:"center" }}>
-                <div style={{ fontSize:12, color:C.muted, marginBottom:10 }}>مستوى الامتلاء</div>
-                <div style={{ display:"flex", justifyContent:"center" }}>
-                  <CircularGauge value={currentSelected.fillLevel} color={currentSelected.fillLevel>=85?C.danger:currentSelected.fillLevel>=60?C.warning:C.accent} size={90} />
-                </div>
-              </div>
-            </div>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(180px,1fr))", gap:12 }}>
-              {[
-                { label:"نوع النفايات", val:currentSelected.wasteType, icon:"🗑️" },
-                { label:"الضغط", val:`${currentSelected.pressure} بار`, icon:"🔧" },
-                { label:"الكمية اليومية", val:`${currentSelected.dailyWaste||0} كجم`, icon:"📦" },
-                { label:"الحي", val:currentSelected.district||"—", icon:"📍" },
-              ].map((item,i) => (
-                <div key={i} style={{ background:C.bg, borderRadius:10, padding:"12px 14px", display:"flex", alignItems:"center", gap:10 }}>
-                  <span style={{ fontSize:20 }}>{item.icon}</span>
-                  <div>
-                    <div style={{ fontSize:10, color:C.dim }}>{item.label}</div>
-                    <div style={{ fontSize:13, color:C.text, fontWeight:600 }}>{item.val}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* ─── Containers Section ──────────────────────── */}
-          {(() => {
-            const ctrs      = currentSelected.containers || [];
-            const cCrit     = ctrs.filter(c => getStatus(c.fillLevel) === "حرج");
-            const cWarn     = ctrs.filter(c => getStatus(c.fillLevel) === "تحذير");
-            const cNorm     = ctrs.filter(c => getStatus(c.fillLevel) === "طبيعي");
-            // مرتبة: حرج → تحذير → طبيعي
-            const sorted    = [...cCrit, ...cWarn, ...cNorm];
-            const avgFill   = ctrs.length ? Math.round(ctrs.reduce((a,c)=>a+c.fillLevel,0)/ctrs.length) : 0;
-
-            return (
-              <Card title="حاويات المنازل" icon={<Package size={16} color="#94a3b8" />}>
-                {/* ── مؤشرات الملخص ─────────────────────── */}
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))", gap:10, marginBottom:18 }}>
-                  {[
-                    { label:"إجمالي الحاويات", val:ctrs.length,   color:C.info,    icon:<Package size={20} color={C.info} /> },
-                    { label:"حرج",             val:cCrit.length,  color:C.danger,  icon:<div style={{width:12,height:12,borderRadius:"50%",background:"#ef4444"}} /> },
-                    { label:"تحذير",           val:cWarn.length,  color:C.warning, icon:<div style={{width:12,height:12,borderRadius:"50%",background:"#f59e0b"}} /> },
-                    { label:"متوسط الامتلاء",  val:`${avgFill}%`, color:avgFill>=85?C.danger:avgFill>=60?C.warning:C.accent, icon:<BarChart2 size={20} color={avgFill>=85?C.danger:avgFill>=60?C.warning:C.accent} /> },
-                  ].map((m,i) => (
-                    <div key={i} style={{ background:C.bg, borderRadius:12, padding:"12px 14px", textAlign:"center", border:`1px solid ${m.color}25` }}>
-                      <div style={{ marginBottom:4, display:"flex", justifyContent:"center", alignItems:"center" }}>{m.icon}</div>
-                      <div style={{ fontSize:22, fontWeight:800, color:m.color }}>{m.val}</div>
-                      <div style={{ fontSize:10, color:C.dim, marginTop:2 }}>{m.label}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* ── تنبيه الخطر ─────────────────────────── */}
-                {cCrit.length > 0 && (
-                  <div style={{ background:C.danger+"12", border:`1px solid ${C.danger}40`, borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:12, color:C.danger, fontWeight:600, display:"flex", alignItems:"center", gap:8 }}>
-                    ⚠️ {cCrit.length} حاوية بحالة حرج — تحتاج تفريغاً فورياً:&nbsp;
-                    {cCrit.map(c=><span key={c.id} style={{ background:C.danger+"20", borderRadius:6, padding:"2px 7px", marginLeft:4 }}>{c.name}</span>)}
-                  </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => onViewBins && onViewBins(n.id)} style={{
+                  flex: 1, padding: "9px", borderRadius: 10, border: "none", background: C.emph || C.border,
+                  color: C.text, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT,
+                }}>عرض الحاويات</button>
+                {onShowOnMap && (
+                  <button onClick={() => onShowOnMap(n.key)} style={{ padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🗺️</button>
                 )}
-
-                {/* ── شريط الترتيب + زر الإضافة ─────────── */}
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-                  <div style={{ fontSize:11, color:C.dim, fontFamily:F }}>
-                    مرتبة: حرج أولاً ← تحذير ← طبيعي
-                  </div>
-                  <button onClick={openAddContainer} style={{ padding:"8px 16px", borderRadius:8, border:"none", background:"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:F }}>
-                    ➕ إضافة حاوية
-                  </button>
-                </div>
-
-                {ctrs.length === 0 ? (
-                  <div style={{ textAlign:"center", padding:"40px 0", color:C.dim, fontSize:13 }}>
-                    <div style={{ fontSize:36, marginBottom:10 }}>📭</div>
-                    لا توجد حاويات — اضغط "إضافة حاوية" للبدء
-                  </div>
-                ) : (
-                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(210px,1fr))", gap:12 }}>
-                    {sorted.map((c, idx) => {
-                      const st      = getStatus(c.fillLevel);
-                      const stColor = st==="حرج" ? C.danger : st==="تحذير" ? C.warning : C.accent;
-
-                      return (
-                        <div key={c.id} style={{ background:C.bg, borderRadius:12, padding:14, border:`1px solid ${stColor}50`, position:"relative", overflow:"hidden" }}>
-                          {/* شريط الامتلاء العلوي */}
-                          <div style={{ position:"absolute", top:0, left:0, right:0, height:4, background:C.border }}>
-                            <div style={{ width:`${c.fillLevel}%`, height:"100%", background:stColor, transition:"width 0.6s" }} />
-                          </div>
-
-                          {/* رقم الترتيب */}
-                          <div style={{ position:"absolute", top:8, right:10, fontSize:9, color:C.dim }}>#{idx+1}</div>
-
-                          {/* اسم + أزرار */}
-                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, marginTop:6 }}>
-                            <div style={{ fontSize:13, fontWeight:700, color:C.text, flex:1, marginLeft:6, lineHeight:1.3 }}>{c.name}</div>
-                            <div style={{ display:"flex", gap:2, flexShrink:0 }}>
-                              <button onClick={e=>{e.stopPropagation();openEditContainer(c);}} title="تعديل" style={{ background:"none", border:"none", cursor:"pointer", fontSize:13, padding:"2px 4px", color:C.info }}>✏️</button>
-                              {deletingContainerId === c.id ? (
-                                <>
-                                  <button onClick={e=>{e.stopPropagation();handleDeleteContainer(c.id);}} style={{ background:C.danger, border:"none", color:"#fff", fontSize:10, fontWeight:700, cursor:"pointer", borderRadius:5, padding:"2px 7px", fontFamily:F }}>تأكيد</button>
-                                  <button onClick={e=>{e.stopPropagation();setDeletingContainerId(null);}} style={{ background:"#334155", border:"none", color:C.muted, fontSize:10, cursor:"pointer", borderRadius:5, padding:"2px 7px", fontFamily:F }}>إلغاء</button>
-                                </>
-                              ) : (
-                                <button onClick={e=>{e.stopPropagation();setDeletingContainerId(c.id);}} title="حذف" style={{ background:"none", border:"none", cursor:"pointer", fontSize:13, padding:"2px 4px" }}>🗑️</button>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* نسبة + badge */}
-                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-                            <div style={{ fontSize:28, fontWeight:900, color:stColor, lineHeight:1 }}>{c.fillLevel}%</div>
-                            <StatusBadge status={st} />
-                          </div>
-
-                          {/* شريط التقدم */}
-                          <div style={{ height:8, background:C.card, borderRadius:4, overflow:"hidden" }}>
-                            <div style={{ width:`${c.fillLevel}%`, height:"100%", background:stColor, borderRadius:4, transition:"width 0.6s ease",
-                              boxShadow: st==="حرج" ? `0 0 8px ${C.danger}80` : "none"
-                            }} />
-                          </div>
-
-                          {/* تنبيه حرج */}
-                          {st === "حرج" && (
-                            <div style={{ marginTop:8, fontSize:10, color:C.danger, fontWeight:700, textAlign:"center",
-                              background:C.danger+"15", borderRadius:6, padding:"3px 0" }}>
-                              ⚠️ يحتاج تفريغاً فورياً
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                {n.openRoute && onOpenRoute && (
+                  <button onClick={() => onOpenRoute(n.openRoute.id)} style={{ padding: "9px 12px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>الجولة</button>
                 )}
-              </Card>
-            );
-          })()}
-
-          {/* Charts */}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:16 }}>
-            <Card title="سجل الامتلاء والضغط" icon={<TrendingUp size={16} color="#94a3b8" />}>
-              <ChartBox height={220}><ResponsiveContainer>
-                <LineChart data={stationHistory}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="day" tick={{ fill:C.muted, fontSize:10, fontFamily:F }} />
-                  <YAxis tick={{ fill:C.muted, fontSize:10 }} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Legend wrapperStyle={{ fontFamily:F, fontSize:11 }} />
-                  <Line type="monotone" dataKey="الامتلاء" stroke={C.warning} strokeWidth={2} dot={{ r:3 }} name="الامتلاء %" />
-                  <Line type="monotone" dataKey="الضغط" stroke={C.info} strokeWidth={2} dot={{ r:3 }} name="الضغط (بار)" />
-                </LineChart>
-              </ResponsiveContainer></ChartBox>
-            </Card>
-            <Card title="كمية النفايات اليومية" icon={<Package size={16} color="#94a3b8" />}>
-              <ChartBox height={220}><ResponsiveContainer>
-                <BarChart data={stationHistory}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="day" tick={{ fill:C.muted, fontSize:10, fontFamily:F }} />
-                  <YAxis tick={{ fill:C.muted, fontSize:10 }} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="الكمية" fill={C.accent} radius={[6,6,0,0]} name="الكمية (كجم)" />
-                </BarChart>
-              </ResponsiveContainer></ChartBox>
-            </Card>
-          </div>
-        </div>
-
-      ) : (
-        /* ─── Stations Grid ────────────────────────────── */
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(300px,1fr))", gap:16 }}>
-          {filtered.map(s => {
-            const st        = getStatus(s.fillLevel);
-            const stColor   = st==="حرج" ? C.danger : st==="تحذير" ? C.warning : C.accent;
-            const ctrs      = s.containers || [];
-            const ctrCrit   = ctrs.filter(c => getStatus(c.fillLevel)==="حرج").length;
-            const ctrWarn   = ctrs.filter(c => getStatus(c.fillLevel)==="تحذير").length;
-
-            return (
-              <div key={s.id} onClick={() => setSelectedId(s.id)} style={{
-                background:C.card, border:`1px solid ${C.border}`, borderRadius:16,
-                cursor:"pointer", transition:"all 0.2s", position:"relative", overflow:"hidden",
-              }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor=stColor+"70"; e.currentTarget.style.background=C.cardHover; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor=C.border;     e.currentTarget.style.background=C.card; }}
-              >
-                {/* Top fill bar */}
-                <div style={{ position:"absolute", top:0, left:0, width:`${s.fillLevel}%`, height:3, background:stColor, transition:"width 0.6s" }} />
-
-                <div style={{ padding:18 }}>
-                  {/* Header */}
-                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
-                    <div>
-                      <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{s.name}</div>
-                      <div style={{ fontSize:11, color:C.dim, marginTop:2 }}>📍 {s.district||"—"} | بريدة</div>
-                    </div>
-                    <StatusBadge status={st} />
-                  </div>
-
-                  {/* Stats row */}
-                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:6, marginBottom:12 }}>
-                    {[
-                      { l:"الامتلاء",  v:`${s.fillLevel}%`,         vc:stColor },
-                      { l:"الضغط",     v:`${s.pressure||0} بار`,    vc:C.text  },
-                      { l:"النوع",     v:s.wasteType||"—",           vc:C.text  },
-                      { l:"يومياً",   v:`${s.dailyWaste||0} كجم`,   vc:C.text  },
-                    ].map((x,i) => (
-                      <div key={i} style={{ background:C.bg, borderRadius:8, padding:"7px 10px" }}>
-                        <div style={{ fontSize:10, color:C.dim, marginBottom:2 }}>{x.l}</div>
-                        <div style={{ fontSize:12, fontWeight:700, color:x.vc }}>{x.v}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Containers summary */}
-                  <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:10 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: ctrs.length ? 8 : 0 }}>
-                      <span style={{ fontSize:12, fontWeight:700, color:C.muted }}>📦 عدد الحاويات: <span style={{ color:C.text }}>{ctrs.length}</span></span>
-                      <div style={{ display:"flex", gap:6 }}>
-                        {ctrCrit > 0 && <span style={{ fontSize:10, fontWeight:700, color:C.danger, background:C.danger+"15", padding:"2px 7px", borderRadius:6 }}>🔴 {ctrCrit} حرج</span>}
-                        {ctrWarn > 0 && <span style={{ fontSize:10, fontWeight:700, color:C.warning, background:C.warning+"15", padding:"2px 7px", borderRadius:6 }}>🟡 {ctrWarn} تحذير</span>}
-                      </div>
-                    </div>
-
-                    {/* Container mini-list (max 3 shown) */}
-                    {ctrs.length > 0 && (
-                      <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-                        {ctrs.slice(0,3).map(c => {
-                          const cSt    = getStatus(c.fillLevel);
-                          const cColor = cSt==="حرج" ? C.danger : cSt==="تحذير" ? C.warning : C.accent;
-                          return (
-                            <div key={c.id} style={{ display:"flex", alignItems:"center", gap:8, background:C.bg, borderRadius:8, padding:"6px 10px" }}>
-                              <div style={{ flex:1, fontSize:11, color:C.text, fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.name}</div>
-                              <div style={{ fontSize:11, fontWeight:700, color:cColor, whiteSpace:"nowrap" }}>{c.fillLevel}%</div>
-                              <div style={{ width:50, height:5, background:C.border, borderRadius:3, overflow:"hidden" }}>
-                                <div style={{ width:`${c.fillLevel}%`, height:"100%", background:cColor, borderRadius:3 }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                        {ctrs.length > 3 && (
-                          <div style={{ fontSize:11, color:C.dim, textAlign:"center", paddingTop:2 }}>+ {ctrs.length-3} حاويات أخرى — اضغط للتفاصيل</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
-            );
-          })}
-          {filtered.length === 0 && (
-            <div style={{ gridColumn:"1/-1", textAlign:"center", padding:"60px 0", color:C.dim, fontSize:14 }}>
-              <div style={{ fontSize:40, marginBottom:10 }}>🔍</div>
-              لا توجد محطات في هذه الفئة
             </div>
-          )}
+          ))}
         </div>
       )}
     </div>
   );
 };
 
+// ======================== SMART BINS (new page) ========================
+const BIN_FILTERS = [
+  { key: "all",      label: "الكل" },
+  { key: "low",      label: "طبيعي" },
+  { key: "medium",   label: "يحتاج متابعة" },
+  { key: "high",     label: "مرتفع" },
+  { key: "critical", label: "حرج" },
+  { key: "offline",  label: "Offline" },
+  { key: "fault",    label: "Fault" },
+];
+
+/**
+ * Bin detail modal — the only place that fetches this ONE bin's bounded
+ * reading history (useBinReadings), so the real priority score/reasons and
+ * the §6/§7 predicted-full-time + future-state table are only ever computed
+ * for a single open bin, never for the whole list (§39 performance).
+ */
+const BinDetailModal = ({ bin, neighborhood, onClose, onAddToRoute, openRoute = null, onOpenRoute }) => {
+  const { readings, loading: loadingReadings } = useBinReadings(bin.id);
+  const priority = useMemo(() => getBinPriority(bin, null, readings), [bin, readings]);
+  const future = useMemo(
+    () => [1, 3, 6].map((h) => ({ h, ...predictFutureState(bin, readings, h) })),
+    [bin, readings]
+  );
+  const isStale = priority.sensorHealth.connectivity === "offline" || priority.sensorHealth.connectivity === "fault";
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "#000a", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24, maxWidth: 460, width: "100%", maxHeight: "88vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: C.text, display: "flex", alignItems: "center", gap: 8 }}>{bin.name} {bin.demo && <DemoBadge />}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.dim, fontSize: 20, cursor: "pointer" }}>✕</button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+          <StateBadge state={priority.tier} />
+          <div style={{ fontSize: 22, fontWeight: 800, color: STATUS_COLORS[priority.tier] || C.text }}>{priority.score}</div>
+          <div style={{ fontSize: 11, color: C.dim }}>/ 100 — الأولوية</div>
+        </div>
+
+        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>لماذا هذه الأولوية؟</div>
+          <ul style={{ margin: 0, paddingInlineStart: 18, fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
+            {priority.reasons.map((r, i) => (<li key={i}>{r}</li>))}
+          </ul>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 13, color: C.muted }}>
+          <div>Bin ID: <span style={{ color: C.text, fontFamily: "monospace" }}>{bin.id}</span></div>
+          <div>الحي: <b style={{ color: C.text }}>{neighborhood?.name || "—"}</b></div>
+          <div>نسبة الامتلاء: <b style={{ color: C.text }}>{bin.lastFillLevelPercent != null ? `${bin.lastFillLevelPercent}%` : "—"}</b></div>
+          <div>درجة الحرارة: <b style={{ color: C.text }}>{bin.lastTemperatureCelsius != null ? `${bin.lastTemperatureCelsius}°` : "—"}</b></div>
+          <div>حالة المستشعر: <StateBadge state={priority.sensorHealth.connectivity} /> {priority.sensorHealth.status !== "healthy" && <span style={{ fontSize: 11, color: C.dim }}>({STATE_LABELS[priority.sensorHealth.status] || priority.sensorHealth.status})</span>}</div>
+          <div>Device ID: <span style={{ color: C.text }}>{bin.deviceId || "—"}</span></div>
+          <div>البطارية: <span style={{ color: C.text }}>{bin.lastBatteryLevel != null ? `${bin.lastBatteryLevel}%` : "غير متوفرة"}</span></div>
+          <div>الموقع: <span style={{ color: C.text }}>{bin.lat != null ? `${bin.lat.toFixed(4)}, ${bin.lng.toFixed(4)}` : "غير مُحدَّد بعد"}</span></div>
+          <div>آخر قراءة: <span style={{ color: C.text }}>{getReadingAgeLabel(bin.lastReadingAt)}</span>{isStale && <span style={{ color: C.warning }}> — قراءة قديمة، لا تُعرض كقيمة حيّة</span>}</div>
+        </div>
+
+        <div style={{ marginTop: 14, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>توقع وقت الامتلاء</div>
+          {loadingReadings ? (
+            <div style={{ fontSize: 12, color: C.dim }}>جاري تحميل سجل القراءات…</div>
+          ) : priority.prediction.predictionAvailable ? (
+            <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
+              خلال <b style={{ color: C.text }}>{priority.prediction.hoursToFull.toFixed(1)} ساعة</b> تقريبًا
+              {" "}(ثقة التنبؤ: {CONFIDENCE_LABELS[priority.prediction.confidence] || priority.prediction.confidence})
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: C.dim }}>لا توجد بيانات كافية للتنبؤ{priority.prediction.reason ? ` — ${priority.prediction.reason}` : ""}</div>
+          )}
+
+          <div style={{ fontSize: 11, color: C.dim, marginTop: 10, marginBottom: 4 }}>الحالة المتوقعة مستقبلًا</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {future.map((f) => (
+              <div key={f.h} style={{ flex: "1 1 80px", textAlign: "center", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 4px" }}>
+                <div style={{ fontSize: 10, color: C.dim }}>بعد {f.h} {f.h === 1 ? "ساعة" : "ساعات"}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: f.predictionAvailable ? C.text : C.dim }}>
+                  {f.predictionAvailable ? `${f.predictedFillLevel}%` : "—"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: openRoute ? C.info + "12" : C.bg, border: `1px solid ${openRoute ? C.info + "40" : C.border}` }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: openRoute ? C.info : C.text, marginBottom: 4 }}>🧭 الجولة المرتبطة</div>
+          {openRoute ? (
+            <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8 }}>
+              {openRoute.routeName} — {ROUTE_STATUS_LABELS[openRoute.status] || openRoute.status}
+              {(() => { const st = (openRoute.orderedStops || []).find((x) => x.binId === bin.id); return st ? ` · التوقف #${st.order} من ${openRoute.orderedStops.length}` : ""; })()}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: (priority.tier === "critical" || priority.tier === "high") ? C.warning : C.dim }}>
+              {(priority.tier === "critical" || priority.tier === "high") ? "مؤهلة للجمع لكنها خارج أي جولة مفتوحة حاليًا." : "خارج أي جولة مفتوحة — الوضع ضمن المعدل الطبيعي."}
+            </div>
+          )}
+        </div>
+
+        {openRoute && onOpenRoute ? (
+          <button
+            onClick={() => onOpenRoute(openRoute.id)}
+            style={{ marginTop: 12, width: "100%", padding: "10px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}
+          >
+            فتح الجولة
+          </button>
+        ) : (
+          <button
+            onClick={() => onAddToRoute && onAddToRoute(bin)}
+            style={{ marginTop: 12, width: "100%", padding: "10px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}
+          >
+            إضافة للجولة
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const BinsPage = ({ neighborhoods = [], bins = [], routes = [], fireSensors = [], citizenReports = [], loading, initialNeighborhoodId, onAddToRoute, onOpenRoute }) => {
+  const binCtx = useMemo(() => makeBinContext(fireSensors, citizenReports, neighborhoods), [fireSensors, citizenReports, neighborhoods]);
+  const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [neighborhoodFilter, setNeighborhoodFilter] = useState(initialNeighborhoodId || "all");
+  const [selectedBin, setSelectedBin] = useState(null);
+
+  // Re-sync the filter when navigated here with a different neighborhood
+  // (e.g. from the map's "عرض الحاويات" button) — adjusted during render per
+  // React's guidance, instead of a useEffect, to avoid an extra render pass.
+  const [prevInitialNeighborhoodId, setPrevInitialNeighborhoodId] = useState(initialNeighborhoodId);
+  if (initialNeighborhoodId !== prevInitialNeighborhoodId) {
+    setPrevInitialNeighborhoodId(initialNeighborhoodId);
+    setNeighborhoodFilter(initialNeighborhoodId || "all");
+  }
+
+  const neighborhoodById = useMemo(() => {
+    const m = {};
+    neighborhoods.forEach((n) => { m[n.id] = n; });
+    return m;
+  }, [neighborhoods]);
+
+  // List view: cheap scoring with no per-bin reading fetch (no N+1 reads) —
+  // real decisionEngine output, just without the prediction boost, which
+  // only the single-bin detail modal above computes on demand.
+  const rows = bins.map((b) => {
+    const priority = getBinPriority(b, null, [], binCtx.forBin(b));
+    const connectivity = priority.sensorHealth.connectivity;
+    const displayState = connectivity !== "online" ? connectivity : priority.tier;
+    const openRoute = findOpenRouteForBin(b.id, routes);
+    return { ...b, connectivity, tier: priority.tier, displayState, priority, neighborhood: neighborhoodById[b.neighborhoodId], openRoute, reportCount: binCtx.reportCountForBin(b.id) };
+  });
+
+  const filtered = rows.filter((b) => {
+    if (neighborhoodFilter !== "all" && b.neighborhoodId !== neighborhoodFilter) return false;
+    if (search && !b.name.toLowerCase().includes(search.toLowerCase())) return false;
+    if (filter === "all") return true;
+    return b.displayState === filter;
+  });
+
+  if (loading) return <EmptyState icon="⏳" title="جاري تحميل الحاويات…" />;
+  if (bins.length === 0) {
+    return <EmptyState icon="📦" title="لا توجد حاويات مسجلة بعد" desc="شغّل ترحيل البيانات من صفحة الإعدادات لإنشاء الحاويات من بيانات المحطات القديمة." />;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 200px" }}>
+          <Search size={15} color={C.dim} style={{ position: "absolute", insetInlineStart: 12, top: "50%", transform: "translateY(-50%)" }} />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث باسم الحاوية…"
+            style={{ width: "100%", padding: "9px 36px 9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT }} />
+        </div>
+        <select value={neighborhoodFilter} onChange={(e) => setNeighborhoodFilter(e.target.value)} style={{
+          padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT,
+        }}>
+          <option value="all">كل الأحياء</option>
+          {neighborhoods.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
+        </select>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {BIN_FILTERS.map((f) => (
+            <button key={f.key} onClick={() => setFilter(f.key)} style={{
+              padding: "7px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: ARABIC_FONT,
+              border: `1px solid ${filter === f.key ? C.accent : C.border}`,
+              background: filter === f.key ? C.accent + "20" : "transparent",
+              color: filter === f.key ? C.accent : C.muted,
+            }}>{f.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {filtered.length === 0 ? <EmptyState icon="🔎" title="لا توجد نتائج مطابقة" /> : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+          {filtered.map((b) => {
+            const isStale = b.connectivity === "offline" || b.connectivity === "fault";
+            return (
+              <div key={b.id} onClick={() => setSelectedBin(b)} style={{
+                background: C.card, border: `1px solid ${STATUS_COLORS[b.displayState] || C.border}40`, borderRadius: 14, padding: 16, cursor: "pointer",
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>{b.name} {b.demo && <DemoBadge />}</div>
+                    <div style={{ fontSize: 10.5, color: C.dim }}>{b.neighborhood?.name || "—"}</div>
+                  </div>
+                  <StateBadge state={b.displayState} />
+                </div>
+                <div style={{ display: "flex", gap: 10, fontSize: 12, color: C.muted, marginBottom: 8 }}>
+                  <span>الامتلاء: <b style={{ color: C.text }}>{b.lastFillLevelPercent != null ? `${b.lastFillLevelPercent}%` : "—"}</b></span>
+                  <span>الحرارة: <b style={{ color: C.text }}>{b.lastTemperatureCelsius != null ? `${b.lastTemperatureCelsius}°` : "—"}</b></span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: isStale ? C.warning : C.muted, marginBottom: 4 }}>
+                  {b.connectivity === "online" ? <Wifi size={12} /> : <WifiOff size={12} />}
+                  {STATE_LABELS[b.connectivity]}
+                  {isStale && <span>— {getReadingAgeLabel(b.lastReadingAt)} (قديمة)</span>}
+                  {!isStale && <span>· {getReadingAgeLabel(b.lastReadingAt)}</span>}
+                </div>
+                <div style={{ fontSize: 11, color: C.dim }}>الأولوية: {STATE_LABELS[b.tier] || b.tier} ({b.priority.score}){b.reportCount > 0 && <span style={{ color: C.warning }}> · 📣 {b.reportCount} بلاغ مواطن</span>}</div>
+                {b.openRoute ? (
+                  <div style={{ marginTop: 8, fontSize: 11, color: C.info, background: C.info + "12", border: `1px solid ${C.info}30`, borderRadius: 8, padding: "4px 8px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+                    <span>🧭 {b.openRoute.routeName} — {ROUTE_STATUS_LABELS[b.openRoute.status] || b.openRoute.status}</span>
+                    {onOpenRoute && <button onClick={(e) => { e.stopPropagation(); onOpenRoute(b.openRoute.id); }} style={{ background: "none", border: "none", color: C.info, fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>فتح</button>}
+                  </div>
+                ) : (b.tier === "critical" || b.tier === "high") && b.connectivity === "online" ? (
+                  <div style={{ marginTop: 8, fontSize: 11, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}30`, borderRadius: 8, padding: "4px 8px" }}>⚠️ مؤهلة للجمع — خارج أي جولة بعد</div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {selectedBin && (
+        <BinDetailModal
+          bin={selectedBin}
+          neighborhood={neighborhoodById[selectedBin.neighborhoodId]}
+          onClose={() => setSelectedBin(null)}
+          onAddToRoute={onAddToRoute}
+          openRoute={findOpenRouteForBin(selectedBin.id, routes)}
+          onOpenRoute={onOpenRoute}
+        />
+      )}
+    </div>
+  );
+};
+
 // ======================== REPORTS ========================
-const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
+const ASSUMED_SPEED_LABEL = "30 كم/س";
+const PerfTable = ({ rows = [], firstCol }) => (
+  <div style={{ overflowX: "auto" }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: ARABIC_FONT }}>
+      <thead><tr style={{ color: C.muted, textAlign: "right" }}>
+        {[firstCol, "جولات", "كم", "جُمعت", "تخطي", "حوادث", "في الوقت", "فعلي/مخطط", "امتلاء عند الجمع", "اعتماد→بدء"].map((h) => <th key={h} style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{h}</th>)}
+      </tr></thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.id} style={{ color: C.text, opacity: r.routes ? 1 : 0.55 }}>
+            <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{r.label}{r.status && <span style={{ color: C.dim, fontWeight: 400 }}> · {VEHICLE_STATUS_LABELS[r.status] || r.status}</span>}</td>
+            <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{r.routes}</td>
+            <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{r.km}</td>
+            <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{r.collected}</td>
+            <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, color: r.skipped ? C.warning : C.muted }}>{r.skipped}</td>
+            <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, color: r.incidents ? C.danger : C.muted }}>{r.incidents}</td>
+            <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, color: r.onTimePct == null ? C.dim : r.onTimePct >= 70 ? C.accent : C.warning, fontWeight: 700 }}>{r.onTimePct != null ? `${r.onTimePct}%` : "—"}</td>
+            <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{r.avgActualVsPlannedPct != null ? `${r.avgActualVsPlannedPct}%` : "—"}</td>
+            <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{r.avgFillAtCollection != null ? `${r.avgFillAtCollection}%` : "—"}</td>
+            <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{r.avgApprovalToStartMin != null ? `${r.avgApprovalToStartMin} د` : "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
+const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborhoods = [], routes = [], collectionEvents = [], vehicles = [], auditLog = [], fireSensors = [], citizenReports = [] }) => {
   const [tab, setTab] = useState("performance");
+  const fleet = useMemo(() => computeFleetPerformance(routes, collectionEvents, auditLog, vehicles), [routes, collectionEvents, auditLog, vehicles]);
+  const impact = useMemo(() => {
+    const ctx = makeBinContext(fireSensors, citizenReports, neighborhoods);
+    const scored = bins.map((bin) => ({ bin, priority: getBinPriority(bin, null, [], ctx.forBin(bin)) }));
+    return computeImpactMetrics(groupNeighborhoodsByName(neighborhoods, bins), scored, routes, { depot: DEFAULT_DEPOT });
+  }, [bins, neighborhoods, routes, fireSensors, citizenReports]);
 
   // ── Analytics من Firestore ────────────────────────────────────────
   const { data: kpisDoc } = useAnalyticsDoc("kpis");
@@ -1676,7 +2342,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {[{ key: "performance", label: "📊 تقرير الأداء" }, { key: "waste", label: "♻️ تقرير النفايات" }, { key: "cost", label: "💰 تقرير التكاليف" }, { key: "environment", label: "🌱 التأثير البيئي" }].map((t) => (
+        {[{ key: "performance", label: "📊 تقرير الأداء" }, { key: "operations", label: "🧭 الجولات والتشغيل" }, { key: "fleet", label: "🚛 السائقون والمركبات" }, { key: "impact", label: "💡 الأثر والتوفير" }, { key: "waste", label: "♻️ تقرير النفايات" }, { key: "cost", label: "💰 تقرير التكاليف" }, { key: "environment", label: "🌱 التأثير البيئي" }].map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             padding: "10px 20px", borderRadius: 10, border: `1px solid ${tab === t.key ? C.accent : C.border}`,
             background: tab === t.key ? C.accent + "15" : "transparent", color: tab === t.key ? C.accent : C.muted,
@@ -1697,7 +2363,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
               </div>
             ))}
           </div>
-          <Card title="مقارنة امتلاء المحطات - بريدة" icon={<BarChart2 size={16} color="#94a3b8" />}>
+          <Card title="مقارنة امتلاء الأحياء - بريدة" icon={<BarChart2 size={16} color="#94a3b8" />}>
             <ChartBox height={350}><ResponsiveContainer>
               <BarChart data={stationFillData} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -1712,6 +2378,152 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData }) => {
               </BarChart>
             </ResponsiveContainer></ChartBox>
           </Card>
+        </div>
+      )}
+
+      {tab === "operations" && (() => {
+        const suggestedCount = routes.filter((r) => r.status === "suggested").length;
+        const approvedCount = routes.filter((r) => r.status === "approved").length;
+        const activeCount = routes.filter((r) => r.status === "in_progress").length;
+        const completedCount = routes.filter((r) => r.status === "completed").length;
+        const avgRoutePriority = routes.length ? Math.round(routes.reduce((a, r) => a + (r.totalPriorityScore || 0) / Math.max(1, r.binIds?.length || 1), 0) / routes.length) : null;
+
+        const criticalBinCount = bins.filter((b) => getBinTier(b) === "critical").length;
+        const offlineBinCount = bins.filter((b) => { const c = getSensorConnectivity(b); return c === "offline" || c === "fault"; }).length;
+        const onlinePct = bins.length ? Math.round(((bins.length - offlineBinCount) / bins.length) * 100) : null;
+
+        const completedRoutes = routes.filter((r) => r.status === "completed" && r.approvedAt && r.completedAt);
+        const avgResponseHours = completedRoutes.length
+          ? (completedRoutes.reduce((a, r) => a + (new Date(r.completedAt) - new Date(r.approvedAt)) / 3600000, 0) / completedRoutes.length)
+          : null;
+
+        const avgFillAtCollection = collectionEvents.length
+          ? Math.round(collectionEvents.reduce((a, e) => a + (e.fillBefore || 0), 0) / collectionEvents.length)
+          : null;
+
+        const demandByNeighborhood = neighborhoods.map((n) => ({
+          name: normalizeNeighborhoodName(n.name),
+          الجولات: routes.filter((r) => r.neighborhoodIds?.includes(n.id)).length,
+        })).filter((d) => d.الجولات > 0).sort((a, b) => b.الجولات - a.الجولات).slice(0, 8);
+
+        return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 14 }}>
+              <StatCard title="جولات مقترحة" value={suggestedCount} icon={<RouteIcon size={20} color="#fff" />} gradient="linear-gradient(135deg, #3b82f6, #1d4ed8)" />
+              <StatCard title="جولات معتمدة" value={approvedCount} icon={<CheckCircle size={20} color="#fff" />} gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
+              <StatCard title="جولات نشطة" value={activeCount} icon={<Truck size={20} color="#fff" />} gradient="linear-gradient(135deg, #8b5cf6, #6d28d9)" />
+              <StatCard title="جولات مكتملة" value={completedCount} icon={<CheckCircle size={20} color="#fff" />} gradient="linear-gradient(135deg, #10b981, #059669)" />
+              <StatCard title="حاويات حرجة الآن" value={criticalBinCount} icon={<AlertTriangle size={20} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
+              <StatCard title="نسبة الحساسات المتصلة" value={onlinePct ?? "—"} unit={onlinePct != null ? "%" : ""} icon={<Wifi size={20} color="#fff" />} gradient="linear-gradient(135deg, #06b6d4, #0891b2)" />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
+              <Card title="متوسط زمن الاستجابة (اعتماد → إنهاء)" icon={<Clock size={16} color="#94a3b8" />}>
+                {avgResponseHours != null ? (
+                  <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{avgResponseHours.toFixed(1)} <span style={{ fontSize: 14, color: C.muted }}>ساعة</span></div>
+                ) : <EmptyState icon="⏱️" title="لا توجد جولات مكتملة بعد لحساب المتوسط" />}
+              </Card>
+              <Card title="متوسط نسبة الامتلاء عند الجمع" icon={<Trash2 size={16} color="#94a3b8" />}>
+                {avgFillAtCollection != null ? (
+                  <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{avgFillAtCollection}%</div>
+                ) : <EmptyState icon="📦" title="لا توجد عمليات جمع مسجّلة بعد" />}
+              </Card>
+              <Card title="متوسط أولوية الجولات" icon={<Target size={16} color="#94a3b8" />}>
+                {avgRoutePriority != null ? (
+                  <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{avgRoutePriority}<span style={{ fontSize: 14, color: C.muted }}> / 100</span></div>
+                ) : <EmptyState icon="🧭" title="لا توجد جولات بعد" />}
+              </Card>
+            </div>
+
+            <Card title="الأحياء الأعلى طلبًا للجمع" icon={<Home size={16} color="#94a3b8" />}>
+              {demandByNeighborhood.length === 0 ? <EmptyState icon="🏘️" title="لا توجد بيانات جولات كافية بعد" /> : (
+                <ChartBox height={260}><ResponsiveContainer>
+                  <BarChart data={demandByNeighborhood} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                    <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} allowDecimals={false} />
+                    <YAxis dataKey="name" type="category" width={80} tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Bar dataKey="الجولات" fill={C.info} radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer></ChartBox>
+              )}
+            </Card>
+
+            <Card title="المركبات" icon={<Truck size={16} color="#94a3b8" />}>
+              {vehicles.length === 0 ? <EmptyState icon="🚛" title="لا توجد مركبات مسجّلة بعد" /> : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {vehicles.map((v) => (
+                    <div key={v.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12 }}>
+                      <span style={{ color: C.text }}>{v.vehicleNumber}</span>
+                      <span style={{ color: C.muted }}>{VEHICLE_STATUS_LABELS[v.status] || v.status}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+        );
+      })()}
+
+      {tab === "impact" && <ImpactCard impact={impact} />}
+
+      {tab === "fleet" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
+            {[
+              { label: "جولات مكتملة", value: fleet.totals.routes, color: C.accent },
+              { label: "حاويات جُمعت", value: fleet.totals.collected, color: C.info },
+              { label: "حاويات تُخطيت", value: fleet.totals.skipped, color: C.warning },
+              { label: "التزام الوقت المخطط", value: fleet.totals.onTimePct != null ? `${fleet.totals.onTimePct}%` : "—", color: C.accent },
+              { label: "الزمن الفعلي / المخطط", value: fleet.totals.avgActualVsPlannedPct != null ? `${fleet.totals.avgActualVsPlannedPct}%` : "—", color: C.purple },
+              { label: "متوسط الامتلاء عند الجمع", value: fleet.totals.avgFillAtCollection != null ? `${fleet.totals.avgFillAtCollection}%` : "—", color: C.danger },
+              { label: "من الاعتماد إلى البدء", value: fleet.totals.avgApprovalToStartMin != null ? `${fleet.totals.avgApprovalToStartMin} د` : "—", color: C.info },
+              { label: "أعطال/عوائق مُبلَّغة", value: fleet.totals.incidents, color: C.warning },
+            ].map((t) => (
+              <div key={t.label} style={{ background: C.card, border: `1px solid ${t.color}30`, borderRadius: 12, padding: "12px 14px" }}>
+                <div style={{ fontSize: 24, fontWeight: 800, color: t.color }}>{t.value}</div>
+                <div style={{ fontSize: 11, color: C.muted }}>{t.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {fleet.perRoute.length === 0 ? (
+            <EmptyState icon="🚛" title="لا توجد جولات مكتملة بعد" desc="تُحسب هذه المؤشرات من الجولات التي بدأها السائق وأنهاها، وأحداث الجمع، وسجل التخطي/الأعطال." />
+          ) : (
+            <>
+              <Card title="أداء المركبات" icon={<Truck size={16} color="#94a3b8" />}>
+                <PerfTable rows={fleet.vehicles} firstCol="المركبة" />
+              </Card>
+              <Card title="أداء السائقين" icon={<Users size={16} color="#94a3b8" />}>
+                <PerfTable rows={fleet.drivers} firstCol="السائق" />
+              </Card>
+              <Card title="آخر الجولات المكتملة" icon={<ClipboardList size={16} color="#94a3b8" />}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: ARABIC_FONT }}>
+                    <thead><tr style={{ color: C.muted, textAlign: "right" }}>
+                      {["الجولة", "السائق", "المخطط (د)", "الفعلي (د)", "جُمعت/المخطط", "تخطي", "امتلاء عند الجمع", "حوادث", "اكتملت"].map((h) => <th key={h} style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {fleet.perRoute.slice(0, 12).map((r) => (
+                        <tr key={r.routeId} style={{ color: C.text }}>
+                          <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{r.routeName}</td>
+                          <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, color: C.muted }}>{r.driverName || "—"}</td>
+                          <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{r.plannedMin}</td>
+                          <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, color: r.onTime ? C.accent : C.warning, fontWeight: 700 }}>{r.actualMin}</td>
+                          <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{r.collected}/{r.planned} ({r.completionPct}%)</td>
+                          <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, color: r.skipped ? C.warning : C.muted }}>{r.skipped}</td>
+                          <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}` }}>{r.avgFillAtCollection != null ? `${r.avgFillAtCollection}%` : "—"}</td>
+                          <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, color: r.incidents ? C.danger : C.muted }}>{r.incidents}</td>
+                          <td style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, color: C.dim }}>{getReadingAgeLabel(r.completedAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </>
+          )}
+          <div style={{ fontSize: 10.5, color: C.dim }}>المخطط = مسافة الجولة ÷ {ASSUMED_SPEED_LABEL} + 4 دقائق لكل حاوية · "في الوقت" = الفعلي ≤ 120% من المخطط.</div>
         </div>
       )}
 
@@ -1872,8 +2684,102 @@ const generate30DayForecast = (events) => {
   });
 };
 
-const PredictionsPage = ({ stations }) => {
-  const [view, setView] = useState("overview");
+/** §35 — real per-bin prediction tab: fill rate, hours-to-full, confidence, neighborhood future risk, and the future-state map. */
+const PredictionsLiveTab = ({ neighborhoods = [], bins = [], recentReadings = [], fireSensors = [] }) => {
+  const readingsByBin = useMemo(() => {
+    const map = {};
+    for (const r of recentReadings) { if (!r.bin_id) continue; (map[r.bin_id] ||= []).push(r); }
+    return map;
+  }, [recentReadings]);
+
+  const isThermalAlert = (name) =>
+    fireSensors.some((s) => normalizeNeighborhoodName(s.district) === normalizeNeighborhoodName(name) && (s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط"));
+
+  const soonList = useMemo(() => {
+    return bins
+      .map((bin) => {
+        const n = neighborhoods.find((n2) => n2.id === bin.neighborhoodId);
+        const readings = readingsByBin[bin.id] || [];
+        const priority = getBinPriority(bin, null, readings, { thermalAlert: n ? isThermalAlert(n.name) : false });
+        const rate = computeFillRate(readings);
+        return { bin, neighborhood: n, priority, rate };
+      })
+      .filter((x) => x.priority.prediction.predictionAvailable)
+      .sort((a, b) => a.priority.prediction.hoursToFull - b.priority.prediction.hoursToFull);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bins, neighborhoods, readingsByBin, fireSensors]);
+
+  const noDataCount = bins.length - soonList.length;
+
+  const neighborhoodFutureRisk = useMemo(() => {
+    return neighborhoods.map((n) => {
+      const nBins = bins.filter((b) => b.neighborhoodId === n.id);
+      const scored = nBins.map((bin) => ({ bin, priority: getBinPriority(bin, null, readingsByBin[bin.id] || [], { thermalAlert: isThermalAlert(n.name) }) }));
+      const soonCount = scored.filter((x) => x.priority.prediction.predictionAvailable && x.priority.prediction.hoursToFull <= THRESHOLDS.predictedFullSoonHours * 2).length;
+      return { neighborhood: n, priority: getNeighborhoodPriority(scored, { thermalAlert: isThermalAlert(n.name) }), soonCount };
+    }).sort((a, b) => b.priority.score - a.priority.score);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [neighborhoods, bins, readingsByBin, fireSensors]);
+
+  if (bins.length === 0) {
+    return <EmptyState icon="📦" title="لا توجد حاويات بعد" desc="شغّل ترحيل البيانات أو إنشاء البيانات التجريبية من صفحة الإعدادات." />;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
+        <StatCard title="حاويات بتنبؤ متاح" value={soonList.length} icon={<TrendingUp size={22} color="#fff" />} gradient="linear-gradient(135deg, #3b82f6, #1d4ed8)" />
+        <StatCard title="بلا بيانات كافية للتنبؤ" value={noDataCount} icon={<AlertTriangle size={22} color="#fff" />} gradient="linear-gradient(135deg, #64748b, #475569)" />
+        <StatCard title="متوقع الامتلاء خلال 3 ساعات" value={soonList.filter((x) => x.priority.prediction.hoursToFull <= THRESHOLDS.predictedFullSoonHours).length} icon={<Clock size={22} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
+      </div>
+
+      <Card title="🗺️ الخريطة المستقبلية" icon={<MapGlyph size={16} color="#94a3b8" />}>
+        <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} height={360} compact />
+      </Card>
+
+      <Card title="حاويات متوقع امتلاؤها قريبًا" icon={<Clock size={16} color="#94a3b8" />}>
+        {soonList.length === 0 ? (
+          <EmptyState icon="📊" title="لا توجد بيانات تاريخية كافية بعد لأي حاوية" desc="يحتاج التنبؤ عدة قراءات متتالية صاعدة لكل حاوية — ستظهر هنا تلقائيًا مع تراكم القراءات." />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {soonList.slice(0, 10).map(({ bin, neighborhood: n, priority, rate }) => (
+              <div key={bin.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: 10, background: C.bg, border: `1px solid ${C.border}`, fontSize: 12, gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: C.text }}>{bin.name} <span style={{ color: C.dim, fontWeight: 400 }}>· {n?.name || "—"}</span></div>
+                  <div style={{ color: C.muted, marginTop: 2 }}>
+                    متوقع الامتلاء خلال <b style={{ color: C.text }}>{priority.prediction.hoursToFull.toFixed(1)} ساعة</b>
+                    {" "}· معدل الامتلاء: {rate.ratePerHour != null ? `${rate.ratePerHour.toFixed(1)}%/ساعة` : "—"}
+                    {" "}· الثقة: {CONFIDENCE_LABELS[priority.prediction.confidence] || priority.prediction.confidence}
+                  </div>
+                </div>
+                <StateBadge state={priority.tier} />
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card title="الحالة المستقبلية المتوقعة للأحياء" icon={<Home size={16} color="#94a3b8" />}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+          {neighborhoodFutureRisk.map(({ neighborhood: n, priority, soonCount }) => (
+            <div key={n.id} style={{ background: C.bg, border: `1px solid ${STATUS_COLORS[priority.tier]}40`, borderRadius: 10, padding: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <b style={{ fontSize: 13, color: C.text }}>{n.name}</b>
+                <StateBadge state={priority.tier} />
+              </div>
+              <div style={{ fontSize: 11.5, color: C.muted }}>
+                {soonCount > 0 ? `${soonCount} حاوية متوقع امتلاؤها قريبًا` : "لا توجد حاويات متوقع امتلاؤها قريبًا"}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadings = [], fireSensors = [] }) => {
+  const [view, setView] = useState("live");
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedType, setSelectedType] = useState("الكل");
 
@@ -1949,6 +2855,7 @@ const PredictionsPage = ({ stations }) => {
       {/* View Tabs */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {[
+          { key: "live", label: "🔴 تنبؤ الحاويات الحي" },
           { key: "overview", label: "🔮 نظرة عامة" },
           { key: "events", label: "📅 المناسبات والأحداث" },
           { key: "forecast", label: "📈 التنبؤ 30 يوم" },
@@ -1961,6 +2868,16 @@ const PredictionsPage = ({ stations }) => {
           }}>{t.label}</button>
         ))}
       </div>
+
+      {/* ===== LIVE BIN PREDICTIONS (§35) — real decisionEngine/prediction output, not stations ===== */}
+      {view === "live" && (
+        <PredictionsLiveTab neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} />
+      )}
+      {view !== "live" && (
+        <div style={{ fontSize: 11, color: C.dim, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>
+          ℹ️ التبويبات التالية (نظرة عامة/المناسبات/التنبؤ 30 يوم/تحليل المخاطر) تعرض توقعات موسمية إجمالية لحجم النفايات على مستوى المدينة بالكامل، وما زالت مبنية على بيانات المحطات القديمة — منفصلة عن تبويب "تنبؤ الحاويات الحي" أعلاه الذي يعتمد على بيانات الحاويات الذكية الفعلية.
+        </div>
+      )}
 
       {/* ===== OVERVIEW ===== */}
       {view === "overview" && (
@@ -2111,9 +3028,9 @@ const PredictionsPage = ({ stations }) => {
                   <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>💡 التوصيات التشغيلية</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {[
-                      `زيادة عدد عمليات الشفط بنسبة ${Math.round((selectedEvent.wasteMultiplier - 1) * 100)}% خلال فترة ${selectedEvent.name}`,
+                      `زيادة عدد جولات الجمع بنسبة ${Math.round((selectedEvent.wasteMultiplier - 1) * 100)}% خلال فترة ${selectedEvent.name}`,
                       `تخصيص حاويات إضافية لنفايات ${selectedEvent.peakType} في جميع أحياء بريدة`,
-                      `جدولة صيانة وقائية للمحطات قبل بداية الحدث بأسبوع`,
+                      `جدولة جولات جمع إضافية قبل بداية الحدث بأسبوع`,
                       selectedEvent.wasteMultiplier > 2 ? "تفعيل خطة الطوارئ وتخصيص فرق عمل إضافية" : "مراقبة مستمرة لمستويات الامتلاء كل 4 ساعات",
                       `إرسال تنبيهات استباقية للأحياء الأكثر كثافة سكانية`,
                     ].map((rec, i) => (
@@ -2162,7 +3079,7 @@ const PredictionsPage = ({ stations }) => {
       {/* ===== 30-DAY FORECAST ===== */}
       {view === "forecast" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title="توقعات الـ 30 يوم القادمة (كجم/يوم لكل محطة)" icon={<TrendingUp size={16} color="#94a3b8" />}>
+          <Card title="توقعات الـ 30 يوم القادمة (كجم/يوم لكل حي)" icon={<TrendingUp size={16} color="#94a3b8" />}>
             <ChartBox height={320}><ResponsiveContainer>
               <AreaChart data={forecast30} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                 <defs>
@@ -2236,11 +3153,11 @@ const PredictionsPage = ({ stations }) => {
             </div>
             <p style={{ fontSize: 12, color: C.muted, margin: 0, lineHeight: 1.7 }}>
               يُتوقع زيادة بمعامل <strong style={{ color: C.warning }}>×{upcomingEvents[0]?.wasteMultiplier}</strong> في حجم النفايات خلال الفترة القادمة.
-              التحليل التالي يوضح المحطات الأكثر عرضة للخطر والتي تحتاج إلى تدخل استباقي.
+              التحليل التالي يوضح الأحياء الأكثر عرضة للخطر والتي تحتاج إلى تدخل استباقي.
             </p>
           </div>
 
-          <Card title="مقارنة الخطورة الحالية مع المتوقعة لكل محطة" icon={<BarChart2 size={16} color="#94a3b8" />}>
+          <Card title="مقارنة الخطورة الحالية مع المتوقعة لكل حي" icon={<BarChart2 size={16} color="#94a3b8" />}>
             <ChartBox height={380}><ResponsiveContainer>
               <BarChart data={stationRisk} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -2255,7 +3172,7 @@ const PredictionsPage = ({ stations }) => {
           </Card>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="المحطات الأكثر خطورة" icon={<AlertTriangle size={16} color="#94a3b8" />}>
+            <Card title="الأحياء الأكثر خطورة" icon={<AlertTriangle size={16} color="#94a3b8" />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {stationRisk.slice(0, 6).map((s, i) => {
                   const risk = s.الخطورة_المتوقعة;
@@ -2284,11 +3201,11 @@ const PredictionsPage = ({ stations }) => {
             <Card title="خطة الاستجابة المقترحة" icon={<FileText size={16} color="#94a3b8" />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
-                  { priority: "عاجل", action: "زيادة دورات الشفط للمحطات الحرجة إلى كل 4 ساعات", color: C.danger, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} /> },
+                  { priority: "عاجل", action: "زيادة دورات الجمع للأحياء الحرجة إلى كل 4 ساعات", color: C.danger, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} /> },
                   { priority: "عاجل", action: "تجهيز حاويات احتياطية في الأحياء ذات الكثافة العالية", color: C.danger, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} /> },
                   { priority: "مهم", action: "إرسال إشعارات للسكان بمواعيد الجمع الإضافية", color: C.warning, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} /> },
                   { priority: "مهم", action: "تخصيص فرق صيانة طوارئ على مدار الساعة", color: C.warning, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} /> },
-                  { priority: "وقائي", action: "فحص شامل لجميع المحطات قبل بدء الحدث", color: C.info, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#3b82f6",flexShrink:0}} /> },
+                  { priority: "وقائي", action: "فحص شامل لجميع الأحياء قبل بدء الحدث", color: C.info, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#3b82f6",flexShrink:0}} /> },
                   { priority: "وقائي", action: "تحديث جداول النقل لتغطية ساعات الذروة المتوقعة", color: C.info, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#3b82f6",flexShrink:0}} /> },
                   { priority: "تنسيقي", action: "التنسيق مع البلدية لتوفير موارد إضافية مؤقتة", color: C.accent, icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#10b981",flexShrink:0}} /> },
                 ].map((item, i) => (
@@ -2469,8 +3386,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
     return (
       <div style={{ textAlign: "center", padding: "80px 0", color: C.dim }}>
         <div style={{ fontSize: 48, marginBottom: 12 }}>🔥</div>
-        <div style={{ fontSize: 16, fontWeight: 700, color: C.muted, marginBottom: 6 }}>جاري تحميل بيانات المحطات...</div>
-        <div style={{ fontSize: 13 }}>سيظهر نظام مراقبة الحريق بعد تحميل بيانات المحطات</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: C.muted, marginBottom: 6 }}>جاري تحميل بيانات الأحياء...</div>
+        <div style={{ fontSize: 13 }}>سيظهر نظام التنبيهات الحرارية بعد تحميل بيانات الأحياء</div>
       </div>
     );
   }
@@ -2482,7 +3399,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
         {[
           { key: "monitor", label: "🔥 المراقبة الحية" },
           { key: "analysis", label: "📊 التحليل والإحصائيات" },
-          { key: "detail", label: "🏭 تفاصيل المحطات" },
+          { key: "detail", label: "🏘️ تفاصيل الأحياء" },
           { key: "simulation", label: "🧪 محاكاة الحريق" },
           { key: "protocols", label: "📋 بروتوكولات الطوارئ" },
         ].map(t => (
@@ -2507,7 +3424,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
               <style>{`@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.85 } } @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }`}</style>
               <div style={{ width: 50, height: 50, borderRadius: 14, background: "#ef444440", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, animation: "blink 1s infinite" }}>🔥</div>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: "#fca5a5" }}>⚠️ تنبيه حريق - {highRisk.length} محطة في خطر عالي!</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#fca5a5" }}>⚠️ تنبيه حراري - {highRisk.length} حي في خطر عالٍ!</div>
                 <div style={{ fontSize: 12, color: "#fecaca", marginTop: 4 }}>
                   {highRisk.map(s => s.district).join(" • ")} — يرجى اتخاذ إجراء فوري
                 </div>
@@ -2518,8 +3435,8 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           {/* KPIs */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
             <StatCard title="متوسط الحرارة الداخلية" value={avgTemp} unit="°C" icon={<Thermometer size={22} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" trend={avgTemp > 45 ? 8.3 : -2.1} />
-            <StatCard title="محطات عالية الخطورة" value={highRisk.length} icon={<Flame size={22} color="#fff" />} gradient="linear-gradient(135deg, #f97316, #ea580c)" />
-            <StatCard title="كشف دخان" value={smokeCount} unit="محطة" icon={<Wind size={22} color="#fff" />} gradient="linear-gradient(135deg, #64748b, #475569)" />
+            <StatCard title="أحياء عالية الخطورة" value={highRisk.length} icon={<Flame size={22} color="#fff" />} gradient="linear-gradient(135deg, #f97316, #ea580c)" />
+            <StatCard title="كشف دخان" value={smokeCount} unit="حي" icon={<Wind size={22} color="#fff" />} gradient="linear-gradient(135deg, #64748b, #475569)" />
             <StatCard title="متوسط مستوى الغاز" value={avgGas} unit="%" icon={<Gauge size={22} color="#fff" />} gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
           </div>
 
@@ -2572,7 +3489,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           </div>
 
           {/* Station Risk Cards */}
-          <Card title="حالة المحطات - المراقبة الحية" icon={<Radio size={16} color="#94a3b8" />}>
+          <Card title="حالة الأحياء - المراقبة الحية" icon={<Radio size={16} color="#94a3b8" />}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 12 }}>
               {fireData.sort((a, b) => b.riskScore - a.riskScore).map((s, i) => {
                 const rColor = getRiskColor(s.riskLevel);
@@ -2616,7 +3533,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
       {view === "analysis" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="مؤشر خطورة الحريق لكل محطة" icon={<BarChart2 size={16} color="#94a3b8" />}>
+            <Card title="مؤشر الخطورة الحرارية لكل حي" icon={<BarChart2 size={16} color="#94a3b8" />}>
               <ChartBox height={350}><ResponsiveContainer>
                 <BarChart data={stationRiskChart} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
@@ -2680,7 +3597,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                   <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>{f.factor}</div>
                   <div style={{ fontSize: 11, color: C.dim, lineHeight: 1.5, marginBottom: 8 }}>{f.desc}</div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 11, color: C.muted }}>محطات متأثرة</span>
+                    <span style={{ fontSize: 11, color: C.muted }}>أحياء متأثرة</span>
                     <span style={{ fontSize: 16, fontWeight: 800, color: f.affected > 3 ? "#ef4444" : f.affected > 1 ? "#f59e0b" : C.accent }}>{f.affected}</span>
                   </div>
                 </div>
@@ -2839,9 +3756,9 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                     { temp: 0, action: "المراقبة الروتينية", desc: "فحص دوري كل 6 ساعات", icon: "✅", color: C.accent },
                     { temp: 40, action: "تنبيه مبكر", desc: "إرسال إشعار لفريق المراقبة", icon: "📱", color: "#06b6d4" },
                     { temp: 50, action: "زيادة تردد القراءات", desc: "قراءة المستشعرات كل 5 دقائق", icon: "📡", color: C.info },
-                    { temp: 55, action: "تنبيه تحذيري", desc: "إخطار مشرف المحطة فوراً", icon: "⚠️", color: "#f59e0b" },
+                    { temp: 55, action: "تنبيه تحذيري", desc: "إخطار المشرف المسؤول فوراً", icon: "⚠️", color: "#f59e0b" },
                     { temp: 60, action: "إنذار متوسط", desc: "تفعيل نظام التبريد التلقائي", icon: "❄️", color: "#f97316" },
-                    { temp: 65, action: "وقف الشفط", desc: "إيقاف عمليات الشفط لتقليل الاحتكاك", icon: "🛑", color: "#f97316" },
+                    { temp: 65, action: "تأجيل الجولات القريبة", desc: "تأجيل أي جولة جمع مجدولة قرب الموقع المتأثر حتى انخفاض الحرارة", icon: "🛑", color: "#f97316" },
                     { temp: 70, action: "استدعاء فريق الطوارئ", desc: "تجهيز فريق الإطفاء الداخلي", icon: "🚒", color: "#ef4444" },
                     { temp: 75, action: "إنذار حريق!", desc: "تفعيل نظام الإطفاء التلقائي وإخلاء المنطقة", icon: "🔥", color: "#ef4444" },
                     { temp: 80, action: "اتصال بالدفاع المدني", desc: "طلب دعم خارجي فوري - 998", icon: "📞", color: "#dc2626" },
@@ -2914,21 +3831,21 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                   range: "45°C - 60°C",
                   color: "#f59e0b",
                   icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",flexShrink:0}} />,
-                  steps: ["إخطار مشرف المحطة عبر الرسائل", "زيادة تردد القراءات إلى كل 15 دقيقة", "فحص مصدر الحرارة والتحقق من وجود مواد خطرة", "تجهيز معدات الإطفاء الأولية"],
+                  steps: ["إخطار المشرف المسؤول عبر الرسائل", "زيادة تردد القراءات إلى كل 15 دقيقة", "فحص مصدر الحرارة والتحقق من وجود مواد خطرة", "تجهيز معدات الإطفاء الأولية"],
                 },
                 {
                   level: "المستوى 3 - إنذار",
                   range: "60°C - 75°C",
                   color: "#f97316",
                   icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f97316",flexShrink:0}} />,
-                  steps: ["تفعيل نظام التبريد التلقائي", "إيقاف عمليات الشفط في المحطة المتأثرة", "إرسال فريق الفحص الميداني", "إعداد فريق الإطفاء الداخلي", "إبلاغ إدارة المنشأة"],
+                  steps: ["تفعيل نظام التبريد التلقائي", "تأجيل أي جولة جمع مجدولة قرب الحي المتأثر", "إرسال فريق الفحص الميداني", "إعداد فريق الإطفاء الداخلي", "إبلاغ إدارة المنشأة"],
                 },
                 {
                   level: "المستوى 4 - خطر حريق",
                   range: "أعلى من 75°C",
                   color: "#ef4444",
                   icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#ef4444",flexShrink:0}} />,
-                  steps: ["تفعيل نظام الإطفاء التلقائي فوراً", "الاتصال بالدفاع المدني (998)", "إخلاء المنطقة المحيطة 200 متر", "قطع التيار الكهربائي عن المحطة", "تفعيل خطة الطوارئ الشاملة", "توثيق الحادثة بالصور والفيديو"],
+                  steps: ["تفعيل نظام الإطفاء التلقائي فوراً", "الاتصال بالدفاع المدني (998)", "إخلاء المنطقة المحيطة 200 متر", "قطع التيار الكهربائي عن الموقع المتأثر", "تفعيل خطة الطوارئ الشاملة", "توثيق الحادثة بالصور والفيديو"],
                 },
               ].map((protocol, i) => (
                 <div key={i} style={{ background: C.bg, border: `1px solid ${protocol.color}30`, borderRadius: 14, padding: 18 }}>
@@ -2961,7 +3878,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                 { name: "الدفاع المدني", phone: "998", icon: "🚒", color: "#ef4444", desc: "الاستجابة الأولى للحرائق" },
                 { name: "الإسعاف", phone: "997", icon: "🚑", color: "#3b82f6", desc: "الطوارئ الطبية" },
                 { name: "الشرطة", phone: "999", icon: "🚔", color: "#8b5cf6", desc: "الأمن والسلامة" },
-                { name: "مدير المحطة", phone: "055-XXX-XXXX", icon: "👷", color: "#f59e0b", desc: "المسؤول المباشر" },
+                { name: "مشرف المنطقة", phone: "055-XXX-XXXX", icon: "👷", color: "#f59e0b", desc: "المسؤول المباشر" },
                 { name: "فريق الصيانة", phone: "050-XXX-XXXX", icon: "🔧", color: "#10b981", desc: "الدعم التقني" },
                 { name: "إدارة البلدية", phone: "940", icon: "🏛️", color: "#06b6d4", desc: "التنسيق الحكومي" },
               ].map((contact, i) => (
@@ -3341,7 +4258,74 @@ const ApiKeyCard = () => {
   );
 };
 
-const SettingsPage = () => {
+const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggleAutoSync }) => {
+  const [demoBinId, setDemoBinId] = useState("");
+
+  // ── Live ESP32 simulator: streams one reading every few seconds to a bin so
+  // the panel watches fill rise → alert → suggestion → driver notice, live.
+  const [simBinId, setSimBinId] = useState("");
+  const [simTarget, setSimTarget] = useState(95);
+  const [simStep, setSimStep] = useState(4);
+  const [simIntervalSec, setSimIntervalSec] = useState(8);
+  const [simRunning, setSimRunning] = useState(false);
+  const [simLog, setSimLog] = useState([]);
+  const simTimer = useRef(null);
+  const simState = useRef({ fill: 0, temp: 27 });
+  const simBin = bins.find((b) => b.id === simBinId);
+
+  const stopSim = useCallback((reason = "stopped") => {
+    if (simTimer.current) { clearInterval(simTimer.current); simTimer.current = null; }
+    setSimRunning(false);
+    if (reason !== "silent") writeAuditLog("demo_simulation_stopped", loggedInUser?.uid, loggedInUser?.name, { binId: simBinId, reason }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simBinId]);
+
+  const startSim = async () => {
+    if (!simBin || simRunning) return;
+    simState.current = { fill: Number(simBin.lastFillLevelPercent) || 0, temp: Number(simBin.lastTemperatureCelsius) || 27 };
+    setSimLog([]);
+    setSimRunning(true);
+    await writeAuditLog("demo_simulation_started", loggedInUser?.uid, loggedInUser?.name, { binId: simBin.id, binName: simBin.name, target: simTarget, stepPct: simStep, intervalSec: simIntervalSec });
+    const tick = async () => {
+      const next = Math.min(simTarget, simState.current.fill + simStep + Math.round(Math.random() * 2 - 1));
+      const temp = Math.round((simState.current.temp + (Math.random() * 1.2 - 0.4)) * 10) / 10;
+      simState.current = { fill: next, temp };
+      try {
+        await demoSetReading(simBin.id, next, temp);
+        setSimLog((l) => [{ t: new Date().toLocaleTimeString("ar-SA"), fill: next, temp }, ...l].slice(0, 8));
+      } catch (e) { console.error("[esp32-sim]", e); }
+      if (next >= simTarget) stopSim("target_reached");
+    };
+    tick();
+    simTimer.current = setInterval(tick, simIntervalSec * 1000);
+  };
+  useEffect(() => () => { if (simTimer.current) clearInterval(simTimer.current); }, []);
+
+  // ── IoT device registry (keys shown once, only hashes stored) ──
+  const { devices: iotDevices } = useIotDevices();
+  const [revealedKey, setRevealedKey] = useState(null); // { deviceId, key }
+  const [deviceBusy, setDeviceBusy] = useState("");
+  const [demoFill, setDemoFill] = useState(50);
+  const [demoTemp, setDemoTemp] = useState(27);
+  const [demoBusy, setDemoBusy] = useState(false);
+  const [demoMsg, setDemoMsg] = useState("");
+  const demoSelectedBin = bins.find((b) => b.id === demoBinId);
+
+  const runDemoAction = async (fn) => {
+    if (!demoBinId) { setDemoMsg("اختر حاوية أولًا."); return; }
+    setDemoBusy(true);
+    setDemoMsg("");
+    try {
+      await fn();
+      setDemoMsg("✅ تم تطبيق الإجراء — راقب التغيير في لوحة التحكم/الخريطة.");
+    } catch (e) {
+      console.error("[demo-action]", e);
+      setDemoMsg("❌ حدث خطأ أثناء التنفيذ.");
+    } finally {
+      setDemoBusy(false);
+    }
+  };
+
   const [notif, setNotif] = useState(true);
   const [autoCollect, setAutoCollect] = useState(true);
   const [threshold, setThreshold] = useState(85);
@@ -3349,6 +4333,8 @@ const SettingsPage = () => {
   const [exportStatus, setExportStatus] = useState(null); // null | "running" | "done" | "error"
   const [migrateStatus, setMigrateStatus] = useState(null); // null | "running" | "done" | "error"
   const [migrateResult, setMigrateResult] = useState(null);
+  const [demoSeedStatus, setDemoSeedStatus] = useState(null); // null | "running" | "done" | "error"
+  const [demoSeedResult, setDemoSeedResult] = useState(null);
 
   const Toggle = ({ value, onChange }) => (
     <div onClick={() => onChange(!value)} style={{ width: 48, height: 26, borderRadius: 13, background: value ? C.accent : C.border, cursor: "pointer", position: "relative", transition: "background 0.3s" }}>
@@ -3361,7 +4347,7 @@ const SettingsPage = () => {
       <Card title="إعدادات النظام" icon={<SettingsIcon size={16} color="#94a3b8" />}>
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           {[{ label: "التنبيهات الفورية", desc: "استقبال إشعارات عند تجاوز الحدود", val: notif, set: setNotif },
-            { label: "التفريغ التلقائي", desc: "تشغيل الشفط تلقائياً عند الامتلاء", val: autoCollect, set: setAutoCollect }].map((item, i) => (
+            { label: "التفريغ التلقائي", desc: "تشغيل الجمع تلقائياً عند الامتلاء", val: autoCollect, set: setAutoCollect }].map((item, i) => (
             <div key={i}>
               {i > 0 && <div style={{ borderTop: `1px solid ${C.border}`, marginBottom: 18 }} />}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -3484,6 +4470,179 @@ const SettingsPage = () => {
         </button>
       </Card>
 
+      <Card title="بيانات تجريبية للعرض — محاكاة مدينة كاملة (Demo)" icon={<Sparkles size={16} color="#94a3b8" />}>
+        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
+          يبني مشهد مدينة كاملًا: ~100 حاوية ذكية موزّعة داخل الحدود الحقيقية لأحياء بريدة الـ14
+          (3 أحياء حرجة بتجمّعات حاويات شبه ممتلئة، أحياء بأولوية مرتفعة، تنبيهات حرارية، حي بأغلبية
+          مستشعرات غير متصلة، قراءات تاريخية تصاعدية للتنبؤ، مستشعر معطّل، حاويات بدون مستشعر)
+          + 4 مركبات بموقع مستودع + جولات مقترحة مرتبطة مباشرة بالحاويات الممتلئة.
+          يحذف البيانات التجريبية السابقة أولًا ويدمج الأحياء المكرّرة (السبب السابق في اختفاء ألوان الخريطة).
+          كل العناصر تحمل الوسم demo:true ولا تُخلط بالبيانات الحقيقية أو الجولات المعتمدة بشريًا.
+        </p>
+        {demoSeedStatus === "done" && (
+          <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.accent }}>
+            ✅ تم بناء المشهد — {demoSeedResult?.binsCreated ?? 0} حاوية، {demoSeedResult?.readingsCreated ?? 0} قراءة تاريخية، {demoSeedResult?.vehiclesCreated ?? 0} مركبات،
+            {" "}{demoSeedResult?.routesCreated ?? 0} جولة مقترحة مرتبطة بالحاويات الممتلئة، دُمج {demoSeedResult?.neighborhoodsMerged ?? 0} حي مكرّر، وأُنشئ {demoSeedResult?.neighborhoodsCreated ?? 0} حي ناقص.
+          </div>
+        )}
+        {demoSeedStatus === "error" && (
+          <div style={{ background: C.danger + "15", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.danger }}>
+            ❌ حدث خطأ أثناء الإنشاء — تحقق من Console.
+          </div>
+        )}
+        <button
+          disabled={demoSeedStatus === "running"}
+          onClick={async () => {
+            const ok = window.confirm("سيتم حذف البيانات التجريبية السابقة (الحاويات/القراءات/المركبات/الجولات المقترحة الموسومة demo) وإعادة بناء مشهد المدينة كاملًا. البيانات الحقيقية والجولات المعتمدة بشريًا لن تُمس. متابعة؟");
+            if (!ok) return;
+            setDemoSeedStatus("running");
+            try {
+              const result = await seedCityDemoData();
+              setDemoSeedResult(result);
+              setDemoSeedStatus("done");
+            } catch (e) {
+              console.error("[demo-seed]", e);
+              setDemoSeedStatus("error");
+            }
+          }}
+          style={{
+            padding: "11px 24px", borderRadius: 10, border: "none",
+            background: demoSeedStatus === "running" ? C.border : "linear-gradient(135deg, #8b5cf6, #6d28d9)",
+            color: demoSeedStatus === "running" ? C.dim : "#fff",
+            fontWeight: 700, cursor: demoSeedStatus === "running" ? "not-allowed" : "pointer",
+            fontSize: 13, fontFamily: ARABIC_FONT,
+          }}
+        >
+          {demoSeedStatus === "running" ? "جاري بناء مشهد المدينة…" : "✨ بناء / إعادة ضبط مشهد المدينة التجريبي"}
+        </button>
+      </Card>
+
+      <Card title="🎮 وضع العرض التجريبي (Demo Mode)" icon={<Sparkles size={16} color="#94a3b8" />}>
+        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 14px" }}>
+          تحكّم مباشر بحالة أي حاوية لأغراض العرض أمام اللجنة — التغيير ينعكس فورًا على الأولوية،
+          التنبيهات، الخريطة، والجولات المقترحة. كل قراءة تجريبية تُوسم demo:true ولا تُخلط بقراءات حقيقية.
+        </p>
+        <select value={demoBinId} onChange={(e) => setDemoBinId(e.target.value)} style={{ width: "100%", padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT, marginBottom: 12 }}>
+          <option value="">اختر حاوية…</option>
+          {bins.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+
+        {demoSelectedBin && (
+          <>
+            <div style={{ fontSize: 11, color: C.dim, marginBottom: 10 }}>
+              الحالة الحالية: {demoSelectedBin.lastFillLevelPercent ?? "—"}% · {demoSelectedBin.lastTemperatureCelsius ?? "—"}° · {getReadingAgeLabel(demoSelectedBin.lastReadingAt)}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <div>
+                <label style={{ fontSize: 11, color: C.muted, display: "block", marginBottom: 4 }}>نسبة الامتلاء: {demoFill}%</label>
+                <input type="range" min={0} max={100} value={demoFill} onChange={(e) => setDemoFill(+e.target.value)} style={{ width: "100%", accentColor: C.accent }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: C.muted, display: "block", marginBottom: 4 }}>الحرارة: {demoTemp}°</label>
+                <input type="range" min={15} max={90} value={demoTemp} onChange={(e) => setDemoTemp(+e.target.value)} style={{ width: "100%", accentColor: C.warning }} />
+              </div>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetReading(demoBinId, demoFill, demoTemp))} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>📡 محاكاة قراءة جديدة</button>
+              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetOffline(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>📴 جعل Offline</button>
+              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetFault(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>⚠️ محاكاة Fault</button>
+              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoReset(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.info}`, background: C.info + "15", color: C.info, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🔄 إعادة ضبط</button>
+            </div>
+            {demoMsg && <div style={{ marginTop: 10, fontSize: 12, color: demoMsg.startsWith("✅") ? C.accent : demoMsg.startsWith("❌") ? C.danger : C.warning }}>{demoMsg}</div>}
+          </>
+        )}
+      </Card>
+
+      <Card title="📡 محاكي ESP32 حي — للعرض أمام اللجنة" icon={<Radio size={16} color="#94a3b8" />}>
+        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 12px" }}>
+          يبث قراءة جديدة كل بضع ثوانٍ لحاوية واحدة فترتفع نسبة امتلائها تدريجيًا على الشاشة أمام اللجنة: شاهد اللون
+          يتغير على الخريطة، التنبيه يظهر، الجولة المقترحة تتحدث تلقائيًا، والسائق يُنبَّه — كلها لحظيًا. كل قراءة تُوسم demo:true.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+          <select value={simBinId} disabled={simRunning} onChange={(e) => setSimBinId(e.target.value)} style={{ gridColumn: "1 / -1", padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT }}>
+            <option value="">اختر الحاوية التي ستُملأ أمام اللجنة…</option>
+            {bins.filter((b) => b.deviceId).map((b) => <option key={b.id} value={b.id}>{b.name} — الآن {b.lastFillLevelPercent ?? "—"}%</option>)}
+          </select>
+          <label style={{ fontSize: 11, color: C.muted }}>الهدف: {simTarget}%<input type="range" min={60} max={100} value={simTarget} disabled={simRunning} onChange={(e) => setSimTarget(+e.target.value)} style={{ width: "100%", accentColor: C.danger }} /></label>
+          <label style={{ fontSize: 11, color: C.muted }}>الزيادة لكل قراءة: {simStep}%<input type="range" min={1} max={10} value={simStep} disabled={simRunning} onChange={(e) => setSimStep(+e.target.value)} style={{ width: "100%", accentColor: C.accent }} /></label>
+          <label style={{ fontSize: 11, color: C.muted, gridColumn: "1 / -1" }}>الفاصل بين القراءات: {simIntervalSec} ثانية<input type="range" min={3} max={30} value={simIntervalSec} disabled={simRunning} onChange={(e) => setSimIntervalSec(+e.target.value)} style={{ width: "100%", accentColor: C.info }} /></label>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {!simRunning ? (
+            <button disabled={!simBin} onClick={startSim} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: simBin ? "linear-gradient(135deg, #ef4444, #b91c1c)" : C.border, color: simBin ? "#fff" : C.dim, fontWeight: 700, fontSize: 13, cursor: simBin ? "pointer" : "not-allowed", fontFamily: ARABIC_FONT }}>▶️ ابدأ البث الحي</button>
+          ) : (
+            <button onClick={() => stopSim("manual")} style={{ padding: "10px 18px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>⏹ إيقاف</button>
+          )}
+          {simRunning && <span style={{ fontSize: 12, color: C.accent }}>● يبث الآن — {simBin?.name}: {simState.current.fill}%</span>}
+          {simBin && !simRunning && <button onClick={() => demoReset(simBin.id)} style={{ padding: "10px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🔄 إعادة الحاوية إلى 20%</button>}
+        </div>
+        {simLog.length > 0 && (
+          <div style={{ marginTop: 10, fontSize: 11, color: C.muted, fontFamily: "monospace", background: C.bg, borderRadius: 8, padding: 8, maxHeight: 120, overflowY: "auto" }}>
+            {simLog.map((l, i) => <div key={i}>{l.t} — fill {l.fill}% · temp {l.temp}°</div>)}
+          </div>
+        )}
+      </Card>
+
+      <Card title="🔄 مزامنة الجولات المقترحة تلقائيًا" icon={<RouteIcon size={16} color="#94a3b8" />}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
+            عند التفعيل يعيد النظام حساب الجولات <b style={{ color: C.text }}>المقترحة</b> تلقائيًا كلما تغيرت حالة الحاويات (حاوية امتلأت → تُضاف للجولة، فُرّغت → تُسحب).
+            لا يعتمد ولا يرسل أي مركبة تلقائيًا — الاعتماد يبقى قرارًا بشريًا.
+          </div>
+          <Toggle value={autoSyncRoutes} onChange={(v) => onToggleAutoSync && onToggleAutoSync(v)} />
+        </div>
+      </Card>
+
+      <Card title="🔐 أجهزة IoT ومفاتيح الدخول" icon={<KeyRound size={16} color="#94a3b8" />}>
+        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 12px" }}>
+          كل جهاز ESP32 يحتاج مفتاحًا خاصًا به يُرسل في ترويسة <code>x-device-key</code> إلى <code>/api/iot/readings</code>.
+          المفتاح يُعرض مرة واحدة فقط هنا ويُخزَّن تجزئته (SHA-256) فقط؛ الجهاز لا يستطيع الكتابة إلا لحاويته. المفتاح التجريبي للمولّد مرفوض من الخادم.
+        </p>
+        {revealedKey && (
+          <div style={{ background: C.warning + "15", border: `1px solid ${C.warning}60`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.warning, marginBottom: 6 }}>⚠️ انسخ المفتاح الآن — لن يُعرض مرة أخرى ({revealedKey.deviceId})</div>
+            <code style={{ display: "block", fontSize: 11, color: C.text, background: C.bg, padding: 8, borderRadius: 8, wordBreak: "break-all", direction: "ltr", textAlign: "left" }}>{revealedKey.key}</code>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={() => navigator.clipboard?.writeText(revealedKey.key)} style={{ padding: "6px 12px", borderRadius: 8, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>نسخ</button>
+              <button onClick={() => setRevealedKey(null)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>تم الحفظ — إخفاء</button>
+            </div>
+          </div>
+        )}
+        {(iotDevices || []).length === 0 ? <EmptyState icon="📟" title="لا توجد أجهزة مسجّلة بعد" /> : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+            {(iotDevices || []).map((d) => {
+              const bin = bins.find((b) => b.id === d.binId);
+              return (
+                <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ color: C.text, fontWeight: 600 }}>{d.deviceId || d.label} {d.demo && <DemoBadge />} {d.disabled && <span style={{ color: C.danger, fontSize: 10 }}>(معطّل)</span>}</div>
+                    <div style={{ color: C.dim, fontSize: 11 }}>{bin?.name || "غير مرتبط بحاوية"} · {d.deviceKeyHash ? "🔑 مفتاح فعّال" : "⚠️ بلا مفتاح فعّال (مفتاح تجريبي فقط)"} · آخر اتصال: {getReadingAgeLabel(d.lastSeenAt)}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button disabled={deviceBusy === d.id} onClick={async () => {
+                      if (!window.confirm(`توليد مفتاح جديد لـ ${d.deviceId || d.label}؟ المفتاح القديم سيتوقف فورًا.`)) return;
+                      setDeviceBusy(d.id);
+                      try {
+                        const key = await rotateDeviceKey(d.id);
+                        setRevealedKey({ deviceId: d.deviceId || d.label, key });
+                        await writeAuditLog("device_key_rotated", loggedInUser?.uid, loggedInUser?.name, { deviceDocId: d.id, deviceId: d.deviceId || d.label });
+                      } finally { setDeviceBusy(""); }
+                    }} style={{ padding: "6px 10px", borderRadius: 8, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>توليد مفتاح</button>
+                    <button onClick={async () => {
+                      await setDeviceDisabled(d.id, !d.disabled);
+                      await writeAuditLog(d.disabled ? "device_enabled" : "device_disabled", loggedInUser?.uid, loggedInUser?.name, { deviceDocId: d.id, deviceId: d.deviceId || d.label });
+                    }} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${d.disabled ? C.accent : C.danger}`, background: "transparent", color: d.disabled ? C.accent : C.danger, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>{d.disabled ? "تفعيل" : "تعطيل"}</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
+          ما يلزم لتشغيل الربط الحقيقي: ضبط <code>FIREBASE_SERVICE_ACCOUNT_JSON</code> و<code>IOT_INGEST_ENABLED=true</code> في بيئة Vercel، نشر <code>firestore.rules</code>، ثم تحميل <code>firmware/esp32_smart_bin</code> على الجهاز بمفتاحه.
+        </div>
+      </Card>
+
       <ApiKeyCard />
 
       <Card title="تصدير قاعدة البيانات" icon={<BarChart2 size={16} color="#94a3b8" />}>
@@ -3528,396 +4687,490 @@ const SettingsPage = () => {
   );
 };
 
-// ======================== SUCTION CONTROL PAGE ========================
-const SuctionControlPage = ({ stations, user }) => {
-  const F = ARABIC_FONT;
-  const inp = { width:"100%", padding:"10px 14px", borderRadius:10, border:`1px solid ${C.border}`, background:C.bg, color:C.text, fontSize:13, fontFamily:F, outline:"none", boxSizing:"border-box" };
+// ======================== ROUTE MANAGEMENT (replaces old SUCTION CONTROL page) ========================
+// Real engine wiring: suggestions come from decisionEngine.recommendRoutes(),
+// persisted as status:"suggested" only — every later transition (approved/
+// in_progress/completed/rejected/deferred) requires an explicit button click
+// from a logged-in employee, never a side effect of a snapshot/listener.
+const ROUTE_TABS = [
+  { key: "suggested", label: "المقترحة" },
+  { key: "approved",  label: "المعتمدة" },
+  { key: "active",    label: "النشطة" },
+  { key: "history",   label: "السجل" },
+];
 
-  // ─── form state ────────────────────────────────────────────
-  const [cmdType, setCmdType]         = useState("container_to_station"); // | station_to_central
-  const [selStation, setSelStation]   = useState("");
-  const [selContainer, setSelContainer] = useState("");
-  const [mode, setMode]               = useState("immediate");            // | scheduled | recurring
-  const [schedDate, setSchedDate]     = useState("");
-  const [schedTime, setSchedTime]     = useState("06:00");
-  const [saving, setSaving]           = useState(false);
-  const [saveMsg, setSaveMsg]         = useState("");
+/** Small embedded map for one route's ordered stops — numbered markers + a polyline, clearly labeled as approximate. */
+const RouteMap = ({ stops, bins, neighborhoods }) => {
+  const points = stops
+    .map((s) => {
+      const bin = bins.find((b) => b.id === s.binId);
+      if (!bin) return null;
+      const n = neighborhoods.find((n2) => n2.id === bin.neighborhoodId);
+      const pos = demoPositionForBin(bin, neighborhoodFeatureFor(n));
+      return pos ? { ...s, pos: pos.pos, demo: pos.demo } : null;
+    })
+    .filter(Boolean);
 
-  // ─── live jobs from Firestore ──────────────────────────────
-  const [jobs, setJobs] = useState([]);
-  useEffect(() => {
-    const q = query(collection(db, "suctionJobs"), orderBy("createdAt", "desc"));
-    const unsub = onSnapshot(q, snap => {
-      setJobs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, err => console.error("suctionJobs snapshot:", err));
-    return () => unsub();
-  }, []);
-
-  // ─── derived helpers ───────────────────────────────────────
-  const station     = stations.find(s => s.id === selStation);
-  const containers  = station?.containers || [];
-
-  const buildJob = () => {
-    const now = new Date().toISOString();
-    const base = {
-      type: cmdType,
-      createdAt: now,
-      createdBy: user?.name || "موظف",
-      status: mode === "immediate" ? "pending" : "scheduled",
-      mode,
-    };
-    if (cmdType === "container_to_station") {
-      const ctr = containers.find(c => c.id === selContainer);
-      return { ...base,
-        sourceName: ctr?.name || selContainer,
-        sourceId:   selContainer,
-        targetName: station?.name || selStation,
-        targetId:   selStation,
-      };
-    } else {
-      return { ...base,
-        sourceName: station?.name || selStation,
-        sourceId:   selStation,
-        targetName: "المحطة المركزية",
-        targetId:   "central",
-      };
-    }
-  };
-
-  const handleIssue = async () => {
-    if (!selStation) { setSaveMsg("⚠️ اختر المحطة أولاً"); return; }
-    if (cmdType === "container_to_station" && !selContainer) { setSaveMsg("⚠️ اختر الحاوية"); return; }
-    if (mode === "scheduled" && (!schedDate || !schedTime)) { setSaveMsg("⚠️ حدد التاريخ والوقت"); return; }
-    if (mode === "recurring" && !schedTime) { setSaveMsg("⚠️ حدد وقت التكرار اليومي"); return; }
-
-    setSaving(true); setSaveMsg("");
-    try {
-      const job = buildJob();
-      if (mode === "scheduled")  job.scheduledAt   = `${schedDate}T${schedTime}:00`;
-      if (mode === "recurring")  job.recurringTime  = schedTime;
-      await addDoc(collection(db, "suctionJobs"), job);
-      setSaveMsg("✅ تم إصدار الأمر بنجاح");
-      setSelStation(""); setSelContainer(""); setSchedDate("");
-    } catch (e) {
-      setSaveMsg("❌ خطأ: " + e.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleCancel = async (jobId) => {
-    try { await updateDoc(doc(db, "suctionJobs", jobId), { status: "cancelled" }); }
-    catch (e) { console.error(e); }
-  };
-
-  const handleComplete = async (jobId) => {
-    try { await updateDoc(doc(db, "suctionJobs", jobId), { status: "completed", completedAt: new Date().toISOString() }); }
-    catch (e) { console.error(e); }
-  };
-
-  const statusStyle = (s) => ({
-    pending:   { bg:"#3b82f615", color:C.info,    label:"⏳ في الانتظار"  },
-    scheduled: { bg:"#8b5cf615", color:C.purple,  label:"🕐 مجدول"       },
-    active:    { bg:"#10b98115", color:C.accent,  label:"▶ جاري الشفط"   },
-    completed: { bg:"#10b98115", color:C.accent,  label:"✅ مكتمل"        },
-    cancelled: { bg:"#ef444415", color:C.danger,  label:"✖ ملغي"         },
-  }[s] || { bg:C.border, color:C.muted, label:s });
-
-  const pendingJobs   = jobs.filter(j => ["pending","scheduled","active"].includes(j.status));
-  const historyJobs   = jobs.filter(j => ["completed","cancelled"].includes(j.status)).slice(0,10);
+  const { route: road, status: roadStatus } = useRoadRoute(points.map((p) => ({ lat: p.pos[0], lng: p.pos[1] })));
+  if (points.length === 0) return <EmptyState icon="🗺️" title="لا توجد مواقع كافية لعرض المسار" />;
+  const center = points[0].pos;
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", gap:18, direction:"rtl", fontFamily:F }}>
-
-      {/* ─── Stats bar ───────────────────────────────────── */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))", gap:12 }}>
-        {[
-          { label:"أوامر نشطة",   val:jobs.filter(j=>j.status==="pending"||j.status==="active").length,  color:C.info,   icon:<Zap size={22} color={C.info} /> },
-          { label:"مجدولة",       val:jobs.filter(j=>j.status==="scheduled").length,                     color:C.purple, icon:<Clock size={22} color={C.purple} /> },
-          { label:"مكتملة اليوم", val:jobs.filter(j=>j.status==="completed"&&j.completedAt?.startsWith(new Date().toISOString().slice(0,10))).length, color:C.accent, icon:<CheckCircle size={22} color={C.accent} /> },
-          { label:"إجمالي الأوامر",val:jobs.length,                                                      color:C.muted,  icon:<ClipboardList size={22} color={C.muted} /> },
-        ].map((m,i)=>(
-          <div key={i} style={{ background:C.card, border:`1px solid ${m.color}25`, borderRadius:14, padding:"14px 18px", textAlign:"center" }}>
-            <div style={{ marginBottom:4, display:"flex", justifyContent:"center" }}>{m.icon}</div>
-            <div style={{ fontSize:26, fontWeight:900, color:m.color }}>{m.val}</div>
-            <div style={{ fontSize:11, color:C.dim, marginTop:2 }}>{m.label}</div>
-          </div>
-        ))}
+    <div>
+      <div style={{ height: 260, borderRadius: 12, overflow: "hidden", border: `1px solid ${C.border}` }}>
+        <MapContainer center={center} zoom={13} style={{ width: "100%", height: "100%" }} scrollWheelZoom={false}>
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
+          {road ? (
+            <Polyline positions={road.coordinates} pathOptions={{ color: C.info, weight: 4, opacity: 0.9 }} />
+          ) : (
+            <Polyline positions={points.map((p) => p.pos)} pathOptions={{ color: C.info, weight: 3, dashArray: "6 6" }} />
+          )}
+          {points.map((p) => (
+            <CircleMarker key={p.binId} center={p.pos} radius={11} pathOptions={{ color: "#fff", weight: 2, fillColor: STATUS_COLORS[p.priorityTier] || C.info, fillOpacity: 1 }}>
+              <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}><b>#{p.order} — {p.binName}</b></div></Popup>
+            </CircleMarker>
+          ))}
+        </MapContainer>
       </div>
+      <RoadRouteNote road={road} status={roadStatus} />
+    </div>
+  );
+};
 
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:16 }}>
+/** One-line provenance for a drawn path: real streets (OSRM) with distance/time, or the straight-line fallback. */
+const RoadRouteNote = ({ road, status }) => (
+  <div style={{ fontSize: 10.5, color: road ? C.accent : C.dim, marginTop: 6 }}>
+    {road
+      ? `🛣️ مسار طرق فعلي (OpenStreetMap/OSRM): ${road.distanceKm} كم · ~${road.durationMin} دقيقة قيادة`
+      : status === "loading" ? "⏳ جاري حساب مسار الطرق الفعلي…" : "⚠️ خدمة التوجيه غير متاحة الآن — المسار المعروض خط مستقيم بين التوقفات (تقريبي)."}
+  </div>
+);
 
-        {/* ─── Issue Command ───────────────────────────── */}
-        <Card title="إصدار أمر شفط" icon={<Sliders size={16} color="#94a3b8" />}>
+const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, loggedInUser, onClose, onChanged, onShowOnMap }) => {
+  const [vehicleId, setVehicleId] = useState(route.vehicleId || "");
+  const [busy, setBusy] = useState(false);
+  const [addBinId, setAddBinId] = useState("");
 
-          {/* نوع العملية */}
-          <div style={{ marginBottom:16 }}>
-            <label style={{ fontSize:11, color:C.muted, marginBottom:8, display:"block" }}>نوع عملية الشفط</label>
-            <div style={{ display:"flex", gap:8 }}>
-              {[
-                { key:"container_to_station", label:"🗑️ حاوية → محطة الحي"       },
-                { key:"station_to_central",   label:"🏭 محطة الحي → المركزية" },
-              ].map(t=>(
-                <button key={t.key} onClick={()=>{ setCmdType(t.key); setSelContainer(""); }} style={{
-                  flex:1, padding:"10px 8px", borderRadius:10,
-                  border:`2px solid ${cmdType===t.key?C.accent:C.border}`,
-                  background: cmdType===t.key ? C.accent+"15" : "transparent",
-                  color: cmdType===t.key ? C.accent : C.muted,
-                  cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F, textAlign:"center",
-                }}>{t.label}</button>
-              ))}
-            </div>
+  const routeBins = route.binIds.map((id) => bins.find((b) => b.id === id)).filter(Boolean);
+  const vehicle = vehicles.find((v) => v.id === vehicleId);
+  const preCheck = routePreCheck(route, routeBins, vehicle);
+
+  const availableToAdd = bins.filter((b) => b.neighborhoodId === route.neighborhoodIds?.[0] && !route.binIds.includes(b.id));
+
+  const actorName = loggedInUser?.name || loggedInUser?.email || "موظف";
+
+  const handleApprove = async () => {
+    if (!vehicleId) { alert("اختر مركبة أولًا"); return; }
+    setBusy(true);
+    try {
+      await approveRoute(route.id, loggedInUser?.uid, vehicleId);
+      await writeAuditLog("route_approved", loggedInUser?.uid, actorName, { routeId: route.id, routeName: route.routeName, vehicleId });
+      onChanged(); onClose();
+    } finally { setBusy(false); }
+  };
+  const handleReject = async () => {
+    const reason = window.prompt("سبب الرفض (اختياري):", "") || "";
+    setBusy(true);
+    try {
+      await rejectRoute(route.id, loggedInUser?.uid, reason);
+      await writeAuditLog("route_rejected", loggedInUser?.uid, actorName, { routeId: route.id, routeName: route.routeName, reason });
+      onChanged(); onClose();
+    } finally { setBusy(false); }
+  };
+  const handleDefer = async () => {
+    setBusy(true);
+    try {
+      await deferRoute(route.id, loggedInUser?.uid);
+      await writeAuditLog("route_deferred", loggedInUser?.uid, actorName, { routeId: route.id, routeName: route.routeName });
+      onChanged(); onClose();
+    } finally { setBusy(false); }
+  };
+  const handleStart = async () => {
+    if (preCheck.issues.length > 0 && !window.confirm(`توجد ملاحظات في الفحص المسبق:\n${preCheck.issues.join("\n")}\n\nهل تريد المتابعة؟`)) return;
+    setBusy(true);
+    try {
+      await startRoute(route.id, route.vehicleId);
+      await writeAuditLog("route_started", loggedInUser?.uid, actorName, { routeId: route.id, routeName: route.routeName });
+      onChanged(); onClose();
+    } finally { setBusy(false); }
+  };
+  const handleComplete = async () => {
+    setBusy(true);
+    try {
+      await completeRoute(route.id, route.vehicleId);
+      await writeAuditLog("route_completed", loggedInUser?.uid, actorName, { routeId: route.id, routeName: route.routeName });
+      onChanged(); onClose();
+    } finally { setBusy(false); }
+  };
+  const handleRemoveBin = async (binId) => {
+    const newBinIds = route.binIds.filter((id) => id !== binId);
+    await updateRoute(route.id, { binIds: newBinIds, orderedStops: route.orderedStops.filter((s) => s.binId !== binId) });
+    await writeAuditLog("route_bin_removed", loggedInUser?.uid, actorName, { routeId: route.id, binId });
+    onChanged();
+  };
+  const handleAddBin = async () => {
+    if (!addBinId) return;
+    const bin = bins.find((b) => b.id === addBinId);
+    const newOrder = route.orderedStops.length + 1;
+    const priority = getBinPriority(bin, null, []);
+    await updateRoute(route.id, {
+      binIds: [...route.binIds, addBinId],
+      orderedStops: [...route.orderedStops, { order: newOrder, binId: bin.id, binName: bin.name, priorityTier: priority.tier, priorityScore: priority.score, hasCoords: bin.lat != null, manual: true }],
+      manualBinIds: [...(route.manualBinIds || []), addBinId], // survives the next engine refresh (reconcileRecommendations keeps manual bins)
+    });
+    await writeAuditLog("route_bin_added_manually", loggedInUser?.uid, actorName, { routeId: route.id, binId: addBinId });
+    setAddBinId("");
+    onChanged();
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "#000a", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 22, maxWidth: 560, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{route.routeName}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.dim, fontSize: 20, cursor: "pointer" }}>✕</button>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+          <StateBadge state={route.priorityTier} />
+          <span style={{ fontSize: 12, color: C.muted }}>{route.estimatedDistanceKm} كم تقريبًا · تقدير حجمي {route.estimatedWasteLiters} لتر · {ROUTE_STATUS_LABELS[route.status] || route.status}</span>
+          {onShowOnMap && route.neighborhoodIds?.[0] && (() => {
+            const n = neighborhoods.find((x) => x.id === route.neighborhoodIds[0]);
+            return n ? <button onClick={() => { onShowOnMap(normalizeNeighborhoodName(n.name)); onClose(); }} style={{ marginInlineStart: "auto", padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>🗺️ عرض على الخريطة التشغيلية</button> : null;
+          })()}
+        </div>
+
+        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>لماذا اقتُرحت هذه الجولة؟</div>
+          <ul style={{ margin: 0, paddingInlineStart: 18, fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
+            {route.reasons.map((r, i) => (<li key={i}>{r}</li>))}
+          </ul>
+        </div>
+
+        <RouteMap stops={route.orderedStops} bins={bins} neighborhoods={neighborhoods} />
+
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>التوقفات ({route.orderedStops.length})</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {route.orderedStops.map((s) => (
+              <div key={s.binId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: C.bg, borderRadius: 8, fontSize: 12 }}>
+                <span>#{s.order} — {s.binName} {!s.hasCoords && <span style={{ color: C.warning }}>(بلا إحداثيات)</span>}{s.manual && <span style={{ color: C.dim }}> (أُضيفت يدويًا)</span>}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontWeight: 700, color: STATUS_COLORS[s.priorityTier] || C.text }}>{(() => { const b = bins.find((x) => x.id === s.binId); return b?.lastFillLevelPercent != null ? `${b.lastFillLevelPercent}%` : "—"; })()}</span>
+                  <StateBadge state={s.priorityTier} />
+                  {route.status === "suggested" && (
+                    <button onClick={() => handleRemoveBin(s.binId)} style={{ background: "none", border: "none", color: C.danger, cursor: "pointer", fontSize: 11 }}>إزالة</button>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
+          {route.status === "suggested" && availableToAdd.length > 0 && (
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <select value={addBinId} onChange={(e) => setAddBinId(e.target.value)} style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>
+                <option value="">إضافة حاوية يدويًا من نفس الحي…</option>
+                {availableToAdd.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+              <button onClick={handleAddBin} disabled={!addBinId} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 12, cursor: addBinId ? "pointer" : "not-allowed" }}>إضافة</button>
+            </div>
+          )}
+        </div>
 
-          {/* اختيار المحطة */}
-          <div style={{ marginBottom:12 }}>
-            <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>
-              {cmdType==="container_to_station" ? "محطة الحي (الوجهة)" : "محطة الحي (المصدر)"}
-            </label>
-            <select value={selStation} onChange={e=>{setSelStation(e.target.value);setSelContainer("");}}
-              style={{...inp,appearance:"auto"}}>
-              <option value="">— اختر المحطة —</option>
-              {stations.map(s=>(
-                <option key={s.id} value={s.id}>{s.name} ({getStatus(s.fillLevel)} — {s.fillLevel}%)</option>
-              ))}
+        {(route.status === "suggested" || route.status === "approved") && (
+          <div style={{ marginTop: 14 }}>
+            <label style={{ fontSize: 12, fontWeight: 700, color: C.text, display: "block", marginBottom: 6 }}>المركبة</label>
+            <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT }}>
+              <option value="">اختر مركبة…</option>
+              {vehicles.map((v) => <option key={v.id} value={v.id} disabled={v.status !== "available" && v.id !== route.vehicleId}>{v.vehicleNumber} — {VEHICLE_STATUS_LABELS[v.status] || v.status}</option>)}
             </select>
           </div>
+        )}
 
-          {/* اختيار الحاوية (فقط لنوع container_to_station) */}
-          {cmdType==="container_to_station" && (
-            <div style={{ marginBottom:12 }}>
-              <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>الحاوية (المصدر)</label>
-              <select value={selContainer} onChange={e=>setSelContainer(e.target.value)}
-                disabled={!selStation} style={{...inp,appearance:"auto",opacity:selStation?1:0.5}}>
-                <option value="">— اختر الحاوية —</option>
-                {[...containers]
-                  .sort((a,b)=>b.fillLevel-a.fillLevel)
-                  .map(c=>(
-                  <option key={c.id} value={c.id}>
-                    {c.name} — {c.fillLevel}% ({getStatus(c.fillLevel)})
-                  </option>
-                ))}
-              </select>
-              {selStation && containers.length===0 && (
-                <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>لا توجد حاويات في هذه المحطة</div>
-              )}
+        {vehicleId && (
+          <div style={{ marginTop: 12, background: preCheck.ready ? C.accent + "15" : C.warning + "15", border: `1px solid ${preCheck.ready ? C.accent : C.warning}40`, borderRadius: 10, padding: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: preCheck.ready ? C.accent : C.warning, marginBottom: 4 }}>
+              {preCheck.ready ? "✅ جاهزة للتنفيذ" : "⚠️ تحتاج مراجعة"}
             </div>
-          )}
-
-          {/* معاينة الرحلة */}
-          {selStation && (cmdType==="station_to_central" || selContainer) && (
-            <div style={{ background:`${C.accent}10`, border:`1px solid ${C.accent}30`, borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:12, color:C.accent }}>
-              🚿 <strong>مسار الشفط:</strong>&nbsp;
-              {cmdType==="container_to_station"
-                ? `${containers.find(c=>c.id===selContainer)?.name || ""} → ${station?.name || ""}`
-                : `${station?.name || ""} → المحطة المركزية`}
-            </div>
-          )}
-
-          {/* ─── وقت التنفيذ ─── */}
-          <div style={{ marginBottom:14 }}>
-            <label style={{ fontSize:11, color:C.muted, marginBottom:8, display:"block" }}>وقت التنفيذ</label>
-            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-              {[
-                { key:"immediate", label:"⚡ فوري"       },
-                { key:"scheduled", label:"📅 وقت محدد"   },
-                { key:"recurring", label:"🔁 يومي تلقائي" },
-              ].map(m=>(
-                <button key={m.key} onClick={()=>setMode(m.key)} style={{
-                  flex:1, minWidth:80, padding:"8px 6px", borderRadius:9,
-                  border:`1px solid ${mode===m.key?C.info:C.border}`,
-                  background: mode===m.key ? C.info+"18" : "transparent",
-                  color: mode===m.key ? C.info : C.muted,
-                  cursor:"pointer", fontSize:11, fontWeight:700, fontFamily:F, textAlign:"center",
-                }}>{m.label}</button>
-              ))}
-            </div>
+            {preCheck.issues.length > 0 && (
+              <ul style={{ margin: 0, paddingInlineStart: 18, fontSize: 11.5, color: C.muted }}>
+                {preCheck.issues.map((i, idx) => (<li key={idx}>{i}</li>))}
+              </ul>
+            )}
           </div>
+        )}
 
-          {/* حقول الوقت */}
-          {mode==="scheduled" && (
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:10, marginBottom:12 }}>
-              <div>
-                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>التاريخ</label>
-                <input type="date" value={schedDate} onChange={e=>setSchedDate(e.target.value)} style={inp} min={new Date().toISOString().slice(0,10)} />
-              </div>
-              <div>
-                <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>الوقت</label>
-                <input type="time" value={schedTime} onChange={e=>setSchedTime(e.target.value)} style={inp} />
-              </div>
-            </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
+          {route.status === "suggested" && (
+            <>
+              <button disabled={busy} onClick={handleApprove} style={{ flex: "1 1 120px", padding: "10px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>اعتماد الجولة</button>
+              <button disabled={busy} onClick={handleDefer} style={{ flex: "1 1 100px", padding: "10px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>تأجيل</button>
+              <button disabled={busy} onClick={handleReject} style={{ flex: "1 1 100px", padding: "10px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>رفض</button>
+            </>
           )}
-          {mode==="recurring" && (
-            <div style={{ marginBottom:12 }}>
-              <label style={{ fontSize:11, color:C.muted, marginBottom:5, display:"block" }}>وقت التنفيذ اليومي</label>
-              <input type="time" value={schedTime} onChange={e=>setSchedTime(e.target.value)} style={inp} />
-              <div style={{ fontSize:11, color:C.dim, marginTop:4 }}>🔁 سيتكرر كل يوم في هذا الوقت</div>
-            </div>
+          {route.status === "approved" && (
+            <button disabled={busy} onClick={handleStart} style={{ flex: "1 1 160px", padding: "10px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>بدء الجولة (إرسال مركبة جمع)</button>
           )}
-
-          {saveMsg && (
-            <div style={{ fontSize:12, padding:"8px 12px", borderRadius:8, marginBottom:12,
-              background: saveMsg.startsWith("✅") ? C.accent+"15" : C.danger+"15",
-              color:       saveMsg.startsWith("✅") ? C.accent       : C.danger,
-              border:`1px solid ${saveMsg.startsWith("✅")?C.accent:C.danger}30`
-            }}>{saveMsg}</div>
+          {route.status === "in_progress" && (
+            <button disabled={busy} onClick={handleComplete} style={{ flex: "1 1 160px", padding: "10px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>إنهاء الجولة</button>
           )}
-
-          <button onClick={handleIssue} disabled={saving} style={{
-            width:"100%", padding:13, borderRadius:10, border:"none",
-            background: saving ? "#334155" : "linear-gradient(135deg,#10b981,#059669)",
-            color:"#000", fontWeight:800, fontSize:14, cursor:saving?"not-allowed":"pointer", fontFamily:F,
-          }}>
-            {saving ? "جاري الإرسال..." : mode==="immediate" ? "⚡ تنفيذ الشفط الآن" : mode==="scheduled" ? "📅 جدولة الأمر" : "🔁 تفعيل الجدول اليومي"}
-          </button>
-        </Card>
-
-        {/* ─── Active + Scheduled Jobs ─────────────────── */}
-        <Card title="الأوامر النشطة والمجدولة" icon={<ClipboardList size={16} color="#94a3b8" />}>
-          {pendingJobs.length===0 ? (
-            <div style={{ textAlign:"center", padding:"50px 0", color:C.dim, fontSize:13 }}>
-              <div style={{ fontSize:36, marginBottom:8 }}>📭</div>لا توجد أوامر نشطة
-            </div>
-          ) : (
-            <div style={{ display:"flex", flexDirection:"column", gap:10, maxHeight:380, overflowY:"auto" }}>
-              {pendingJobs.map(job => {
-                const ss = statusStyle(job.status);
-                return (
-                  <div key={job.id} style={{ background:C.bg, borderRadius:12, padding:"12px 14px", border:`1px solid ${C.border}` }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
-                      <div style={{ fontSize:13, fontWeight:700, color:C.text }}>
-                        {job.type==="container_to_station" ? "🗑️ → 🏭" : "🏭 → 🏛️"}&nbsp;
-                        <span style={{ fontSize:12, fontWeight:600 }}>{job.sourceName}</span>
-                        <span style={{ color:C.dim }}> → </span>
-                        <span style={{ fontSize:12, fontWeight:600 }}>{job.targetName}</span>
-                      </div>
-                      <span style={{ fontSize:11, fontWeight:700, color:ss.color, background:ss.bg, padding:"3px 9px", borderRadius:6 }}>{ss.label}</span>
-                    </div>
-                    <div style={{ fontSize:11, color:C.dim, marginBottom:8 }}>
-                      {job.mode==="immediate"  && `⚡ فوري — ${new Date(job.createdAt).toLocaleString("ar-SA")}`}
-                      {job.mode==="scheduled"  && `📅 مجدول: ${new Date(job.scheduledAt).toLocaleString("ar-SA")}`}
-                      {job.mode==="recurring"  && `🔁 يومي في ${job.recurringTime} — بواسطة ${job.createdBy}`}
-                    </div>
-                    <div style={{ display:"flex", gap:6 }}>
-                      {job.status!=="active" && (
-                        <button onClick={()=>handleComplete(job.id)} style={{ padding:"5px 12px", borderRadius:7, border:"none", background:C.accent+"20", color:C.accent, cursor:"pointer", fontSize:11, fontWeight:700, fontFamily:F }}>✅ إتمام</button>
-                      )}
-                      <button onClick={()=>handleCancel(job.id)} style={{ padding:"5px 12px", borderRadius:7, border:"none", background:C.danger+"15", color:C.danger, cursor:"pointer", fontSize:11, fontWeight:700, fontFamily:F }}>✖ إلغاء</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Card>
+        </div>
       </div>
+    </div>
+  );
+};
 
-      {/* ─── History ─────────────────────────────────────── */}
-      {historyJobs.length > 0 && (
-        <Card title="سجل العمليات" icon={<Clock size={16} color="#94a3b8" />}>
-          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {historyJobs.map(job => {
-              const ss = statusStyle(job.status);
-              return (
-                <div key={job.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 14px", background:C.bg, borderRadius:10, fontSize:12 }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                    <span>{job.type==="container_to_station"?"🗑️ → 🏭":"🏭 → 🏛️"}</span>
-                    <span style={{ color:C.text, fontWeight:600 }}>{job.sourceName}</span>
-                    <span style={{ color:C.dim }}>→</span>
-                    <span style={{ color:C.text, fontWeight:600 }}>{job.targetName}</span>
-                  </div>
-                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                    <span style={{ color:C.dim }}>{job.completedAt ? new Date(job.completedAt).toLocaleString("ar-SA") : new Date(job.createdAt).toLocaleString("ar-SA")}</span>
-                    <span style={{ fontSize:11, fontWeight:700, color:ss.color, background:ss.bg, padding:"2px 8px", borderRadius:6 }}>{ss.label}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
+// ======================== AUDIT LOG ========================
+const AUDIT_ACTION_LABELS = {
+  routes_generated: "توليد جولات مقترحة",
+  route_approved: "اعتماد جولة",
+  route_rejected: "رفض جولة",
+  route_deferred: "تأجيل جولة",
+  route_started: "بدء جولة",
+  route_completed: "إنهاء جولة",
+  route_bin_removed: "إزالة حاوية من جولة",
+  route_bin_added_manually: "إضافة حاوية يدويًا لجولة",
+  routes_auto_synced: "مزامنة تلقائية للجولات المقترحة",
+  route_stop_skipped: "تخطي حاوية في جولة",
+  route_fault_reported: "بلاغ عطل أثناء جولة",
+  route_obstacle_reported: "بلاغ عائق أثناء جولة",
+  vehicle_added: "إضافة مركبة",
+  device_key_rotated: "توليد مفتاح جهاز IoT",
+  device_disabled: "تعطيل جهاز IoT",
+  device_enabled: "تفعيل جهاز IoT",
+  demo_simulation_started: "بدء محاكاة ESP32 حية",
+  demo_simulation_stopped: "إيقاف محاكاة ESP32",
+  demo_action: "إجراء تجريبي (Demo)",
+};
+
+const AuditLogPage = ({ auditLog = [] }) => {
+  const [search, setSearch] = useState("");
+  const rows = [...auditLog].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const filtered = search
+    ? rows.filter((r) => (AUDIT_ACTION_LABELS[r.action] || r.action).includes(search) || (r.actorName || "").includes(search))
+    : rows;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ fontSize: 12, color: C.muted }}>سجل بكل العمليات المهمة على الجولات والمركبات — من فعل ماذا ومتى (§37).</div>
+      <div style={{ position: "relative", maxWidth: 320 }}>
+        <Search size={15} color={C.dim} style={{ position: "absolute", insetInlineStart: 12, top: "50%", transform: "translateY(-50%)" }} />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث بنوع العملية أو اسم المنفّذ…"
+          style={{ width: "100%", padding: "9px 36px 9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT }} />
+      </div>
+      {filtered.length === 0 ? <EmptyState icon="📜" title="لا توجد عمليات مسجّلة بعد" /> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {filtered.map((r) => (
+            <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 12 }}>
+              <div>
+                <b style={{ color: C.text }}>{AUDIT_ACTION_LABELS[r.action] || r.action}</b>
+                <span style={{ color: C.dim }}> — {r.actorName || "غير معروف"}</span>
+                {r.details?.routeName && <span style={{ color: C.muted }}> · {r.details.routeName}</span>}
+              </div>
+              <span style={{ color: C.dim, fontSize: 11 }}>{getReadingAgeLabel(r.createdAt)}</span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 };
 
-// ======================== EXECUTIVE DECISION PORTAL ========================
-const EXEC_USERS = [
-  { username: "admin", password: "admin123", name: "م. عبدالله الراشد", role: "المدير التنفيذي", initials: "عر" },
-  { username: "manager", password: "manager123", name: "م. سارة القحطاني", role: "مدير العمليات", initials: "سق" },
-  { username: "cfo", password: "cfo123", name: "أ. فهد المطيري", role: "المدير المالي", initials: "فم" },
-];
+const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [], fireSensors = [], citizenReports = [], vehicles = [], routes = [], loadingVehicles, loadingRoutes, loggedInUser, draftBinId, onConsumeDraftBin, initialRouteId = null, onConsumeInitialRoute, onShowOnMap }) => {
+  const [tab, setTab] = useState("suggested");
+  const [selectedRouteId, setSelectedRouteId] = useState(null);
 
-const ExecLoginPage = ({ onLogin }) => {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [showHint, setShowHint] = useState(false);
+  // Deep link from a bin/neighborhood/dashboard card: open that route (and its tab) once routes are loaded.
+  const [consumedInitialRouteId, setConsumedInitialRouteId] = useState(null);
+  if (initialRouteId && initialRouteId !== consumedInitialRouteId && routes.length > 0) {
+    setConsumedInitialRouteId(initialRouteId);
+    const target = routes.find((r) => r.id === initialRouteId);
+    if (target) {
+      setSelectedRouteId(target.id);
+      setTab(target.status === "suggested" ? "suggested" : target.status === "approved" ? "approved" : target.status === "in_progress" ? "active" : "history");
+    }
+    if (onConsumeInitialRoute) onConsumeInitialRoute();
+  }
+  const [generating, setGenerating] = useState(false);
+  const [generateMsg, setGenerateMsg] = useState("");
+  const [showVehicles, setShowVehicles] = useState(false);
+  const [newVehicleNumber, setNewVehicleNumber] = useState("");
 
-  const handleLogin = () => {
-    const user = EXEC_USERS.find(u => u.username === username && u.password === password);
-    if (user) { onLogin(user); setError(""); }
-    else setError("اسم المستخدم أو كلمة المرور غير صحيحة");
+  const readingsByBin = useMemo(() => {
+    const map = {};
+    for (const r of recentReadings) { if (!r.bin_id) continue; (map[r.bin_id] ||= []).push(r); }
+    return map;
+  }, [recentReadings]);
+
+  const binCtx = useMemo(() => makeBinContext(fireSensors, citizenReports, neighborhoods), [fireSensors, citizenReports, neighborhoods]);
+  const scoredBinsLive = useMemo(() => bins.map((bin) => ({ bin, priority: getBinPriority(bin, null, readingsByBin[bin.id] || [], binCtx.forBin(bin)) })), [bins, readingsByBin, binCtx]);
+
+  // Live "are the suggestions still in sync with the bins?" check — the same
+  // reconciliation the button applies, computed read-only so the page can say
+  // exactly what pressing it would change.
+  const pendingPlan = useMemo(() => {
+    const open = routes.filter((r) => ["suggested", "approved", "in_progress"].includes(r.status));
+    return reconcileRecommendations(neighborhoods, scoredBinsLive, open);
+  }, [neighborhoods, scoredBinsLive, routes]);
+  const pendingChanges = pendingPlan.toCreate.length + pendingPlan.toUpdate.length + pendingPlan.toWithdraw.length;
+  const binById = useMemo(() => Object.fromEntries(bins.map((b) => [b.id, b])), [bins]);
+
+  const handleGenerate = async () => {
+    setGenerating(true);
+    setGenerateMsg("");
+    try {
+      const open = routes.filter((r) => ["suggested", "approved", "in_progress"].includes(r.status));
+      const plan = reconcileRecommendations(neighborhoods, scoredBinsLive, open);
+      const result = await applyRouteReconciliation(plan);
+      await writeAuditLog("routes_generated", loggedInUser?.uid, loggedInUser?.name, { created: result.created, updated: result.updated, withdrawn: result.withdrawn, unchanged: plan.unchanged.length });
+      if (result.created + result.updated + result.withdrawn === 0) {
+        setGenerateMsg(plan.unchanged.length > 0 ? "الجولات المقترحة محدّثة بالفعل — لا تغييرات." : "لا توجد حاويات مؤهلة للجمع حاليًا — لا جولات مقترحة.");
+      } else {
+        setGenerateMsg(`تم: ${result.created} جولة جديدة، ${result.updated} جولة محدّثة بحاويات جديدة، ${result.withdrawn} اقتراح سُحب (لم تعد حاوياته مؤهلة).`);
+      }
+    } catch (e) {
+      console.error("[generate-routes]", e);
+      setGenerateMsg("حدث خطأ أثناء توليد الجولات.");
+    } finally {
+      setGenerating(false);
+    }
   };
 
+  const grouped = {
+    suggested: routes.filter((r) => r.status === "suggested"),
+    approved: routes.filter((r) => r.status === "approved"),
+    active: routes.filter((r) => r.status === "in_progress"),
+    history: routes.filter((r) => ["completed", "rejected", "deferred", "withdrawn"].includes(r.status)),
+  };
+
+  const selectedRoute = routes.find((r) => r.id === selectedRouteId);
+  const loading = loadingVehicles || loadingRoutes;
+
   return (
-    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0a0e1a 0%, #1a1040 50%, #0a0e1a 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: ARABIC_FONT, direction: "rtl" }}>
-      <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-      <div style={{ width:"100%", maxWidth: 420, padding: "clamp(20px,5vw,40px)", background: "#111827", borderRadius: 24, border: "1px solid #1e293b", position: "relative", overflow: "hidden" }}>
-        {/* Decorative glow */}
-        <div style={{ position: "absolute", top: -60, left: "50%", transform: "translateX(-50%)", width: 200, height: 200, background: "radial-gradient(circle, #f59e0b20, transparent)", borderRadius: "50%" }} />
-        <div style={{ position: "absolute", bottom: -40, right: -40, width: 150, height: 150, background: "radial-gradient(circle, #8b5cf620, transparent)", borderRadius: "50%" }} />
-        
-        <div style={{ textAlign: "center", marginBottom: 32, position: "relative" }}>
-          <AppLogo size={72} />
-          <h1 style={{ fontSize: 22, fontWeight: 900, color: "#f1f5f9", margin: "16px 0 6px 0" }}>بوابة متخذي القرار</h1>
-          <p style={{ fontSize: 13, color: "#94a3b8", margin: 0 }}>نظام إدارة النفايات الذكي - بريدة</p>
-          <div style={{ fontSize: 11, color: "#64748b", marginTop: 8, background: "#0a0e1a", padding: "4px 12px", borderRadius: 8, display: "inline-flex", alignItems: "center", gap: 5 }}><Lock size={11} /> وصول مقيّد - للإدارة العليا فقط</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ fontSize: 12, color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px" }}>
+        هذه الصفحة تستبدل "وحدة التحكم" القديمة (أوامر الشفط). الجولات تُقترح آليًا من أولوية الحاويات، لكن لا تصبح نشطة
+        إلا باعتماد موظف صريح واختيار مركبة؛ لا يُرسل النظام مركبة تلقائيًا بدون تدخل بشري.
+      </div>
+
+      {draftBinId && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: C.info, background: C.info + "15", border: `1px solid ${C.info}40`, borderRadius: 10, padding: "10px 14px" }}>
+          <span>تمت الإشارة إلى حاوية "{bins.find((b) => b.id === draftBinId)?.name || draftBinId}" من صفحة أخرى — افتح جولة مقترحة لنفس حيها لإضافتها يدويًا، أو ولّد جولات جديدة.</span>
+          <button onClick={onConsumeDraftBin} style={{ background: "none", border: "none", color: C.info, cursor: "pointer", fontSize: 16 }}>✕</button>
         </div>
+      )}
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 16, position: "relative" }}>
-          <div>
-            <label style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6, display: "block" }}>اسم المستخدم</label>
-            <input value={username} onChange={e => setUsername(e.target.value)} placeholder="أدخل اسم المستخدم"
-              onKeyDown={e => e.key === "Enter" && handleLogin()}
-              style={{ width: "100%", padding: "12px 16px", borderRadius: 12, border: "1px solid #334155", background: "#0a0e1a", color: "#f1f5f9", fontSize: 14, fontFamily: ARABIC_FONT, outline: "none", boxSizing: "border-box" }} />
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <button disabled={generating || loading} onClick={handleGenerate} style={{
+          padding: "10px 18px", borderRadius: 10, border: "none",
+          background: generating ? C.border : "linear-gradient(135deg, #3b82f6, #1d4ed8)",
+          color: generating ? C.dim : "#fff", fontWeight: 700, fontSize: 13, cursor: generating ? "not-allowed" : "pointer", fontFamily: ARABIC_FONT,
+        }}>
+          {generating ? "جاري التوليد…" : pendingChanges > 0 ? `🧭 توليد/تحديث الجولات المقترحة (${pendingChanges} تغيير)` : "🧭 توليد جولات مقترحة الآن"}
+        </button>
+        {generateMsg && <span style={{ fontSize: 12, color: C.muted }}>{generateMsg}</span>}
+        {!generateMsg && pendingChanges > 0 && (
+          <span style={{ fontSize: 12, color: C.warning }}>
+            ⚠️ الاقتراحات غير متزامنة مع حالة الحاويات: {pendingPlan.toCreate.length} حي بلا جولة، {pendingPlan.toUpdate.length} جولة تحتاج تحديثًا، {pendingPlan.toWithdraw.length} اقتراح لم يعد مطلوبًا.
+          </span>
+        )}
+        <button onClick={() => setShowVehicles((s) => !s)} style={{ padding: "10px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>
+          🚛 إدارة المركبات ({vehicles.length})
+        </button>
+      </div>
+
+      {showVehicles && (
+        <Card title="المركبات" icon={<Truck size={16} color="#94a3b8" />}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input value={newVehicleNumber} onChange={(e) => setNewVehicleNumber(e.target.value)} placeholder="رقم/اسم المركبة الجديدة…"
+              style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }} />
+            <button
+              disabled={!newVehicleNumber.trim()}
+              onClick={async () => {
+                await addVehicle({ vehicleNumber: newVehicleNumber.trim(), capacityLiters: 6000 });
+                await writeAuditLog("vehicle_added", loggedInUser?.uid, loggedInUser?.name, { vehicleNumber: newVehicleNumber.trim() });
+                setNewVehicleNumber("");
+              }}
+              style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 12, cursor: newVehicleNumber.trim() ? "pointer" : "not-allowed" }}
+            >إضافة</button>
           </div>
-          <div>
-            <label style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6, display: "block" }}>كلمة المرور</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="أدخل كلمة المرور"
-              onKeyDown={e => e.key === "Enter" && handleLogin()}
-              style={{ width: "100%", padding: "12px 16px", borderRadius: 12, border: "1px solid #334155", background: "#0a0e1a", color: "#f1f5f9", fontSize: 14, fontFamily: ARABIC_FONT, outline: "none", boxSizing: "border-box" }} />
-          </div>
-          
-          {error && <div style={{ fontSize: 12, color: "#ef4444", background: "#ef444415", padding: "8px 12px", borderRadius: 8, textAlign: "center" }}>⚠️ {error}</div>}
-
-          <button onClick={handleLogin} style={{
-            padding: "14px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #f59e0b, #d97706)",
-            color: "#000", fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: ARABIC_FONT, marginTop: 4,
-            transition: "transform 0.2s, box-shadow 0.2s",
-          }}
-            onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 8px 25px #f59e0b40"; }}
-            onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}
-          >دخول إلى البوابة</button>
-
-          <button onClick={() => setShowHint(!showHint)} style={{ background: "none", border: "none", color: "#64748b", fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT, marginTop: 4 }}>
-            {showHint ? "إخفاء بيانات الدخول" : "عرض بيانات الدخول التجريبية"}
-          </button>
-          {showHint && (
-            <div style={{ background: "#0a0e1a", borderRadius: 10, padding: 12, fontSize: 11, color: "#94a3b8", border: "1px solid #1e293b" }}>
-              {EXEC_USERS.map((u, i) => (
-                <div key={i} style={{ marginBottom: i < EXEC_USERS.length - 1 ? 8 : 0, display: "flex", justifyContent: "space-between" }}>
-                  <span><User size={11} style={{ display: "inline", verticalAlign: "middle", marginLeft: 4 }} /> {u.role}</span>
-                  <span style={{ direction: "ltr", color: "#f59e0b" }}>{u.username} / {u.password}</span>
+          {vehicles.length === 0 ? <EmptyState icon="🚛" title="لا توجد مركبات مسجّلة بعد" /> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {vehicles.map((v) => (
+                <div key={v.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12 }}>
+                  <span style={{ color: C.text }}>{v.vehicleNumber} <span style={{ color: C.dim }}>({v.capacityLiters} لتر)</span></span>
+                  <select value={v.status} onChange={(e) => updateVehicleStatus(v.id, e.target.value, v.currentRouteId)} style={{ padding: "4px 8px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 11, fontFamily: ARABIC_FONT }}>
+                    {Object.entries(VEHICLE_STATUS_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                  </select>
                 </div>
               ))}
             </div>
           )}
-        </div>
+        </Card>
+      )}
+
+      <div style={{ display: "flex", gap: 8, borderBottom: `1px solid ${C.border}`, paddingBottom: 2, flexWrap: "wrap" }}>
+        {ROUTE_TABS.map((t) => (
+          <button key={t.key} onClick={() => setTab(t.key)} style={{
+            padding: "9px 16px", borderRadius: "10px 10px 0 0", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ARABIC_FONT,
+            background: tab === t.key ? C.card : "transparent",
+            color: tab === t.key ? C.accent : C.muted,
+            borderBottom: tab === t.key ? `2px solid ${C.accent}` : "2px solid transparent",
+          }}>{t.label} {grouped[t.key]?.length > 0 ? `(${grouped[t.key].length})` : ""}</button>
+        ))}
       </div>
+
+      {loading ? <EmptyState icon="⏳" title="جاري تحميل الجولات والمركبات…" /> : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+          {grouped[tab].length === 0 ? (
+            <div style={{ gridColumn: "1 / -1" }}>
+              {tab === "suggested" && <EmptyState icon="🧭" title="لا توجد جولات مقترحة حاليًا" desc="اضغط «توليد جولات مقترحة الآن» لتحليل الحاويات المؤهلة للجمع." />}
+              {tab === "approved" && <EmptyState icon="🚦" title="لا توجد جولات معتمدة بانتظار البدء" />}
+              {tab === "active" && <EmptyState icon="🚛" title="لا توجد جولات نشطة حاليًا" />}
+              {tab === "history" && <EmptyState icon="📜" title="لا يوجد سجل جولات بعد" />}
+            </div>
+          ) : grouped[tab].map((r) => (
+            <div key={r.id} onClick={() => setSelectedRouteId(r.id)} style={{ background: C.card, border: `1px solid ${STATUS_COLORS[r.priorityTier] || C.border}40`, borderRadius: 14, padding: 16, cursor: "pointer" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>{r.routeName} {r.demo && <DemoBadge />}</div>
+                <StateBadge state={r.priorityTier} />
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{r.binIds?.length || 0} حاوية · {r.estimatedDistanceKm} كم تقريبًا · تقدير {r.estimatedWasteLiters} لتر</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 6 }}>
+                {(r.orderedStops || []).slice(0, 4).map((st) => {
+                  const b = binById[st.binId];
+                  return (
+                    <div key={st.binId} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: C.muted }}>
+                      <span>#{st.order} {st.binName}{st.manual && <span style={{ color: C.dim }}> (يدوي)</span>}</span>
+                      <span style={{ color: STATUS_COLORS[st.priorityTier] || C.text, fontWeight: 700 }}>{b?.lastFillLevelPercent != null ? `${b.lastFillLevelPercent}%` : "—"}</span>
+                    </div>
+                  );
+                })}
+                {(r.orderedStops || []).length > 4 && <div style={{ fontSize: 11, color: C.dim }}>+{r.orderedStops.length - 4} حاوية أخرى</div>}
+              </div>
+              {r.status === "withdrawn" && r.withdrawReason && <div style={{ fontSize: 11, color: C.dim }}>{r.withdrawReason}</div>}
+              {r.status === "rejected" && r.rejectReason && <div style={{ fontSize: 11, color: C.danger }}>سبب الرفض: {r.rejectReason}</div>}
+              {r.status === "completed" && r.completedAt && <div style={{ fontSize: 11, color: C.dim }}>اكتملت: {getReadingAgeLabel(r.completedAt)}</div>}
+              <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>{ROUTE_STATUS_LABELS[r.status] || r.status}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {selectedRoute && (
+        <RouteDetailModal
+          route={selectedRoute} bins={bins} neighborhoods={neighborhoods} vehicles={vehicles} loggedInUser={loggedInUser}
+          onClose={() => setSelectedRouteId(null)}
+          onChanged={() => {}}
+          onShowOnMap={onShowOnMap}
+        />
+      )}
     </div>
   );
 };
 
+// NOTE: the following generator functions are used by ExecDashboard below
+// (executive portal) — intentionally untouched/out of scope for this phase,
+// left exactly as before including their pre-existing "شفط"/station wording.
 const generateQuarterlyData = () => [
   { quarter: "Q1", الإيرادات: 450000, التكاليف: 320000, الأرباح: 130000, الكفاءة: 78 },
   { quarter: "Q2", الإيرادات: 520000, التكاليف: 295000, الأرباح: 225000, الكفاءة: 84 },
@@ -3959,10 +5212,10 @@ const generateBenchmarkData = () => [
 
 const generateScenarios = () => [
   {
-    id: 1, name: "توسعة 5 محطات جديدة", type: "توسعة",
+    id: 1, name: "توسعة 5 نقاط جمع جديدة", type: "توسعة",
     investment: 2500000, annualSaving: 850000, roi: 34, payback: "2.9 سنة",
     risk: "متوسط", impact: "زيادة التغطية 40%", recommendation: "موصى به",
-    details: "إضافة 5 محطات شفط ذكية في الأحياء الجديدة لتغطية النمو العمراني المتوقع",
+    details: "إضافة 5 نقاط جمع ذكية في الأحياء الجديدة لتغطية النمو العمراني المتوقع",
     pros: ["تغطية أحياء جديدة", "خفض تكاليف النقل", "رفع رضا المواطنين"],
     cons: ["استثمار أولي عالي", "يحتاج 6 أشهر للتنفيذ"],
   },
@@ -3978,15 +5231,15 @@ const generateScenarios = () => [
     id: 3, name: "نظام إعادة تدوير متكامل", type: "بيئية",
     investment: 1800000, annualSaving: 600000, roi: 33, payback: "3 سنوات",
     risk: "متوسط", impact: "رفع إعادة التدوير إلى 85%", recommendation: "موصى به",
-    details: "إنشاء مركز فرز وإعادة تدوير متكامل مرتبط بمحطات الشفط الذكية",
+    details: "إنشاء مركز فرز وإعادة تدوير متكامل مرتبط بالحاويات الذكية",
     pros: ["إيرادات من المواد المعاد تدويرها", "تقليل النفايات 60%", "دعم رؤية 2030"],
     cons: ["يحتاج مساحة كبيرة", "تراخيص بيئية"],
   },
   {
-    id: 4, name: "الطاقة الشمسية للمحطات", type: "استدامة",
+    id: 4, name: "الطاقة الشمسية لنقاط الجمع", type: "استدامة",
     investment: 600000, annualSaving: 180000, roi: 30, payback: "3.3 سنة",
     risk: "منخفض", impact: "تقليل استهلاك الكهرباء 70%", recommendation: "اختياري",
-    details: "تركيب ألواح شمسية على أسطح المحطات لتشغيلها بالطاقة المتجددة",
+    details: "تركيب ألواح شمسية على مواقع نقاط الجمع لتشغيلها بالطاقة المتجددة",
     pros: ["خفض فاتورة الكهرباء", "استدامة بيئية", "صورة إيجابية"],
     cons: ["تأثر بالغبار والرمال", "صيانة الألواح"],
   },
@@ -4064,8 +5317,37 @@ const SessionTimeout = ({ onLogout, timeoutMin = 30, countdownSec = 10 }) => {
   );
 };
 
-const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) => {
-  const [tab, setTab] = useState("overview");
+const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, neighborhoods = [], bins = [], routes = [], fireSensors = [], citizenReports = [], collectionEvents = [], auditLog = [], vehicles = [], recentReadings = [] }) => {
+  const [tab, setTab] = useState("today");
+
+  // ── "ملخص اليوم" — the city on one page, from live smart-bin data ──
+  const today = useMemo(() => {
+    const ctx = makeBinContext(fireSensors, citizenReports, neighborhoods);
+    const readingsByBin = {};
+    for (const r of recentReadings) { if (r.bin_id) (readingsByBin[r.bin_id] ||= []).push(r); }
+    const scored = bins.map((bin) => ({ bin, priority: getBinPriority(bin, null, readingsByBin[bin.id] || [], ctx.forBin(bin)) }));
+    const groups = groupNeighborhoodsByName(neighborhoods, bins);
+    const ranked = rankNeighborhoodsForCollection(groups, scored, routes, { thermalAlertFor: makeThermalAlertFor(fireSensors), centroidFor: centroidForGroup });
+    const impact = computeImpactMetrics(groups, scored, routes, { depot: DEFAULT_DEPOT });
+    const fleet = computeFleetPerformance(routes, collectionEvents, auditLog, vehicles);
+    const offline = bins.filter((b) => { const c = getSensorConnectivity(b); return c === "offline" || c === "fault"; });
+    const offlineHeavy = groups.map((g) => { const idSet = new Set(g.ids); const nb = bins.filter((b) => idSet.has(b.neighborhoodId)); const off = nb.filter((b) => { const c = getSensorConnectivity(b); return c === "offline" || c === "fault"; }); return { g, nb, off }; }).filter((x) => x.nb.length > 0 && x.off.length / x.nb.length >= 0.5);
+    const thermal = groups.filter((g) => makeThermalAlertFor(fireSensors)(g.name));
+    const decisions = [];
+    ranked.slice(0, 3).forEach((r) => decisions.push({
+      icon: r.criticalCount > 0 ? "🔴" : "🟠", title: `${r.openRoute ? "اعتمد" : "ولّد واعتمد"} جولة ${r.group.name}`,
+      why: `${r.criticalCount} حرجة · ${r.highCount} مرتفعة من أصل ${r.total}${r.thermalAlert ? " · تنبيه حراري" : ""}`,
+      state: r.openRoute ? `${ROUTE_STATUS_LABELS[r.openRoute.status]} — ${r.openRoute.binIds?.length || 0} حاوية` : "لا توجد جولة بعد",
+    }));
+    offlineHeavy.forEach((x) => decisions.push({ icon: "⚫", title: `صيانة مستشعرات ${x.g.name}`, why: `${x.off.length} من ${x.nb.length} حاوية بلا بيانات موثوقة — القرارات هناك تعتمد على آخر قراءة قديمة`, state: "طلب فريق الصيانة" }));
+    thermal.forEach((g) => decisions.push({ icon: "🔥", title: `متابعة التنبيه الحراري في ${g.name}`, why: "مستشعر حرارة/غاز فوق حد الإنذار", state: "إشعار الدفاع المدني عند استمرار الارتفاع" }));
+    if (ctx.openCount > 0) decisions.push({ icon: "📣", title: `${ctx.openCount} بلاغ مواطن مفتوح`, why: "مرفوعة ضمن أولوية الحاويات المعنية تلقائيًا", state: "رد على المواطنين بعد الجمع" });
+    return { scored, ranked, impact, fleet, offline, decisions: decisions.slice(0, 6), groupsCount: groups.length,
+      critical: scored.filter((s) => s.priority.tier === "critical").length,
+      suggested: routes.filter((r) => r.status === "suggested").length, approved: routes.filter((r) => r.status === "approved").length, active: routes.filter((r) => r.status === "in_progress").length,
+      avgFill: (() => { const v = bins.map((b) => b.lastFillLevelPercent).filter((x) => x != null && x <= 100); return v.length ? Math.round(v.reduce((a, x) => a + x, 0) / v.length) : null; })(),
+    };
+  }, [neighborhoods, bins, routes, fireSensors, citizenReports, collectionEvents, auditLog, vehicles, recentReadings]);
   const [selectedScenario, setSelectedScenario] = useState(null);
   const [showPassModal, setShowPassModal] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -4151,6 +5433,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
       {/* Tabs */}
       <div style={{ padding: isMobile ? "10px 12px 0" : "12px 28px 0", display: "flex", gap: 6, flexWrap: "wrap", overflowX: "auto" }}>
         {[
+          { key: "today",     label: "ملخص اليوم",            icon: <Target size={14} /> },
           { key: "overview",  label: "نظرة تنفيذية",         icon: <ChartNoAxesCombined size={14} /> },
           { key: "financial", label: "التحليل المالي",        icon: <DollarSign size={14} /> },
           { key: "districts", label: "أداء الأحياء",          icon: <Building size={14} /> },
@@ -4168,6 +5451,72 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData }) =
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: "20px 28px" }}>
+
+        {/* ===== TODAY — one page for the decision maker, exportable to PDF ===== */}
+        {tab === "today" && (
+          <div id="exec-today" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <style>{`@media print { body * { visibility: hidden !important; } #exec-today, #exec-today * { visibility: visible !important; } #exec-today { position: absolute; inset: 0; padding: 16px; background: #fff; color: #111; } .no-print { display: none !important; } }`}</style>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: "#f59e0b" }}>ملخص المدينة اليوم — {new Date().toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</div>
+                <div style={{ fontSize: 12, color: C.muted }}>أرقام حية من الحاويات الذكية والجولات — جاهزة للتصدير كتقرير PDF أسبوعي.</div>
+              </div>
+              <button className="no-print" onClick={() => window.print()} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #f59e0b, #d97706)", color: "#000", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🖨️ تصدير PDF</button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
+              {[
+                { label: "أحياء مغطاة", value: today.groupsCount, color: "#f59e0b" },
+                { label: "حاويات ذكية", value: bins.length, color: C.info },
+                { label: "حاويات حرجة الآن", value: today.critical, color: C.danger },
+                { label: "أحياء تحتاج جمعًا الآن", value: today.ranked.length, color: C.danger },
+                { label: "متوسط الامتلاء", value: today.avgFill != null ? `${today.avgFill}%` : "—", color: C.purple },
+                { label: "جولات مقترحة / معتمدة / نشطة", value: `${today.suggested} / ${today.approved} / ${today.active}`, color: C.accent },
+                { label: "مستشعرات بلا بيانات موثوقة", value: today.offline.length, color: C.dim },
+                { label: "جولات مكتملة (7 أيام)", value: today.fleet.totals.routes, color: C.accent },
+              ].map((t) => (
+                <div key={t.label} style={{ background: C.card, border: `1px solid ${t.color}30`, borderRadius: 12, padding: "12px 14px" }}>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: t.color }}>{t.value}</div>
+                  <div style={{ fontSize: 11, color: C.muted }}>{t.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <Card title="📌 القرارات المقترحة اليوم" icon={<Target size={16} color="#94a3b8" />}>
+              {today.decisions.length === 0 ? <EmptyState icon="✅" title="لا توجد قرارات عاجلة اليوم" /> : (
+                <ol style={{ margin: 0, paddingInlineStart: 20, display: "flex", flexDirection: "column", gap: 10 }}>
+                  {today.decisions.map((d, i) => (
+                    <li key={i} style={{ fontSize: 13, color: C.text, lineHeight: 1.7 }}>
+                      <b>{d.icon} {d.title}</b><br />
+                      <span style={{ color: C.muted, fontSize: 12 }}>لماذا: {d.why}</span> · <span style={{ color: C.info, fontSize: 12 }}>الحالة: {d.state}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>القرارات مقترحة من محرك القرار بمبرراتها — اعتمادها يبقى قرار الإدارة/المشرف.</div>
+            </Card>
+
+            <ImpactCard impact={today.impact} compact accent="#f59e0b" />
+
+            <Card title="🚛 الأسطول خلال 7 أيام" icon={<Truck size={16} color="#94a3b8" />}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+                {[
+                  { label: "جولات مكتملة", value: today.fleet.totals.routes },
+                  { label: "حاويات جُمعت", value: today.fleet.totals.collected },
+                  { label: "التزام الوقت", value: today.fleet.totals.onTimePct != null ? `${today.fleet.totals.onTimePct}%` : "—" },
+                  { label: "امتلاء عند الجمع", value: today.fleet.totals.avgFillAtCollection != null ? `${today.fleet.totals.avgFillAtCollection}%` : "—" },
+                  { label: "اعتماد → بدء", value: today.fleet.totals.avgApprovalToStartMin != null ? `${today.fleet.totals.avgApprovalToStartMin} د` : "—" },
+                  { label: "أعطال/عوائق", value: today.fleet.totals.incidents },
+                ].map((t) => (
+                  <div key={t.label} style={{ background: C.bg, borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: "#f59e0b" }}>{t.value}</div>
+                    <div style={{ fontSize: 11, color: C.muted }}>{t.label}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        )}
 
         {/* ===== EXECUTIVE OVERVIEW ===== */}
         {tab === "overview" && (
@@ -4574,13 +5923,13 @@ const AIAssistant = ({ role, stations = [], alerts = [], userData = {}, myReques
 دورك: تساعد الموظفين والمدراء على فهم البيانات واتخاذ القرارات.
 
 === البيانات الحالية للنظام ===
-إجمالي المحطات: ${stations.length}
-• حرجة (≥85%): ${critical.length} محطة ${critical.length > 0 ? "— " + critical.map(s => `${s.name} (${s.fillLevel}%)`).join("، ") : ""}
-• تحذير (60-84%): ${warning.length} محطة ${warning.length > 0 ? "— " + warning.map(s => `${s.name} (${s.fillLevel}%)`).join("، ") : ""}
-• طبيعية (<60%): ${normal.length} محطة
+إجمالي الأحياء: ${stations.length}
+• حرجة (≥85%): ${critical.length} حي ${critical.length > 0 ? "— " + critical.map(s => `${s.name} (${s.fillLevel}%)`).join("، ") : ""}
+• تحذير (60-84%): ${warning.length} حي ${warning.length > 0 ? "— " + warning.map(s => `${s.name} (${s.fillLevel}%)`).join("، ") : ""}
+• طبيعية (<60%): ${normal.length} حي
 
 التنبيهات النشطة: ${alerts.filter(a => a.type === "حرج").length} حرجة، ${alerts.filter(a => a.type === "تحذير").length} تحذير
-أوامر الشفط النشطة: ${activeJobs.length}
+أوامر الجولات النشطة: ${activeJobs.length}
 
 قواعد الإجابة:
 - أجب بالعربية دائماً
@@ -4657,11 +6006,11 @@ ${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distS
   };
 
   const greeting = role === "employee" || role === "executive"
-    ? "مرحباً! أنا مساعدك الذكي. اسألني عن حالة المحطات، التنبيهات، أوامر الشفط، أو أي شيء آخر."
+    ? "مرحباً! أنا مساعدك الذكي. اسألني عن حالة الأحياء، التنبيهات، أوامر الجولات، أو أي شيء آخر."
     : "أهلاً! أنا مساعدك في بوابة الأفراد. اسألني عن طلباتك أو وضع حيّك.";
 
   const suggestions = role === "employee" || role === "executive"
-    ? ["أي محطة تحتاج شفط الآن؟", "لخص التنبيهات النشطة", "ما وضع المحطات الحرجة؟"]
+    ? ["أي حي يحتاج جمعًا الآن؟", "لخص التنبيهات النشطة", "ما وضع الأحياء الحرجة؟"]
     : ["وش حالة طلباتي؟", "متى يجي الشفط لحينا؟", "كيف أرفع بلاغ؟"];
 
   return (
@@ -4787,7 +6136,367 @@ const CitizenDateDisplay = () => {
   return <span>{d.toLocaleDateString("ar-SA")}</span>;
 };
 
-const CitizenPortal = ({ user, onLogout, stations }) => {
+// ======================== DRIVER / FIELD PORTAL (§24/§25) ========================
+// Scoped to the driver's currently selected route only — never the full
+// operational dashboard. Driver→vehicle→route is a per-session choice, not
+// a permanent binding (§25): the driver picks which approved/active route
+// they're running each time, rather than being pre-assigned one for good.
+// ======================== DRIVER / FIELD PORTAL ========================
+const DEFAULT_DEPOT = { lat: 26.3340, lng: 43.9720, label: "المستودع الرئيسي — بريدة (موقع افتراضي)" };
+
+/**
+ * Where the driver is right now: browser GPS when granted, else the assigned
+ * vehicle's depot, else the city depot. The source is always shown in the UI
+ * so a demo never passes a fallback off as a real fix.
+ */
+function useDriverPosition(vehicle) {
+  const fallback = useMemo(
+    () => (vehicle?.depotLat != null ? { lat: vehicle.depotLat, lng: vehicle.depotLng, source: "depot", label: vehicle.depotLabel || "مستودع المركبة" } : { ...DEFAULT_DEPOT, source: "default" }),
+    [vehicle]
+  );
+  const [pos, setPos] = useState(null);
+  const [status, setStatus] = useState(() => (typeof navigator !== "undefined" && navigator.geolocation ? "locating" : "denied")); // locating | gps | denied
+
+  const requestFix = useCallback(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (p) => { setPos({ lat: p.coords.latitude, lng: p.coords.longitude, source: "gps", label: "موقعك الحالي (GPS)" }); setStatus("gps"); },
+      () => setStatus("denied"),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+  }, []);
+  useEffect(() => { requestFix(); }, [requestFix]);
+
+  const locate = () => {
+    if (!navigator.geolocation) { setStatus("denied"); return; }
+    setStatus("locating");
+    requestFix();
+  };
+
+  return { position: pos || fallback, status, locate };
+}
+
+/** Field map: driver position, the neighborhood polygon, its bins, and the dashed preview path through the priority stops. */
+const FieldRouteMap = ({ position, feature, stops = [], allBins = [], neighborhoodIds = [], height = 300, onRoad }) => {
+  const points = stops.filter((s) => s.lat != null && s.lng != null).map((s) => [s.lat, s.lng]);
+  const path = position ? [[position.lat, position.lng], ...points] : points;
+  const { route: road, status: roadStatus } = useRoadRoute(path.map(([lat, lng]) => ({ lat, lng })));
+  useEffect(() => { if (onRoad) onRoad(road, roadStatus); }, [road, roadStatus, onRoad]);
+  const idSet = new Set(neighborhoodIds);
+  const others = allBins.filter((b) => idSet.has(b.neighborhoodId) && b.lat != null && !stops.some((s) => s.binId === b.id));
+  const center = feature ? polygonCentroid(feature.geometry) : (position || DEFAULT_DEPOT);
+  const flyTarget = useMemo(() => ({ center: [center.lat, center.lng], zoom: 14, _t: feature?.properties?.baseName }), [center.lat, center.lng, feature]);
+  return (
+    <div style={{ height, borderRadius: 14, overflow: "hidden", border: `1px solid ${C.border}` }}>
+      <MapContainer center={[center.lat, center.lng]} zoom={13} style={{ width: "100%", height: "100%" }} scrollWheelZoom={false}>
+        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
+        <FlyTo target={flyTarget} />
+        {feature && <GeoJSON key={feature.properties.baseName} data={feature} style={() => ({ color: C.info, weight: 2.5, fillColor: C.info, fillOpacity: 0.12 })} />}
+        {path.length > 1 && (road
+          ? <Polyline positions={road.coordinates} pathOptions={{ color: C.info, weight: 5, opacity: 0.9 }} />
+          : <Polyline positions={path} pathOptions={{ color: C.info, weight: 4, dashArray: "8 8", opacity: 0.9 }} />)}
+        {position && (
+          <CircleMarker center={[position.lat, position.lng]} radius={10} pathOptions={{ color: "#fff", weight: 2, fillColor: "#0ea5e9", fillOpacity: 1 }}>
+            <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}>🚛 {position.label}</div></Popup>
+          </CircleMarker>
+        )}
+        {others.map((b) => (
+          <CircleMarker key={b.id} center={[b.lat, b.lng]} radius={5} pathOptions={{ color: "#fff", weight: 1, fillColor: STATUS_COLORS[getBinPriority(b, null, []).tier] || C.dim, fillOpacity: 0.7 }}>
+            <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}>{b.name} — {b.lastFillLevelPercent ?? "—"}% (خارج المسار)</div></Popup>
+          </CircleMarker>
+        ))}
+        {stops.filter((s) => s.lat != null).map((s) => (
+          <CircleMarker key={s.binId} center={[s.lat, s.lng]} radius={11} pathOptions={{ color: "#fff", weight: 2, fillColor: STATUS_COLORS[s.priorityTier] || C.info, fillOpacity: 1 }}>
+            <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}><b>#{s.order} — {s.binName}</b><br />الامتلاء: {s.fillLevelPercent ?? "—"}%</div></Popup>
+          </CircleMarker>
+        ))}
+      </MapContainer>
+    </div>
+  );
+};
+
+/**
+ * Driver / field portal (§24/§25). On login the driver sees the same
+ * "needs collection now" ranking the supervisor sees; tapping a neighborhood
+ * shows where it is, how far, the fastest preview path through its priority
+ * bins, and the status of the route that covers it. Execution (start /
+ * collected / finish) is only possible on a route a supervisor approved.
+ */
+const DriverPortal = ({ user, onLogout, vehicles = [], routes = [], bins = [], neighborhoods = [], fireSensors = [], recentReadings = [], citizenReports = [] }) => {
+  const [activeRouteId, setActiveRouteId] = useState(null);
+  const [focusKey, setFocusKey] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const myVehicle = vehicles.find((v) => v.driverName && user?.name && v.driverName === user.name) || vehicles.find((v) => v.status === "available") || vehicles[0] || null;
+  const { position, status: posStatus, locate } = useDriverPosition(myVehicle);
+
+  // Same scoring inputs as the supervisor dashboard (incl. recent readings for
+  // the "soon full" prediction) so both roles see the same ranked list.
+  const scoredBins = useMemo(() => {
+    const ctx = makeBinContext(fireSensors, citizenReports, neighborhoods);
+    const readingsByBin = {};
+    for (const r of recentReadings) { if (r.bin_id) (readingsByBin[r.bin_id] ||= []).push(r); }
+    return bins.map((bin) => ({ bin, priority: getBinPriority(bin, null, readingsByBin[bin.id] || [], ctx.forBin(bin)) }));
+  }, [bins, neighborhoods, fireSensors, recentReadings, citizenReports]);
+
+  const ranked = useMemo(() => {
+    const groups = groupNeighborhoodsByName(neighborhoods, bins);
+    return rankNeighborhoodsForCollection(groups, scoredBins, routes, {
+      thermalAlertFor: makeThermalAlertFor(fireSensors),
+      from: position ? { lat: position.lat, lng: position.lng } : null,
+      centroidFor: centroidForGroup,
+    });
+  }, [neighborhoods, bins, scoredBins, routes, fireSensors, position]);
+
+  const runnableRoutes = routes.filter((r) => r.status === "approved" || r.status === "in_progress");
+  const route = routes.find((r) => r.id === activeRouteId);
+  const vehicle = vehicles.find((v) => v.id === route?.vehicleId);
+  const collectedBinIds = route?.collectedBinIds || [];
+  const stops = route?.orderedStops || [];
+  const nextStop = stops.find((s) => !collectedBinIds.includes(s.binId));
+
+  const focused = ranked.find((r) => r.group.key === focusKey) || null;
+  const focusedFeature = focused ? buraidahNeighborhoodsGeo.features.find((f) => f.properties.baseName === focused.group.key) || null : null;
+  // Preview path from the driver's position through the neighborhood's priority bins —
+  // a planning aid only; nothing here is dispatched.
+  const preview = useMemo(() => (focused ? orderStopsFrom(position, focused.eligibleBins) : null), [focused, position]);
+  const [road, setRoad] = useState({ route: null, status: "idle" });
+  const onRoad = useCallback((route, status) => setRoad({ route, status }), []);
+  // Road figures (OSRM) win when available; otherwise the straight-line estimate.
+  const previewEta = road.route ? road.route.durationMin + (preview?.orderedStops.length || 0) * 4 : (preview ? estimateTravelMinutes((focused?.distanceKm || 0) + preview.totalDistanceKm) : null);
+  const approachKm = road.route?.legs?.[0]?.distanceKm ?? focused?.distanceKm ?? null;
+  const approachMin = road.route?.legs?.[0]?.durationMin ?? focused?.etaMinutes ?? null;
+
+  const handleStart = async () => {
+    setBusy(true);
+    try {
+      await startRoute(route.id, route.vehicleId);
+      await updateRoute(route.id, { driverId: user.uid, driverName: user.name });
+      await writeAuditLog("route_started", user.uid, user.name, { routeId: route.id, routeName: route.routeName, by: "driver" });
+    } finally { setBusy(false); }
+  };
+  const handleCollected = async (stop) => {
+    setBusy(true);
+    try {
+      const bin = bins.find((b) => b.id === stop.binId);
+      await recordCollectionEvent(stop.binId, route.id, route.vehicleId, user.uid, bin?.lastFillLevelPercent ?? 0);
+      await updateRoute(route.id, { collectedBinIds: [...collectedBinIds, stop.binId] });
+    } finally { setBusy(false); }
+  };
+  const handleSkip = async (stop) => {
+    await updateRoute(route.id, { collectedBinIds: [...collectedBinIds, stop.binId] });
+    await writeAuditLog("route_stop_skipped", user.uid, user.name, { routeId: route.id, binId: stop.binId });
+  };
+  const handleFault = async () => {
+    await writeAuditLog("route_fault_reported", user.uid, user.name, { routeId: route.id, routeName: route.routeName });
+    alert("تم تسجيل العطل — سيتم إبلاغ المشرف.");
+  };
+  const handleObstacle = async () => {
+    await writeAuditLog("route_obstacle_reported", user.uid, user.name, { routeId: route.id, routeName: route.routeName });
+    alert("تم تسجيل العائق — سيتم إبلاغ المشرف.");
+  };
+  const handleFinish = async () => {
+    setBusy(true);
+    try {
+      await completeRoute(route.id, route.vehicleId);
+      await writeAuditLog("route_completed", user.uid, user.name, { routeId: route.id, routeName: route.routeName, by: "driver" });
+      setActiveRouteId(null);
+    } finally { setBusy(false); }
+  };
+
+  const driverNotifItems = useMemo(() => [
+    ...routes.filter((r) => r.status === "approved").map((r) => ({ key: `approved:${r.id}`, kind: "approved", route: r })),
+    ...ranked.filter((r) => r.criticalCount > 0).map((r) => ({ key: `critical:${r.group.key}:${r.criticalCount}`, kind: "critical", r })),
+  ], [routes, ranked]);
+  useBrowserNotifications(driverNotifItems, useCallback((item) => item.kind === "approved"
+    ? { title: "🚦 جولة معتمدة جاهزة للبدء", body: `${item.route.routeName} — ${item.route.orderedStops?.length || 0} توقف` }
+    : { title: "🔴 حي يحتاج جمعًا الآن", body: `${item.r.group.name}: ${item.r.criticalCount} حاوية حرجة${item.r.distanceKm != null ? ` · يبعد ${item.r.distanceKm} كم` : ""}` }, []));
+
+  const positionNote = posStatus === "gps" ? "📍 موقعك الحالي عبر GPS" : posStatus === "locating" ? "⏳ جاري تحديد موقعك…" : `📍 ${position.label} — لم يُمنح إذن الموقع`;
+  const btn = (extra) => ({ padding: 11, borderRadius: 10, border: "none", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT, ...extra });
+
+  return (
+    <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", padding: 16 }}>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>🚛 بوابة التشغيل الميداني</div>
+            <div style={{ fontSize: 12, color: C.muted }}>{user.name}{myVehicle ? ` · ${myVehicle.vehicleNumber}` : ""}</div>
+          </div>
+          <button onClick={onLogout} style={{ padding: "8px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>خروج</button>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 11.5, color: posStatus === "gps" ? C.accent : C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px", marginBottom: 8, flexWrap: "wrap" }}>
+          <span>{positionNote}</span>
+          <button onClick={locate} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, color: C.info, fontSize: 11, cursor: "pointer", padding: "4px 10px", fontFamily: ARABIC_FONT }}>تحديث موقعي</button>
+        </div>
+        <div style={{ marginBottom: 14 }}><NotificationPermissionButton compact /></div>
+
+        {route ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <button onClick={() => setActiveRouteId(null)} style={{ alignSelf: "flex-start", background: "none", border: "none", color: C.info, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>← الرجوع للقائمة</button>
+
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 16 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>{route.routeName}</div>
+              <div style={{ fontSize: 12, color: C.muted }}>المركبة: {vehicle?.vehicleNumber || "—"} · الحالة: {ROUTE_STATUS_LABELS[route.status] || route.status} · {stops.length} توقف · {route.estimatedDistanceKm} كم تقريبًا</div>
+              {route.status === "approved" && (
+                <button disabled={busy} onClick={handleStart} style={btn({ marginTop: 10, width: "100%", background: C.accent, color: "#07231A" })}>بدء الجولة</button>
+              )}
+            </div>
+
+            <FieldRouteMap position={position} feature={null} stops={routeStopPositions(route, bins, neighborhoods).map((p) => ({ ...p, lat: p.pos[0], lng: p.pos[1], fillLevelPercent: p.bin.lastFillLevelPercent }))} allBins={[]} height={260} />
+
+            {route.status === "in_progress" && (
+              <>
+                {nextStop ? (
+                  <div style={{ background: C.card, border: `2px solid ${C.info}`, borderRadius: 14, padding: 16 }}>
+                    <div style={{ fontSize: 11, color: C.info, marginBottom: 4 }}>التوقف التالي — #{nextStop.order} من {stops.length}</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>{nextStop.binName}</div>
+                    {(() => {
+                      const bin = bins.find((b) => b.id === nextStop.binId);
+                      const n = neighborhoods.find((n2) => n2.id === bin?.neighborhoodId);
+                      const d = bin?.lat != null && position ? haversineDistanceKm(position.lat, position.lng, bin.lat, bin.lng) : null;
+                      return (
+                        <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+                          الحي: {n?.name || "—"} · الامتلاء: {bin?.lastFillLevelPercent != null ? `${bin.lastFillLevelPercent}%` : "—"} · الأولوية: {STATE_LABELS[nextStop.priorityTier] || nextStop.priorityTier}
+                          {d != null && <span> · يبعد {Math.round(d * 10) / 10} كم</span>}
+                        </div>
+                      );
+                    })()}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      <button disabled={busy} onClick={() => handleCollected(nextStop)} style={btn({ flex: "1 1 120px", background: C.accent, color: "#07231A" })}>✅ تم التفريغ</button>
+                      <button disabled={busy} onClick={() => handleSkip(nextStop)} style={btn({ flex: "1 1 100px", border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12 })}>تخطي الحاوية</button>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <button onClick={handleFault} style={btn({ flex: 1, padding: 9, border: `1px solid ${C.warning}`, background: C.warning + "15", color: C.warning, fontSize: 12, fontWeight: 600 })}>⚠️ يوجد عطل</button>
+                      <button onClick={handleObstacle} style={btn({ flex: 1, padding: 9, border: `1px solid ${C.warning}`, background: C.warning + "15", color: C.warning, fontSize: 12, fontWeight: 600 })}>🚧 يوجد عائق</button>
+                    </div>
+                  </div>
+                ) : (
+                  <EmptyState icon="🎉" title="تم الوصول لجميع التوقفات" desc="يمكنك الآن إنهاء الجولة." />
+                )}
+                <div>
+                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>التقدم: {collectedBinIds.length} / {stops.length}</div>
+                  <div style={{ height: 8, background: C.card, borderRadius: 4, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${stops.length ? (collectedBinIds.length / stops.length) * 100 : 0}%`, background: C.accent, transition: "width .3s" }} />
+                  </div>
+                </div>
+                <button disabled={busy} onClick={handleFinish} style={btn({ padding: 12, background: C.info, color: "#fff" })}>إنهاء الجولة</button>
+              </>
+            )}
+
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>التوقفات بالترتيب</div>
+              {stops.map((s) => {
+                const bin = bins.find((b) => b.id === s.binId);
+                const done = collectedBinIds.includes(s.binId);
+                return (
+                  <div key={s.binId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12, opacity: done ? 0.5 : 1 }}>
+                    <span>{done ? "✅" : `#${s.order}`} {s.binName}</span>
+                    <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <b style={{ color: STATUS_COLORS[s.priorityTier] || C.text }}>{bin?.lastFillLevelPercent != null ? `${bin.lastFillLevelPercent}%` : "—"}</b>
+                      <StateBadge state={s.priorityTier} />
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : focused ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <button onClick={() => setFocusKey(null)} style={{ alignSelf: "flex-start", background: "none", border: "none", color: C.info, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>← كل الأحياء</button>
+
+            <div style={{ background: C.card, border: `1px solid ${STATUS_COLORS[focused.priority.tier] || C.border}60`, borderRadius: 14, padding: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <div style={{ fontSize: 17, fontWeight: 800 }}>{focused.group.name}</div>
+                <StateBadge state={focused.priority.tier} />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 10 }}>
+                {[
+                  { label: road.route ? "المسافة إليه (طرق)" : "المسافة إليه", value: approachKm != null ? `${approachKm} كم` : "—", color: C.info },
+                  { label: "الوصول تقريبًا", value: approachMin != null ? `~${approachMin} د` : "—", color: C.info },
+                  { label: "حاويات للجمع", value: focused.eligibleBins.length, color: C.danger },
+                  { label: road.route ? "المسار كاملًا (طرق)" : "طول المسار", value: road.route ? `${road.route.distanceKm} كم` : (preview ? `${preview.totalDistanceKm} كم` : "—"), color: C.muted },
+                ].map((k) => (
+                  <div key={k.label} style={{ background: C.bg, borderRadius: 10, padding: "8px 10px", textAlign: "center" }}>
+                    <div style={{ fontSize: 17, fontWeight: 800, color: k.color }}>{k.value}</div>
+                    <div style={{ fontSize: 10.5, color: C.dim }}>{k.label}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10 }}>
+                {focused.criticalCount} حرجة · {focused.highCount} مرتفعة · {focused.total} حاوية إجمالًا{focused.thermalAlert && <span style={{ color: C.danger }}> · 🔥 تنبيه حراري نشط</span>}
+                {previewEta != null && <span> · الزمن الكلي للوصول والمسار ~{previewEta} دقيقة</span>}
+              </div>
+            </div>
+
+            <FieldRouteMap position={position} feature={focusedFeature} stops={preview?.orderedStops || []} allBins={bins} neighborhoodIds={focused.group.ids} height={300} onRoad={onRoad} />
+            <RoadRouteNote road={road.route} status={road.status} />
+            <div style={{ fontSize: 10.5, color: C.dim }}>ترتيب التوقفات: أقرب-جار من موقعك مع وزن لأولوية الامتلاء. المسار يُرسم على الطرق الفعلية عبر OSRM عند توفره.</div>
+
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>الحاويات ذات الأولوية — بترتيب المسار</div>
+              {(preview?.orderedStops || []).map((s) => (
+                <div key={s.binId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
+                  <span>#{s.order} {s.binName}</span>
+                  <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <b style={{ color: STATUS_COLORS[s.priorityTier] || C.text }}>{s.fillLevelPercent != null ? `${s.fillLevelPercent}%` : "—"}</b>
+                    <StateBadge state={s.priorityTier} />
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background: focused.openRoute ? C.info + "12" : C.warning + "12", border: `1px solid ${focused.openRoute ? C.info : C.warning}50`, borderRadius: 14, padding: 14 }}>
+              {focused.openRoute ? (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.info, marginBottom: 4 }}>🧭 {focused.openRoute.routeName} — {ROUTE_STATUS_LABELS[focused.openRoute.status] || focused.openRoute.status}</div>
+                  {focused.openRoute.status === "suggested" && <div style={{ fontSize: 12, color: C.muted }}>بانتظار اعتماد المشرف واختيار مركبة — لا يمكن البدء قبل الاعتماد.</div>}
+                  {(focused.openRoute.status === "approved" || focused.openRoute.status === "in_progress") && (
+                    <button onClick={() => setActiveRouteId(focused.openRoute.id)} style={btn({ marginTop: 8, width: "100%", background: C.accent, color: "#07231A" })}>
+                      {focused.openRoute.status === "approved" ? "فتح الجولة المعتمدة وبدؤها" : "متابعة الجولة النشطة"}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <div style={{ fontSize: 12, color: C.warning }}>⚠️ لا توجد جولة مقترحة أو معتمدة لهذا الحي بعد — أبلغ المشرف ليولّد الجولات ويعتمدها.</div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <NeedsCollectionBanner ranked={ranked} compact onSelect={(r) => setFocusKey(r.group.key)} />
+
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🚦 جولاتي المعتمدة / النشطة</div>
+              {runnableRoutes.length === 0 ? (
+                <EmptyState icon="🧭" title="لا توجد جولة معتمدة لك حاليًا" desc="انتظر اعتماد جولة من قبل المشرف، أو اضغط على أي حي أعلاه لمعاينة المسار." />
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {runnableRoutes.map((r) => (
+                    <div key={r.id} onClick={() => setActiveRouteId(r.id)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, cursor: "pointer" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <b>{r.routeName}</b>
+                        <StateBadge state={r.priorityTier} />
+                      </div>
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{r.orderedStops?.length || 0} توقف · {r.estimatedDistanceKm} كم · {ROUTE_STATUS_LABELS[r.status] || r.status}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = [] }) => {
+  const [reportBinId, setReportBinId] = useState("");
+  const myNeighborhoodIds = useMemo(() => new Set(neighborhoods.filter((n) => normalizeNeighborhoodName(n.name) === normalizeNeighborhoodName(user.district)).map((n) => n.id)), [neighborhoods, user.district]);
+  const myBins = useMemo(() => bins.filter((b) => myNeighborhoodIds.has(b.neighborhoodId)), [bins, myNeighborhoodIds]);
   const [tab, setTab]               = useState("home");
   const [showPassModal, setShowPassModal] = useState(false);
 
@@ -4841,14 +6550,18 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
     if (!reportType || !reportDesc.trim()) return;
     setReportLoading(true);
     try {
+      const chosenBin = myBins.find((b) => b.id === reportBinId);
       await addCitizenReport({
         userId:      user.uid,
         userName:    user.name,
         district:    user.district,
         type:        reportType,
         description: reportDesc.trim(),
-        location:    `${user.district} - بريدة`,
+        location:    chosenBin ? `${chosenBin.name} — ${user.district} - بريدة` : `${user.district} - بريدة`,
+        binId:       chosenBin?.id || null,
+        binName:     chosenBin?.name || null,
       });
+      setReportBinId("");
       setReportDone("success");
       setReportType(""); setReportDesc("");
     } catch (e) {
@@ -5167,6 +6880,15 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
                     <textarea value={reportDesc} onChange={e => setReportDesc(e.target.value)} placeholder="اشرح المشكلة بالتفصيل..."
                       style={{ ...inputStyle, minHeight: 100, resize: "vertical" }} />
                   </div>
+                  {myBins.length > 0 && (
+                    <div>
+                      <label style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "block" }}>الحاوية المقصودة (اختياري — يرفع أولويتها مباشرة لدى فريق الجمع)</label>
+                      <select value={reportBinId} onChange={(e) => setReportBinId(e.target.value)} style={inputStyle}>
+                        <option value="">حاوية غير محددة — البلاغ على مستوى الحي</option>
+                        {myBins.map((b) => <option key={b.id} value={b.id}>{b.name}{b.lastFillLevelPercent != null ? ` — الامتلاء الآن ${b.lastFillLevelPercent}%` : ""}</option>)}
+                      </select>
+                    </div>
+                  )}
                   <div>
                     <label style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "block" }}>الموقع</label>
                     <input value={`${user.district} - بريدة`} readOnly style={{ ...inputStyle, opacity: 0.7 }} />
@@ -5261,7 +6983,7 @@ const CitizenPortal = ({ user, onLogout, stations }) => {
 const ALL_USERS = [
   // Employees
   { username: "emp1", password: "emp123", name: "أحمد السليمان", role: "employee", roleTitle: "فني تشغيل", avatar: "👷" },
-  { username: "emp2", password: "emp123", name: "خالد الدوسري", role: "employee", roleTitle: "مشرف محطات", avatar: "🔧" },
+  { username: "emp2", password: "emp123", name: "خالد الدوسري", role: "employee", roleTitle: "مشرف عمليات", avatar: "🔧" },
   // Executives
   { username: "admin", password: "admin123", name: "م. عبدالله الراشد", role: "executive", roleTitle: "المدير التنفيذي", avatar: "👔" },
   { username: "manager", password: "manager123", name: "م. سارة القحطاني", role: "executive", roleTitle: "مدير العمليات", avatar: "👩‍💼" },
@@ -5407,28 +7129,127 @@ function SmartWasteManagement() {
   const [stations, setStations] = useState([]);
   const [loadingStations, setLoadingStations] = useState(true);
 
+  // 🏘️ الأحياء والحاويات الذكية — المصدر الرئيسي الجديد للواجهة التشغيلية
+  // (stations/containers أعلاه يبقى مؤقتًا كمصدر fallback داخلي لحين اكتمال
+  // نقل كل الصفحات إليها؛ لا يُحذف من Firestore في هذه المرحلة)
+  const { neighborhoods, loading: loadingNeighborhoods } = useNeighborhoods();
+  const { bins, loading: loadingBins } = useBins();
+  const { readings: recentReadings } = useRecentReadings();
+  const { vehicles, loading: loadingVehicles } = useVehicles();
+  const { routes, loading: loadingRoutes } = useCollectionRoutes();
+  const { events: collectionEvents } = useCollectionEvents();
+  const { auditLog } = useAuditLog();
+  const { data: _citizenReportsCol } = useCollection(COLLECTIONS.CITIZEN_REPORTS);
+  const citizenReports = useMemo(() => _citizenReportsCol || [], [_citizenReportsCol]);
+
+  // Auto-sync of SUGGESTED routes (never approvals/dispatch): when the bins'
+  // state drifts from the open suggestions, re-run the same reconciliation the
+  // "توليد الجولات" button applies. Debounced, re-entrancy guarded, audited.
+  const [autoSyncRoutes, setAutoSyncRoutes] = useState(() => { try { return localStorage.getItem("swm_autoSyncRoutes") !== "off"; } catch { return true; } });
+  const toggleAutoSync = (v) => { setAutoSyncRoutes(v); try { localStorage.setItem("swm_autoSyncRoutes", v ? "on" : "off"); } catch { /* ignore */ } };
+  const syncingRef = useRef(false);
+  const [binsNeighborhoodFilter, setBinsNeighborhoodFilter] = useState(null);
+  const goToBins = (neighborhoodId) => {
+    setBinsNeighborhoodFilter(neighborhoodId || null);
+    setPage("bins");
+  };
+  const [routeDraftBinId, setRouteDraftBinId] = useState(null);
+  const goToRouteWithBin = (bin) => {
+    setRouteDraftBinId(bin.id);
+    setPage("control");
+  };
+  // Cross-page links that keep bins ↔ neighborhoods ↔ routes one click apart.
+  const [routeInitialId, setRouteInitialId] = useState(null);
+  const goToRoute = (routeId) => { setRouteInitialId(routeId); setPage("control"); };
+  const [mapInitialKey, setMapInitialKey] = useState(null);
+  const goToMapNeighborhood = (key) => { setMapInitialKey(key); setPage("map"); };
+
   // ── Analytics من Firestore (مع fallback للبيانات الافتراضية) ──────
+  // ملاحظة: analytics/hourly (نشاط الشفط سابقًا) لم تعد تُقرأ هنا — الرسم الذي
+  // كان يعرضها في الداشبورد استُبدل بـ Empty State بدل اختلاق بيانات جمع غير
+  // حقيقية؛ المستند نفسه في Firestore لم يُحذف.
   const { data: _wDoc  } = useAnalyticsDoc("weekly");
   const { data: _mDoc  } = useAnalyticsDoc("monthly");
-  const { data: _hDoc  } = useAnalyticsDoc("hourly");
   const { data: _ftDoc } = useAnalyticsDoc("fire_temp");
   const { data: _fwDoc } = useAnalyticsDoc("fire_weekly");
-  const { data: _shDoc } = useAnalyticsDoc("station_history");
   const { data: _fsCol } = useCollection("fire_sensors", null);
 
   const weeklyData               = _wDoc?.data   || generateWeeklyData();
   const monthlyTrend             = _mDoc?.data   || generateMonthlyTrend();
-  const hourlyData               = _hDoc?.data   || generateHourlyData();
   const fireTempHistory          = _ftDoc?.data  || generateTempHistory();
   const fireWeeklyData           = _fwDoc?.data  || generateWeeklyFireIncidents();
-  const stationHistoryByDistrict = _shDoc?.data  || {};
-  const fireSensors              = _fsCol        || [];
+  const fireSensors              = useMemo(() => _fsCol || [], [_fsCol]);
+  // analytics/station_history is still written (below, via recordDailyStationHistory)
+  // but no longer read here — StationsPage (its only reader) was replaced by
+  // NeighborhoodsPage/BinsPage in this phase. Tracked as part of the existing
+  // "Analytics Tech Debt" note in firestoreService.js.
 
   // أوامر الشفط (للمساعد الذكي)
   const { data: suctionJobs } = useCollection(COLLECTIONS.SUCTION_JOBS);
 
-  // ✅ التنبيهات مشتقة من بيانات المحطات الحقيقية
-  const alerts = useMemo(() => generateAlerts(stations), [stations]);
+  // ✅ التنبيهات الحقيقية (§28/§29) — مشتقة من bins/neighborhoods الحية عبر
+  // decisionEngine + alertsEngine، ومُزامَنة إلى Firestore (alerts) بمنطق
+  // dedup يمنع تكرارها عند كل تحديث. استبدلت القائمة السابقة المشتقة من
+  // stations فقط للعرض في الواجهة (generateAlerts تبقى معرّفة لتوافق الأماكن
+  // الأخرى التي ما زالت تقرأ stations، لكن لوحة التحكم لم تعد تستهلكها).
+  const { data: realAlerts } = useCollectionWhere(COLLECTIONS.ALERTS, "resolved", false);
+  const alerts = useMemo(() => (realAlerts || []).map((a) => ({
+    id: a.id,
+    type: ALERT_TYPE_LABELS[a.type] || a.type,
+    icon: ALERT_TYPE_ICONS[a.type] || "🔔",
+    message: a.message,
+    time: getReadingAgeLabel(a.createdAt),
+  })), [realAlerts]);
+
+  useEffect(() => {
+    if (!autoSyncRoutes || loadingRoutes || loadingBins || bins.length === 0 || !userData || userData.role === "citizen") return;
+    const t = setTimeout(async () => {
+      if (syncingRef.current) return;
+      const ctx = makeBinContext(fireSensors, citizenReports, neighborhoods);
+      const readingsByBin = {};
+      for (const r of recentReadings) { if (r.bin_id) (readingsByBin[r.bin_id] ||= []).push(r); }
+      const scored = bins.map((bin) => ({ bin, priority: getBinPriority(bin, null, readingsByBin[bin.id] || [], ctx.forBin(bin)) }));
+      const open = routes.filter((r) => ["suggested", "approved", "in_progress"].includes(r.status));
+      const plan = reconcileRecommendations(neighborhoods, scored, open);
+      if (plan.toCreate.length + plan.toUpdate.length + plan.toWithdraw.length === 0) return;
+      syncingRef.current = true;
+      try {
+        const result = await applyRouteReconciliation(plan);
+        await writeAuditLog("routes_auto_synced", "system", "النظام (مزامنة تلقائية)", { ...result, triggeredBy: userData.fullName || "" });
+      } catch (e) { console.error("[routes-auto-sync]", e); }
+      finally { syncingRef.current = false; }
+    }, 6000);
+    return () => clearTimeout(t);
+  }, [autoSyncRoutes, bins, neighborhoods, routes, recentReadings, fireSensors, citizenReports, loadingRoutes, loadingBins, userData]);
+
+  const lastAlertSyncRef = useRef(0);
+  useEffect(() => {
+    if (bins.length === 0 && neighborhoods.length === 0) return;
+    // Light client-side throttle — avoid re-syncing on every snapshot tick
+    // when several collections update within the same second.
+    const now = Date.now();
+    if (now - lastAlertSyncRef.current < 5000) return;
+    lastAlertSyncRef.current = now;
+
+    const ctx = makeBinContext(fireSensors, citizenReports, neighborhoods);
+    const scored = bins.map((bin) => ({ bin, priority: getBinPriority(bin, null, [], ctx.forBin(bin)) }));
+    const scoredNeighborhoods = neighborhoods.map((n) => ({
+      neighborhood: n,
+      priority: getNeighborhoodPriority(scored.filter((x) => x.bin.neighborhoodId === n.id), ctx.forNeighborhoodName(n.name)),
+    }));
+    const candidates = generateAlertCandidates(scored, scoredNeighborhoods);
+    syncAlertsFromCandidates(candidates).catch((e) => console.error("[alerts-sync]", e));
+  }, [bins, neighborhoods, fireSensors, citizenReports]);
+
+  // Browser notifications for the operations staff: new critical alerts + new suggested routes.
+  const staffNotifItems = useMemo(() => [
+    ...(realAlerts || []).filter((a) => a.severity === "high" || a.severity === "critical").map((a) => ({ key: `alert:${a.id}`, kind: "alert", alert: a })),
+    ...routes.filter((r) => r.status === "suggested").map((r) => ({ key: `suggested:${r.id}`, kind: "route", route: r })),
+  ], [realAlerts, routes]);
+  useBrowserNotifications(staffNotifItems, useCallback((item) => item.kind === "alert"
+    ? { title: `🔴 ${ALERT_TYPE_LABELS[item.alert.type] || "تنبيه حرج"}`, body: item.alert.message }
+    : { title: "🧭 جولة مقترحة جديدة بانتظار اعتمادك", body: `${item.route.routeName} — ${item.route.binIds?.length || 0} حاوية` }, []),
+    !!userData && userData.role !== "citizen" && userData.role !== "driver");
 
   // 🔄 الاستماع المباشر للمحطات من Firestore (Realtime)
   useEffect(() => {
@@ -5454,14 +7275,16 @@ function SmartWasteManagement() {
   useEffect(() => { const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
 
   // Build user object for child components from Firebase data
+  const ROLE_TITLES = { executive: "إدارة عليا", employee: "موظف", driver: "سائق ميداني", citizen: "مواطن" };
+  const ROLE_AVATARS = { executive: "🏛️", employee: "👷", driver: "🚛", citizen: "🏠" };
   const loggedInUser = userData ? {
     uid: authUser?.uid || "",
     name: userData.fullName,
     email: userData.email,
     role: userData.role,
-    roleTitle: userData.roleAr || (userData.role === "executive" ? "إدارة عليا" : userData.role === "employee" ? "موظف" : "مواطن"),
+    roleTitle: userData.roleAr || ROLE_TITLES[userData.role] || "مواطن",
     district: userData.district || "حي الخليج",
-    avatar: userData.role === "executive" ? "🏛️" : userData.role === "employee" ? "👷" : "🏠",
+    avatar: ROLE_AVATARS[userData.role] || "🏠",
   } : null;
 
   if (!loggedInUser) return null;
@@ -5472,23 +7295,38 @@ function SmartWasteManagement() {
 
   // Citizen portal
   if (loggedInUser.role === "citizen") {
-    return <CitizenPortal user={loggedInUser} onLogout={handleLogout} stations={stations} />;
+    return <CitizenPortal user={loggedInUser} onLogout={handleLogout} stations={stations} bins={bins} neighborhoods={neighborhoods} />;
   }
 
   // Executive portal
   if (loggedInUser.role === "executive") {
-    return <ExecDashboard user={loggedInUser} onLogout={handleLogout} stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} />;
+    return <ExecDashboard user={loggedInUser} onLogout={handleLogout} stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData}
+      neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} collectionEvents={collectionEvents} auditLog={auditLog} vehicles={vehicles} recentReadings={recentReadings} />;
+  }
+
+  // Driver / field portal (§24/§25) — scoped to the driver's currently
+  // assigned route only, never the full operational dashboard.
+  if (loggedInUser.role === "driver") {
+    return (
+      <DriverPortal
+        user={loggedInUser} onLogout={handleLogout}
+        vehicles={vehicles} routes={routes} bins={bins} neighborhoods={neighborhoods} fireSensors={fireSensors} recentReadings={recentReadings} citizenReports={citizenReports}
+      />
+    );
   }
 
   // Employee portal (default operational dashboard)
   const navItems = [
     { key: "dashboard", label: "لوحة التحكم",       icon: <LayoutDashboard size={20} /> },
-    { key: "stations",  label: "المحطات",             icon: <Factory size={20} /> },
-    { key: "control",   label: "وحدة التحكم",         icon: <Sliders size={20} /> },
+    { key: "map",       label: "الخريطة التشغيلية",  icon: <MapGlyph size={20} /> },
+    { key: "neighborhoods", label: "الأحياء",         icon: <Home size={20} /> },
+    { key: "bins",      label: "الحاويات الذكية",     icon: <Trash2 size={20} /> },
+    { key: "control",   label: "إدارة الجولات",       icon: <RouteIcon size={20} /> },
     { key: "requests",  label: "الطلبات والبلاغات",   icon: <Inbox size={20} /> },
-    { key: "fire",      label: "إنذار الحرائق",       icon: <Flame size={20} /> },
+    { key: "fire",      label: "التنبيهات الحرارية",  icon: <Flame size={20} /> },
     { key: "predictions", label: "التنبؤات",          icon: <Sparkles size={20} /> },
     { key: "reports",   label: "التقارير",             icon: <ClipboardList size={20} /> },
+    { key: "audit",     label: "سجل العمليات",         icon: <FileText size={20} /> },
     { key: "settings",  label: "الإعدادات",            icon: <SettingsIcon size={20} /> },
   ];
 
@@ -5539,7 +7377,7 @@ function SmartWasteManagement() {
 
         <nav style={{ flex: 1, padding: "12px 8px", display: "flex", flexDirection: "column", gap: 4, overflowY: "auto" }}>
           {navItems.map((item) => (
-            <button key={item.key} onClick={() => { setPage(item.key); if (isMobile) setSidebarOpen(false); }} style={{
+            <button key={item.key} onClick={() => { setPage(item.key); setMapInitialKey(null); setRouteInitialId(null); if (isMobile) setSidebarOpen(false); }} style={{
               display: "flex", alignItems: "center", gap: 12,
               padding: (sidebarOpen || isMobile) ? "12px 14px" : "12px 0",
               justifyContent: (sidebarOpen || isMobile) ? "flex-start" : "center",
@@ -5643,7 +7481,10 @@ function SmartWasteManagement() {
                         <span style={{ background:C.danger, color:"#fff", fontSize:10, fontWeight:800, padding:"1px 7px", borderRadius:20 }}>{alerts.filter(a=>!a.resolved).length}</span>
                       )}
                     </div>
-                    <button onClick={() => setShowNotifications(false)} style={{ background:"none", border:"none", color:C.muted, cursor:"pointer", display:"flex", padding:2 }}><X size={15}/></button>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <NotificationPermissionButton compact />
+                      <button onClick={() => setShowNotifications(false)} style={{ background:"none", border:"none", color:C.muted, cursor:"pointer", display:"flex", padding:2 }}><X size={15}/></button>
+                    </div>
                   </div>
                   <div style={{ maxHeight:360, overflowY:"auto" }}>
                     {alerts.length === 0 ? (
@@ -5684,14 +7525,17 @@ function SmartWasteManagement() {
         </header>
 
         <div style={{ flex: 1, overflow: "auto", padding: isMobile ? 12 : 24 }}>
-          {page === "dashboard"  && <DashboardPage stations={stations} weeklyData={weeklyData} monthlyTrend={monthlyTrend} alerts={alerts} hourlyData={hourlyData} />}
-          {page === "stations"   && <StationsPage stations={stations} stationHistoryByDistrict={stationHistoryByDistrict} />}
-          {page === "control"    && <SuctionControlPage stations={stations} user={loggedInUser} />}
+          {page === "dashboard"  && <DashboardPage weeklyData={weeklyData} monthlyTrend={monthlyTrend} alerts={alerts} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} loadingNeighborhoods={loadingNeighborhoods} loadingBins={loadingBins} onViewBins={goToBins} onViewRoutes={() => setPage("control")} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
+          {page === "map"         && <MapPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods || loadingBins} onViewBins={goToBins} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} initialSelectedKey={mapInitialKey} />}
+          {page === "neighborhoods" && <NeighborhoodsPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods} onViewBins={goToBins} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
+          {page === "bins"        && <BinsPage neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} loading={loadingBins} initialNeighborhoodId={binsNeighborhoodFilter} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} />}
+          {page === "control"    && <RouteManagementPage neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} vehicles={vehicles} routes={routes} loadingVehicles={loadingVehicles} loadingRoutes={loadingRoutes} loggedInUser={loggedInUser} draftBinId={routeDraftBinId} onConsumeDraftBin={() => setRouteDraftBinId(null)} initialRouteId={routeInitialId} onConsumeInitialRoute={() => setRouteInitialId(null)} onShowOnMap={goToMapNeighborhood} />}
           {page === "requests"   && <RequestsManagementPage />}
           {page === "fire"       && <FireAlertPage stations={stations} fireSensors={fireSensors} fireTempHistory={fireTempHistory} fireWeekly={fireWeeklyData} />}
-          {page === "predictions" && <PredictionsPage stations={stations} />}
-          {page === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} />}
-          {page === "settings"   && <SettingsPage />}
+          {page === "predictions" && <PredictionsPage stations={stations} neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} />}
+          {page === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} bins={bins} neighborhoods={neighborhoods} routes={routes} collectionEvents={collectionEvents} vehicles={vehicles} auditLog={auditLog} fireSensors={fireSensors} citizenReports={citizenReports} />}
+          {page === "settings"   && <SettingsPage bins={bins} loggedInUser={loggedInUser} autoSyncRoutes={autoSyncRoutes} onToggleAutoSync={toggleAutoSync} />}
+          {page === "audit"      && <AuditLogPage auditLog={auditLog} />}
         </div>
       </main>
 
@@ -5774,7 +7618,8 @@ const AdminPanel = ({ onBack }) => {
   useEffect(() => { fetchUsers(); }, []);
 
   const updateUserRole = async (uid, newRole) => {
-    const roleAr = newRole === "executive" ? "إدارة عليا" : newRole === "employee" ? "موظف" : "مواطن";
+    const roleArMap = { executive: "إدارة عليا", employee: "موظف", driver: "سائق ميداني", citizen: "مواطن" };
+    const roleAr = roleArMap[newRole] || "مواطن";
     await updateDoc(doc(db, "users", uid), { role: newRole, roleAr, updatedAt: new Date().toISOString() });
     setActionMsg("✅ تم تغيير الدور بنجاح");
     setTimeout(() => setActionMsg(""), 3000);
@@ -5942,6 +7787,7 @@ const AdminPanel = ({ onBack }) => {
                           <select value={u.role} onChange={e => updateUserRole(u.id, e.target.value)} style={{ padding:"4px 8px", borderRadius:6, border:"1px solid #1e293b", background:"#0a0e1a", color:"#f1f5f9", fontSize:10, fontFamily:F, cursor:"pointer" }}>
                             <option value="citizen">مواطن</option>
                             <option value="employee">موظف</option>
+                            <option value="driver">سائق ميداني</option>
                             <option value="executive">إدارة عليا</option>
                           </select>
                           {u.status === "active" ? (

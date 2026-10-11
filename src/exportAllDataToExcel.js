@@ -31,6 +31,10 @@ const EXPORT_COLLECTIONS = [
   "bins",
   "iot_devices",
   "sensor_readings",
+  "vehicles",
+  "collection_routes",
+  "collection_events",
+  "audit_log",
 ];
 
 // ── Flatten one Firestore document ────────────────────────────────────

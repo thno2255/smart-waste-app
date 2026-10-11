@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets — server-side env files (see .env.example)
+.env
+.env.*
+!.env.example
