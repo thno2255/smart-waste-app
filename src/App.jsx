@@ -30,7 +30,8 @@ import {
   Layers, Map as MapGlyph,
 } from "lucide-react";
 
-import { MapContainer, TileLayer, GeoJSON, CircleMarker, Polyline, Popup, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, GeoJSON, CircleMarker, Polyline, Popup, Marker, useMap } from "react-leaflet";
+import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import buraidahNeighborhoodsGeo from "./buraidahNeighborhoods.geo.json";
 
@@ -96,7 +97,6 @@ import {
   deferRoute,
   startRoute,
   completeRoute,
-  recordCollectionEvent,
   writeAuditLog,
   syncAlertsFromCandidates,
   demoSetReading,
@@ -106,6 +106,23 @@ import {
   useIotDevices,
   rotateDeviceKey,
   setDeviceDisabled,
+  useDriverProfiles,
+  useDriverVehicleAssignments,
+  useDriverAssignmentHistory,
+  useMyDriverProfile,
+  useMyRoutes,
+  ensureDriverProfile,
+  updateDriverProfile,
+  assignVehicleToDriver,
+  endVehicleAssignment,
+  setDriverShift,
+  approveAndAssignRoute,
+  confirmCollection,
+  reportRouteIncident,
+  reviewRouteIncident,
+  reinstateRouteStop,
+  persistDriverLocation,
+  useRouteIncidents,
   COLLECTIONS,
 } from "./firestoreService";
 import {
@@ -136,7 +153,14 @@ import {
 } from "./decisionEngine";
 import { predictFutureState, computeFillRate } from "./prediction";
 import { generateAlertCandidates, ALERT_TYPE_LABELS, ALERT_TYPE_ICONS } from "./alertsEngine";
-import { useRoadRoute } from "./roadRouting";
+import { useRoadRoute, useRoadLegs, fetchRoadMatrix, fetchRoadRoute } from "./roadRouting";
+import { rankDriverCandidates, driverOrigin } from "./assignmentEngine";
+import { optimizeRoute, evaluateOrder } from "./routeOptimizer";
+import { parseSteps, projectOnRoute, nextManeuver, offRouteDecision, arrivedAtStop, fixQuality, formatDistanceAr, distanceM, shouldPersistLocation } from "./navigation";
+import { INCIDENT_TYPES, canConfirmCollection, routeProgress, nextStopFor, reinstateSkippedStop, buildConfirmation } from "./executionEngine";
+import { createOfflineQueue } from "./offlineQueue";
+import { can, validateDriverProfile, findVehicleAssignmentConflicts, findRouteAssignmentConflicts, activeAssignmentFor, vehicleHolderAt, coverageMatrix, driverCodeFor, locationFreshness, SHIFT_STATUS_LABELS, AVAILABILITY_LABELS } from "./fleetEngine";
+import { getBinMapState, computeNeighborhoodMapStats, binMatchesFilter, neighborhoodMatchesFilter, polygonStyle, markerStyle, MAP_STATE_COLORS, MAP_STATE_LABELS } from "./mapVisual";
 import { computeImpactMetrics, computeFleetPerformance } from "./impact";
 import { seedAllCollections, migrateStationsToBinsAndNeighborhoods, seedCityDemoData } from "./seedFirestore";
 import { exportAllDataToExcel } from "./exportAllDataToExcel";
@@ -1051,9 +1075,17 @@ const MAP_FILTERS = [
 ];
 
 const MAP_LEGEND = [
-  ["طبيعي", "normal"], ["يحتاج متابعة", "warning"], ["أولوية مرتفعة", "high"],
-  ["حرج", "critical"], ["بدون بيانات كافية", "offline"],
+  ["طبيعي (<60%)", "normal"], ["يحتاج متابعة (60–84%)", "warning"], ["حرج (≥85%)", "critical"],
+  ["بلا بيانات كافية", "no_data"], ["غير متصل", "offline"], ["خلل بالمستشعر", "fault"],
 ];
+
+/** GeoJSON feature per normalized neighborhood name — built once, not per render. */
+const FEATURE_BY_KEY = new Map(buraidahNeighborhoodsGeo.features.map((f) => [f.properties.baseName, f]));
+
+/** Small colored dot used in legends/panels. */
+const Dot = ({ color, hollow = false, dashed = false }) => (
+  <span style={{ width: 10, height: 10, borderRadius: "50%", display: "inline-block", background: hollow ? "transparent" : color, border: `2px ${dashed ? "dashed" : "solid"} ${color}`, boxSizing: "border-box" }} />
+);
 
 function FlyTo({ target }) {
   const map = useMap();
@@ -1092,6 +1124,18 @@ function routeStopPositions(route, bins, neighborhoods) {
 
 const OPEN_ROUTE_STATUSES_UI = ["suggested", "approved", "in_progress"];
 
+/**
+ * Reusable operational map — embedded (compact) in the Dashboard and shown
+ * full-size on its own "الخريطة التشغيلية" page.
+ *
+ * Visual rules live in src/mapVisual.js (pure, unit-tested):
+ *   bins     → green/yellow/red by actual fill; grey = no data; hollow ring = offline/fault
+ *   polygons → computeNeighborhoodMapStats() over the neighborhood's bins (invalid readings excluded)
+ *   horizons → predictFutureState(); predicted values drawn with a dashed ring and labelled
+ *   filters  → the same predicate on markers AND polygons (non-matching polygons are dimmed)
+ * Everything per-bin is computed in ONE pass per (bins, horizon, readings) — no nested lookups
+ * — so thousands of markers stay cheap; Leaflet renders them on a canvas (preferCanvas).
+ */
 const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], height = 440, onViewBins, onAddToRoute, onOpenRoute, compact = false, initialSelectedKey = null }) => {
   const [filter, setFilter] = useState("all");
   const [horizon, setHorizon] = useState(0);
@@ -1100,91 +1144,62 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
 
   const readingsByBin = useMemo(() => {
     const map = {};
-    for (const r of recentReadings) {
-      if (!r.bin_id) continue;
-      if (!map[r.bin_id]) map[r.bin_id] = [];
-      map[r.bin_id].push(r);
-    }
+    for (const r of recentReadings) { if (r.bin_id) (map[r.bin_id] ||= []).push(r); }
     return map;
   }, [recentReadings]);
 
-  // At horizon=0, bins render as-is. At horizon>0, each bin becomes its
-  // PROJECTED state (§7/§8) — if no reliable prediction exists for that bin,
-  // it's flagged _noForecast so it renders grey rather than a fabricated color.
-  const projectedBins = useMemo(() => {
-    if (horizon === 0) return bins.map((b) => ({ ...b, _noForecast: false }));
-    return bins.map((b) => {
-      const readings = readingsByBin[b.id] || [];
-      const future = predictFutureState(b, readings, horizon);
-      if (!future.predictionAvailable) return { ...b, _noForecast: true };
-      return { ...b, lastFillLevelPercent: future.predictedFillLevel, _noForecast: false };
-    });
-  }, [bins, horizon, readingsByBin]);
-
-  const binsByNeighborhood = useMemo(() => {
-    const map = {};
-    for (const b of projectedBins) {
-      const key = b.neighborhoodId || "__none";
-      if (!map[key]) map[key] = [];
-      map[key].push(b);
-    }
-    return map;
-  }, [projectedBins]);
-
-  const isThermalAlert = (neighborhoodName) =>
-    fireSensors.some((s) =>
-      normalizeNeighborhoodName(s.district) === normalizeNeighborhoodName(neighborhoodName) &&
-      (s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط")
-    );
-
+  const neighborhoodById = useMemo(() => new Map(neighborhoods.map((n) => [n.id, n])), [neighborhoods]);
+  const thermalFor = useMemo(() => makeThermalAlertFor(fireSensors), [fireSensors]);
   const openRoutes = useMemo(() => routes.filter((r) => OPEN_ROUTE_STATUSES_UI.includes(r.status)), [routes]);
   const binCtx = useMemo(() => makeBinContext(fireSensors, citizenReports, neighborhoods), [fireSensors, citizenReports, neighborhoods]);
 
-  // ONE entry per real neighborhood: duplicate Firestore docs with the same
-  // name are merged (their bins summed), so the same polygon is never drawn
-  // twice with an empty duplicate's grey covering the real color.
+  // ONE pass over all bins: position + visual state (actual or predicted) + neighborhood key.
+  const binViews = useMemo(() => {
+    const now = Date.now();
+    const byNeighborhoodId = {};
+    const views = bins.map((b) => {
+      const n = neighborhoodById.get(b.neighborhoodId) || null;
+      const nKey = n ? normalizeNeighborhoodName(n.name) : null;
+      const posInfo = demoPositionForBin(b, nKey ? FEATURE_BY_KEY.get(nKey) || null : null);
+      const vs = getBinMapState(b, { horizon, readings: horizon > 0 ? readingsByBin[b.id] || [] : [], now });
+      const view = { bin: b, n, nKey, pos: posInfo?.pos || null, approx: !!posInfo?.demo, vs };
+      (byNeighborhoodId[b.neighborhoodId || "__none"] ||= []).push(view);
+      return view;
+    });
+    return { views, byNeighborhoodId };
+  }, [bins, horizon, readingsByBin, neighborhoodById]);
+
+  // ONE entry per real neighborhood (duplicate Firestore docs with the same name are merged).
   const neighborhoodStats = useMemo(() => {
-    const groups = groupNeighborhoodsByName(neighborhoods, projectedBins);
+    const groups = groupNeighborhoodsByName(neighborhoods, bins);
     return groups.map((g) => {
-      const nBins = g.ids.flatMap((id) => binsByNeighborhood[id] || []);
-      const thermalAlert = isThermalAlert(g.name);
-      const scoredBins = nBins.map((bin) => ({
-        bin,
-        priority: bin._noForecast ? { score: 0, tier: "low", reasons: [], sensorHealth: { connectivity: "offline" }, prediction: { predictionAvailable: false } } : getBinPriority(bin, null, [], binCtx.forBin(bin)),
-      }));
-      const nhCtx = binCtx.forNeighborhoodName(g.name);
-      const citizenReportCount = nhCtx.citizenReportCount + nBins.reduce((a, b) => a + binCtx.reportCountForBin(b.id), 0);
-      const result = getNeighborhoodPriority(scoredBins, { thermalAlert, citizenReportCount });
-      const status = horizon > 0 && nBins.length > 0 && nBins.every((b) => b._noForecast) ? "offline" : neighborhoodDisplayTier(result);
-      const feature = buraidahNeighborhoodsGeo.features.find((f) => f.properties.baseName === g.key) || null;
+      const views = g.ids.flatMap((id) => binViews.byNeighborhoodId[id] || []);
+      const thermalAlert = thermalFor(g.name);
+      const stats = computeNeighborhoodMapStats(views.map((v) => v.vs), { thermalAlert });
+      const citizenReportCount = binCtx.forNeighborhoodName(g.name).citizenReportCount + views.reduce((a, v) => a + binCtx.reportCountForBin(v.bin.id), 0);
       const route = openRoutes.find((r) => (r.neighborhoodIds || []).some((id) => g.ids.includes(id))) || null;
-      return { key: g.key, id: g.primary.id, ids: g.ids, name: g.name, ...result, status, bins: nBins, feature, thermalAlert, route };
+      return { key: g.key, id: g.primary.id, ids: g.ids, name: g.name, ...stats, feature: FEATURE_BY_KEY.get(g.key) || null, citizenReportCount, route, views };
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [neighborhoods, projectedBins, binsByNeighborhood, fireSensors, horizon, openRoutes, binCtx]);
+  }, [neighborhoods, bins, binViews, thermalFor, binCtx, openRoutes]);
 
-  const filteredBins = useMemo(() => {
-    return projectedBins.filter((b) => {
-      if (filter === "all") return true;
-      const priority = b._noForecast ? null : getBinPriority(b, null, []);
-      if (filter === "critical") return priority?.tier === "critical";
-      if (filter === "offline") { const c = getSensorConnectivity(b); return c === "offline" || c === "fault" || b._noForecast; }
-      if (filter === "needsCollection") return priority && (priority.tier === "high" || priority.tier === "critical");
-      if (filter === "thermal") {
-        const n = neighborhoods.find((n2) => n2.id === b.neighborhoodId);
-        return n ? isThermalAlert(n.name) : false;
-      }
-      return true;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectedBins, filter, neighborhoods, fireSensors]);
+  const statsByKey = useMemo(() => new Map(neighborhoodStats.map((n) => [n.key, n])), [neighborhoodStats]);
 
-  const selectedStats = neighborhoodStats.find((n) => n.key === selectedKey);
+  const visibleBins = useMemo(
+    () => binViews.views.filter((v) => v.pos && binMatchesFilter(filter, v.vs, { thermalAlert: v.nKey ? !!statsByKey.get(v.nKey)?.thermalAlert : false })),
+    [binViews, filter, statsByKey]
+  );
+
+  const selectedStats = statsByKey.get(selectedKey);
   const hasAnyGeo = neighborhoodStats.some((n) => n.feature);
+  const horizonLabel = HORIZONS.find((h) => h.key === horizon)?.label;
+  const forecastSummary = useMemo(() => {
+    if (horizon === 0) return null;
+    let predicted = 0, missing = 0;
+    for (const v of binViews.views) { if (v.vs.predicted) predicted += 1; else if (v.vs.state === "no_data") missing += 1; }
+    return { predicted, missing };
+  }, [binViews, horizon]);
 
-  // Route overlay: the selected neighborhood's open route drawn as a dashed
-  // line through its ordered stops — the visible link between full bins and
-  // the route that will collect them.
+  // Route overlay for the selected neighborhood (real roads via OSRM when available).
   const selectedRoutePoints = useMemo(
     () => (selectedStats?.route ? routeStopPositions(selectedStats.route, bins, neighborhoods) : []),
     [selectedStats, bins, neighborhoods]
@@ -1207,39 +1222,40 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
   const [consumedInitialKey, setConsumedInitialKey] = useState(null);
   if (initialSelectedKey && initialSelectedKey !== consumedInitialKey && neighborhoodStats.length > 0) {
     setConsumedInitialKey(initialSelectedKey);
-    const n = neighborhoodStats.find((x) => x.key === initialSelectedKey);
+    const n = statsByKey.get(initialSelectedKey);
     if (n) focusNeighborhood(n);
   }
 
   const routeStatusNote = (route) => route ? `${ROUTE_STATUS_LABELS[route.status] || route.status}` : null;
+  const pill = (active, color) => ({
+    padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+    border: `1px solid ${active ? color : C.border}`, background: active ? color + "20" : "transparent",
+    color: active ? color : C.muted, fontFamily: ARABIC_FONT,
+  });
 
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center" }}>
         {HORIZONS.map((h) => (
-          <button key={h.key} onClick={() => setHorizon(h.key)} style={{
-            padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
-            border: `1px solid ${horizon === h.key ? C.info : C.border}`,
-            background: horizon === h.key ? C.info + "20" : "transparent",
-            color: horizon === h.key ? C.info : C.muted, fontFamily: ARABIC_FONT,
-          }}>{h.label}</button>
+          <button key={h.key} onClick={() => setHorizon(h.key)} style={pill(horizon === h.key, C.info)}>{h.key === 0 ? "📡 " : "🔮 "}{h.label}</button>
         ))}
+        {forecastSummary && (
+          <span style={{ fontSize: 11, color: C.info }}>
+            قيم متوقعة لـ {forecastSummary.predicted} حاوية · {forecastSummary.missing} بلا بيانات كافية للتنبؤ (تظهر رمادية)
+          </span>
+        )}
       </div>
       {horizon > 0 && (
         <div style={{ marginBottom: 8, fontSize: 11, color: C.dim }}>
-          ⏱️ الألوان المعروضة تمثل حالة متوقعة {HORIZONS.find((h) => h.key === horizon)?.label} — الحاويات الرمادية بلا بيانات كافية للتنبؤ حاليًا.
+          🔮 الألوان الآن تمثل الامتلاء <b style={{ color: C.info }}>المتوقع {horizonLabel}</b> من محرك التنبؤ (معدل الامتلاء الفعلي لكل حاوية). الحاويات المتوقعة تُرسم بحلقة متقطعة، ولا تُختلق توقعات عند نقص البيانات.
         </div>
       )}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         {MAP_FILTERS.map((f) => (
-          <button key={f.key} onClick={() => setFilter(f.key)} style={{
-            padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
-            border: `1px solid ${filter === f.key ? C.accent : C.border}`,
-            background: filter === f.key ? C.accent + "20" : "transparent",
-            color: filter === f.key ? C.accent : C.muted, fontFamily: ARABIC_FONT,
-          }}>{f.label}</button>
+          <button key={f.key} onClick={() => setFilter(f.key)} style={pill(filter === f.key, C.accent)}>{f.label}</button>
         ))}
+        {filter !== "all" && <span style={{ fontSize: 11, color: C.dim, alignSelf: "center" }}>{visibleBins.length} حاوية · {neighborhoodStats.filter((n) => neighborhoodMatchesFilter(filter, n)).length} حي مطابق</span>}
       </div>
 
       {!hasAnyGeo && neighborhoods.length > 0 && (
@@ -1250,40 +1266,40 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
 
       <div style={{ display: "flex", gap: 14, flexWrap: compact ? "nowrap" : "wrap-reverse" }}>
         <div style={{ flex: "1 1 320px", minWidth: 260, height, borderRadius: 14, overflow: "hidden", border: `1px solid ${C.border}` }}>
-          <MapContainer center={BURAIDAH_CENTER} zoom={12} style={{ width: "100%", height: "100%", background: C.bg }} scrollWheelZoom>
+          <MapContainer center={BURAIDAH_CENTER} zoom={12} style={{ width: "100%", height: "100%", background: C.bg }} scrollWheelZoom preferCanvas>
             <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
             <FlyTo target={flyTarget} />
-            {neighborhoodStats.filter((n) => n.feature).map((n) => (
-              <GeoJSON
-                key={n.key}
-                data={n.feature}
-                style={() => ({
-                  color: STATUS_COLORS[n.status] || STATUS_COLORS.offline,
-                  weight: selectedKey === n.key ? 3.5 : 2,
-                  fillColor: STATUS_COLORS[n.status] || STATUS_COLORS.offline,
-                  fillOpacity: selectedKey === n.key ? 0.6 : 0.4,
-                })}
-                eventHandlers={{ click: () => focusNeighborhood(n) }}
-              >
-                <Popup>
-                  <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 190 }}>
-                    <b>{n.name}</b> — {STATE_LABELS[n.status] || n.status}<br />
-                    عدد الحاويات: {n.total}<br />
-                    متوسط الامتلاء: {n.avgFill != null ? `${n.avgFill}%` : "—"}<br />
-                    حرجة: {n.criticalCount} · مرتفعة: {n.highCount || 0} · غير متصلة: {n.offlineCount}<br />
-                    {n.citizenReportCount > 0 && <span style={{ color: "#b45309" }}>📣 {n.citizenReportCount} بلاغ مواطن مفتوح<br /></span>}
-                    {n.route ? (
-                      <span>🧭 {n.route.routeName} ({routeStatusNote(n.route)}) — {n.route.binIds?.length || 0} حاوية<br /></span>
-                    ) : (n.criticalCount > 0 || n.highCount > 0) ? (
-                      <span style={{ color: "#b45309" }}>لا توجد جولة مقترحة بعد لهذا الحي<br /></span>
-                    ) : null}
-                    {n.route && onOpenRoute && (
-                      <button onClick={() => onOpenRoute(n.route.id)} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 8, border: "1px solid #3b82f6", background: "#3b82f620", color: "#3b82f6", fontSize: 11, cursor: "pointer" }}>فتح الجولة</button>
-                    )}
-                  </div>
-                </Popup>
-              </GeoJSON>
-            ))}
+            {neighborhoodStats.filter((n) => n.feature).map((n) => {
+              const dimmed = !neighborhoodMatchesFilter(filter, n);
+              return (
+                <GeoJSON
+                  key={`${n.key}-${n.state}-${dimmed}-${selectedKey === n.key}`}
+                  data={n.feature}
+                  style={() => polygonStyle(n, { selected: selectedKey === n.key, dimmed })}
+                  eventHandlers={{ click: () => focusNeighborhood(n) }}
+                >
+                  <Popup>
+                    <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 200 }}>
+                      <b>{n.name}</b> — <span style={{ color: n.color, fontWeight: 700 }}>{MAP_STATE_LABELS[n.state]}</span>{horizon > 0 && n.predictedCount > 0 && <span style={{ color: "#3b82f6", fontSize: 11 }}> (متوقع {horizonLabel})</span>}<br />
+                      عدد الحاويات: {n.total}<br />
+                      متوسط الامتلاء: {n.avgFill != null ? `${n.avgFill}%` : "—"}{n.invalidCount > 0 && <span style={{ color: "#999", fontSize: 11 }}> (مستبعد {n.invalidCount})</span>}<br />
+                      حرجة: <b style={{ color: MAP_STATE_COLORS.critical }}>{n.criticalCount}</b> · تحتاج تفريغًا: <b>{n.needsEmptyingCount}</b> · متابعة: {n.warningCount}<br />
+                      غير متصلة/خلل: {n.offlineCount + n.faultCount} · بلا بيانات: {n.noDataCount}<br />
+                      {n.thermalAlert && <span style={{ color: "#ef4444" }}>🔥 تنبيه حراري نشط<br /></span>}
+                      {n.citizenReportCount > 0 && <span style={{ color: "#b45309" }}>📣 {n.citizenReportCount} بلاغ مواطن مفتوح<br /></span>}
+                      {n.route ? (
+                        <span>🧭 {n.route.routeName} ({routeStatusNote(n.route)}) — {n.route.binIds?.length || 0} حاوية<br /></span>
+                      ) : n.needsEmptyingCount > 0 ? (
+                        <span style={{ color: "#b45309" }}>لا توجد جولة مقترحة بعد لهذا الحي<br /></span>
+                      ) : null}
+                      {n.route && onOpenRoute && (
+                        <button onClick={() => onOpenRoute(n.route.id)} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 8, border: "1px solid #3b82f6", background: "#3b82f620", color: "#3b82f6", fontSize: 11, cursor: "pointer" }}>فتح الجولة</button>
+                      )}
+                    </div>
+                  </Popup>
+                </GeoJSON>
+              );
+            })}
 
             {selectedRoutePoints.length > 1 && (
               selectedRoad
@@ -1291,28 +1307,26 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
                 : <Polyline positions={selectedRoutePoints.map((p) => p.pos)} pathOptions={{ color: C.info, weight: 4, dashArray: "8 8", opacity: 0.9 }} />
             )}
 
-            {filteredBins.map((b) => {
-              const n = neighborhoods.find((n2) => n2.id === b.neighborhoodId);
-              const posInfo = demoPositionForBin(b, neighborhoodFeatureFor(n));
-              if (!posInfo) return null;
-              const priority = b._noForecast ? null : getBinPriority(b, null, [], binCtx.forBin(b));
-              const markerState = b._noForecast ? "offline" : (priority.sensorHealth.status !== "healthy" ? priority.sensorHealth.connectivity : priority.tier);
-              const markerColor = STATUS_COLORS[markerState] || STATUS_COLORS.no_sensor;
+            {visibleBins.map(({ bin: b, n, pos, approx, vs }) => {
               const inRoute = routeOrderByBinId[b.id];
-              const highlighted = inRoute && selectedStats?.route?.id === inRoute.route.id;
+              const highlighted = !!(inRoute && selectedStats?.route?.id === inRoute.route.id);
+              const reports = binCtx.reportCountForBin(b.id);
               return (
-                <CircleMarker key={b.id} center={posInfo.pos} radius={highlighted ? 10 : 7}
-                  pathOptions={{ color: highlighted ? C.info : "#fff", weight: highlighted ? 3 : 1, fillColor: markerColor, fillOpacity: b._noForecast ? 0.5 : 0.95 }}>
+                <CircleMarker key={b.id} center={pos} radius={highlighted ? 10 : vs.state === "critical" ? 8 : 7} pathOptions={markerStyle(vs, { highlighted })}>
                   <Popup>
-                    <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 180 }}>
-                      <b>{b.name}</b>{posInfo.demo && <span style={{ color: "#999", fontSize: 11 }}> (موقع تقريبي)</span>}<br />
+                    <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 190 }}>
+                      <b>{b.name}</b>{approx && <span style={{ color: "#999", fontSize: 11 }}> (موقع تقريبي)</span>}<br />
                       الحي: {n?.name || "—"}<br />
-                      الامتلاء: {b.lastFillLevelPercent != null ? `${b.lastFillLevelPercent}%` : "—"}{horizon > 0 && !b._noForecast && <span style={{ color: "#999" }}> (متوقع)</span>}<br />
+                      الحالة: <span style={{ color: vs.color, fontWeight: 700 }}>{MAP_STATE_LABELS[vs.state]}</span>{vs.hot && <span style={{ color: "#ef4444" }}> · 🔥 حرارة مرتفعة</span>}<br />
+                      {vs.predicted ? (
+                        <span>الامتلاء الآن: {vs.actualFill != null ? `${vs.actualFill}%` : "—"} ← <b style={{ color: "#3b82f6" }}>متوقع {horizonLabel}: {vs.fill}%</b><br /></span>
+                      ) : (
+                        <span>الامتلاء: {vs.actualFill != null ? `${vs.actualFill}%` : "—"}{horizon > 0 && vs.state === "no_data" && <span style={{ color: "#999", fontSize: 11 }}> — {vs.forecastReason}</span>}<br /></span>
+                      )}
                       الحرارة: {b.lastTemperatureCelsius != null ? `${b.lastTemperatureCelsius}°` : "—"}<br />
-                      حالة المستشعر: {STATE_LABELS[getSensorConnectivity(b)]}<br />
+                      حالة المستشعر: {STATE_LABELS[vs.connectivity === "online" ? "normal" : vs.connectivity] || vs.connectivity}{vs.connectivity === "online" ? " (متصل)" : ""}<br />
                       آخر قراءة: {getReadingAgeLabel(b.lastReadingAt)}<br />
-                      الأولوية: {b._noForecast ? "لا توجد بيانات كافية للتنبؤ" : (STATE_LABELS[priority.tier] || priority.tier)}<br />
-                      {binCtx.reportCountForBin(b.id) > 0 && <span style={{ color: "#b45309" }}>📣 {binCtx.reportCountForBin(b.id)} بلاغ مواطن على هذه الحاوية<br /></span>}
+                      {reports > 0 && <span style={{ color: "#b45309" }}>📣 {reports} بلاغ مواطن على هذه الحاوية<br /></span>}
                       الجولة: {inRoute ? `${inRoute.route.routeName} — التوقف #${inRoute.order} (${routeStatusNote(inRoute.route)})` : "خارج أي جولة حاليًا"}<br />
                       <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
                         {inRoute && onOpenRoute && (
@@ -1334,9 +1348,10 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
           <div style={{ fontSize: 11, color: C.dim, marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 10 }}>
             {MAP_LEGEND.map(([label, key]) => (
               <span key={key} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <span style={{ width: 10, height: 10, borderRadius: 3, background: STATUS_COLORS[key], display: "inline-block" }} />{label}
+                <Dot color={MAP_STATE_COLORS[key]} hollow={key === "offline" || key === "fault"} />{label}
               </span>
             ))}
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}><Dot color={C.info} hollow dashed />قيمة متوقعة</span>
             <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
               <span style={{ width: 16, height: 0, borderTop: `3px dashed ${C.info}`, display: "inline-block" }} />مسار جولة
             </span>
@@ -1346,16 +1361,28 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
             <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{selectedStats.name}</div>
-                <StateBadge state={selectedStats.status} />
+                <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: selectedStats.color + "20", color: selectedStats.color, border: `1px solid ${selectedStats.color}40`, whiteSpace: "nowrap" }}>
+                  {MAP_STATE_LABELS[selectedStats.state]}
+                </span>
               </div>
-              <div style={{ fontSize: 12, color: C.muted, lineHeight: 2 }}>
-                عدد الحاويات: <b style={{ color: C.text }}>{selectedStats.total}</b><br />
-                متوسط الامتلاء: <b style={{ color: C.text }}>{selectedStats.avgFill != null ? `${selectedStats.avgFill}%` : "—"}</b><br />
-                حاويات حرجة: <b style={{ color: C.danger }}>{selectedStats.criticalCount}</b> · مرتفعة: <b style={{ color: STATUS_COLORS.high }}>{selectedStats.highCount || 0}</b><br />
-                غير متصلة: <b style={{ color: C.dim }}>{selectedStats.offlineCount}</b><br />
-                تنبيه حراري: <b style={{ color: selectedStats.thermalAlert ? C.danger : C.accent }}>{selectedStats.thermalAlert ? "نعم" : "لا"}</b><br />
-                بلاغات مواطنين مفتوحة: <b style={{ color: selectedStats.citizenReportCount > 0 ? C.warning : C.text }}>{selectedStats.citizenReportCount || 0}</b>
+              {horizon > 0 && (
+                <div style={{ fontSize: 11, color: C.info, marginBottom: 6 }}>🔮 حالة متوقعة {horizonLabel} — {selectedStats.predictedCount} من {selectedStats.total} حاوية لها توقع موثوق</div>
+              )}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 10px", fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
+                <div>عدد الحاويات: <b style={{ color: C.text }}>{selectedStats.total}</b></div>
+                <div>متوسط الامتلاء: <b style={{ color: C.text }}>{selectedStats.avgFill != null ? `${selectedStats.avgFill}%` : "—"}</b></div>
+                <div>حرجة: <b style={{ color: MAP_STATE_COLORS.critical }}>{selectedStats.criticalCount}</b></div>
+                <div>تحتاج تفريغًا: <b style={{ color: C.warning }}>{selectedStats.needsEmptyingCount}</b></div>
+                <div>تحتاج متابعة: <b style={{ color: MAP_STATE_COLORS.warning }}>{selectedStats.warningCount}</b></div>
+                <div>طبيعية: <b style={{ color: MAP_STATE_COLORS.normal }}>{selectedStats.normalCount}</b></div>
+                <div>غير متصلة/خلل: <b style={{ color: C.dim }}>{selectedStats.offlineCount + selectedStats.faultCount}</b></div>
+                <div>بلا بيانات: <b style={{ color: C.dim }}>{selectedStats.noDataCount}</b></div>
+                <div>تنبيه حراري: <b style={{ color: selectedStats.thermalAlert ? C.danger : C.accent }}>{selectedStats.thermalAlert ? "نعم" : "لا"}</b></div>
+                <div>بلاغات مفتوحة: <b style={{ color: selectedStats.citizenReportCount > 0 ? C.warning : C.text }}>{selectedStats.citizenReportCount || 0}</b></div>
               </div>
+              {selectedStats.invalidCount > 0 && (
+                <div style={{ fontSize: 10.5, color: C.dim, marginTop: 4 }}>المتوسط محسوب من {selectedStats.validCount} قراءة صالحة؛ استُبعدت {selectedStats.invalidCount}.</div>
+              )}
               {selectedStats.reasons?.length > 0 && (
                 <ul style={{ margin: "10px 0 0", paddingInlineStart: 18, fontSize: 12, color: C.muted }}>
                   {selectedStats.reasons.map((r, i) => (<li key={i}>{r}</li>))}
@@ -1381,9 +1408,9 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
                     )}
                   </>
                 ) : (
-                  <div style={{ fontSize: 11.5, color: (selectedStats.criticalCount > 0 || selectedStats.highCount > 0) ? C.warning : C.dim }}>
-                    {(selectedStats.criticalCount > 0 || selectedStats.highCount > 0)
-                      ? "⚠️ حاويات مؤهلة للجمع بلا جولة مقترحة بعد — ولّد الجولات من صفحة إدارة الجولات."
+                  <div style={{ fontSize: 11.5, color: selectedStats.needsEmptyingCount > 0 ? C.warning : C.dim }}>
+                    {selectedStats.needsEmptyingCount > 0
+                      ? "⚠️ حاويات تحتاج تفريغًا بلا جولة مقترحة بعد — ولّد الجولات من صفحة إدارة الجولات."
                       : "لا توجد جولة مفتوحة لهذا الحي — الوضع ضمن المعدل الطبيعي."}
                   </div>
                 )}
@@ -1402,7 +1429,7 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
           )}
 
           <div style={{ marginTop: 10, fontSize: 10.5, color: C.dim, lineHeight: 1.8 }}>
-            حدود الأحياء من بيانات OpenStreetMap الفعلية (حي السلامة موضع تقريبي). المواقع المعلَّمة بـ"(موقع تقريبي)" لحاويات لم تُسجَّل لها إحداثيات حقيقية بعد. خط الجولة يُرسم على الطرق الفعلية عبر OSRM عند توفره، وإلا يُعرض خطًا مستقيمًا مع تنبيه.
+            لون الحي يُحسب من حاوياته: نسبة وعدد الحاويات الحرجة ومتوسط الامتلاء (القراءات غير المتصلة/الخاطئة مستبعدة من المتوسط ومعدودة). حدود الأحياء من OpenStreetMap (حي السلامة موضع تقريبي)، والمواقع المعلَّمة "(موقع تقريبي)" لحاويات بلا إحداثيات مسجلة. خط الجولة على الطرق الفعلية عبر OSRM عند توفره.
           </div>
         </div>
       </div>
@@ -1469,7 +1496,7 @@ const NotificationPermissionButton = ({ compact = false }) => {
  * the same list. Each row links straight to its neighborhood on the map and
  * to the open route that covers it — or says plainly that none exists yet.
  */
-const NeedsCollectionBanner = ({ ranked = [], onShowOnMap, onOpenRoute, onGoToRoutes, onSelect, compact = false }) => {
+const NeedsCollectionBanner = ({ ranked = [], onShowOnMap, onOpenRoute, onGoToRoutes, onSelect, compact = false, noRouteLabel = "لا توجد جولة مقترحة بعد" }) => {
   if (ranked.length === 0) {
     return (
       <div style={{ background: C.accent + "12", border: `1px solid ${C.accent}40`, borderRadius: 14, padding: "12px 16px", fontSize: 13, color: C.accent, fontWeight: 600 }}>
@@ -1507,7 +1534,7 @@ const NeedsCollectionBanner = ({ ranked = [], onShowOnMap, onOpenRoute, onGoToRo
               <div style={{ fontSize: 11, color: C.info, marginTop: 2 }}>📍 يبعد {r.distanceKm} كم · ~{r.etaMinutes} دقيقة</div>
             )}
             <div style={{ fontSize: 11, color: r.openRoute ? C.info : C.warning, marginTop: 4 }}>
-              {r.openRoute ? `🧭 ${r.openRoute.routeName} — ${ROUTE_STATUS_LABELS[r.openRoute.status] || r.openRoute.status}` : "لا توجد جولة مقترحة بعد"}
+              {r.openRoute ? `🧭 ${r.openRoute.routeName} — ${ROUTE_STATUS_LABELS[r.openRoute.status] || r.openRoute.status}` : noRouteLabel}
             </div>
             {(onShowOnMap || (r.openRoute && onOpenRoute)) && (
               <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
@@ -4746,10 +4773,70 @@ const RoadRouteNote = ({ road, status }) => (
   </div>
 );
 
-const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, loggedInUser, onClose, onChanged, onShowOnMap }) => {
+const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], driverProfiles = [], loggedInUser, onClose, onChanged, onShowOnMap }) => {
   const [vehicleId, setVehicleId] = useState(route.vehicleId || "");
+  const [driverId, setDriverId] = useState(route.driverId || "");
+  const [exceptionReason, setExceptionReason] = useState("");
+  const routeNeighborhoodName = neighborhoods.find((n) => (route.neighborhoodIds || []).includes(n.id))?.name || "";
+  // ── Phase 2: ranked recommendation. Real road legs (OSRM) from every eligible
+  // driver's origin (live location if fresh, else vehicle depot — labelled) to the
+  // first stop, plus the route's own road figures; Haversine fallback is labelled.
+  const stopPositions = useMemo(() => routeStopPositions(route, bins, neighborhoods), [route, bins, neighborhoods]);
+  const routeForEngine = useMemo(() => ({ ...route, orderedStops: stopPositions.map((p) => ({ ...p, lat: p.pos[0], lng: p.pos[1] })) }), [route, stopPositions]);
+  const { route: routeRoad } = useRoadRoute(stopPositions.map((p) => ({ lat: p.pos[0], lng: p.pos[1] })));
+  const legPairs = useMemo(() => {
+    const firstStop = stopPositions[0] ? { lat: stopPositions[0].pos[0], lng: stopPositions[0].pos[1] } : null;
+    return driverProfiles.map((p) => ({ key: p.uid, from: driverOrigin(p, vehicles.find((v) => v.id === p.vehicleId), { fallback: DEFAULT_DEPOT }), to: firstStop }));
+  }, [driverProfiles, vehicles, stopPositions]);
+  const { byKey: travelByDriver, status: legsStatus } = useRoadLegs(legPairs);
+  const ranking = useMemo(() => rankDriverCandidates(routeForEngine, { profiles: driverProfiles, vehicles, routes, neighborhoodName: routeNeighborhoodName, travelByDriver, routeRoad: routeRoad ? { distanceKm: routeRoad.distanceKm, durationMin: routeRoad.durationMin } : null, defaultOrigin: DEFAULT_DEPOT }),
+    [routeForEngine, driverProfiles, vehicles, routes, routeNeighborhoodName, travelByDriver, routeRoad]);
+  const driverOptions = ranking.candidates.map((c) => ({ profile: c.profile, vehicle: c.vehicle, eligible: c.verdict.eligible && c.capacityOk !== false, reasons: c.verdict.eligible ? c.flags : c.verdict.reasons, cand: c }));
+  const effectiveDriverId = driverId || ranking.recommended?.driverId || "";
+  const chosen = driverOptions.find((d) => d.profile.uid === effectiveDriverId) || null;
+  const routeConflicts = chosen ? findRouteAssignmentConflicts({ routeId: route.id, driverId: effectiveDriverId, vehicleId: chosen.profile.vehicleId }, routes) : [];
+  useEffect(() => { if (chosen?.profile.vehicleId) setVehicleId(chosen.profile.vehicleId); }, [chosen]);
   const [busy, setBusy] = useState(false);
   const [addBinId, setAddBinId] = useState("");
+
+  // ── Phase 3: route optimization (capacity + priority-aware local search over an OSRM time matrix).
+  const [opt, setOpt] = useState(null);           // { result, before, origin, dumpSite }
+  const [optBusy, setOptBusy] = useState(false);
+  const runOptimizer = async () => {
+    setOptBusy(true);
+    try {
+      // Vehicle for capacity: the chosen driver's, else the route's, else the best candidate's (so the real shortfall is shown, not "unknown").
+      const vehicleForOpt = chosen?.vehicle || vehicles.find((v) => v.id === (route.vehicleId || vehicleId)) || driverOptions[0]?.vehicle || null;
+      const origin = chosen?.cand?.origin || (vehicleForOpt?.depotLat != null ? { lat: vehicleForOpt.depotLat, lng: vehicleForOpt.depotLng, label: vehicleForOpt.depotLabel || "مستودع المركبة", source: "depot" } : { ...DEFAULT_DEPOT, source: "default" });
+      const dumpSite = vehicleForOpt?.dumpLat != null ? { lat: vehicleForOpt.dumpLat, lng: vehicleForOpt.dumpLng, label: vehicleForOpt.dumpLabel || "نقطة التفريغ" } : null;
+      const stops = stopPositions.map((p) => {
+        const fill = Number(p.bin.lastFillLevelPercent) || 0;
+        return { binId: p.binId, binName: p.binName, lat: p.pos[0], lng: p.pos[1], approximate: !!p.approximate, priorityTier: p.priorityTier, priorityScore: p.priorityScore, fillLevelPercent: p.bin.lastFillLevelPercent ?? null, wasteLiters: Math.round((Number(p.bin.capacityLiters) || 1100) * fill / 100) };
+      });
+      const points = [origin, ...stops, ...(dumpSite ? [dumpSite] : [])];
+      const matrix = await fetchRoadMatrix(points);
+      const shiftEnd = chosen?.profile?.shiftEnd ? (() => { const [h, m] = chosen.profile.shiftEnd.split(":").map(Number); const d = new Date(); d.setHours(h, m, 0, 0); return d.toISOString(); })() : null;
+      const result = optimizeRoute({ start: origin, stops, capacityLiters: Number(vehicleForOpt?.capacityLiters) || null, dumpSite, matrix: matrix || undefined, timeWindow: { startAt: new Date().toISOString(), shiftEnd } });
+      const before = evaluateOrder(origin, stops, matrix || undefined);
+      setOpt({ result, before, origin, dumpSite, matrixOk: !!matrix });
+    } finally { setOptBusy(false); }
+  };
+  const applyOptimization = async () => {
+    const r = opt?.result; if (!r?.ok) return;
+    setBusy(true);
+    try {
+      const served = r.orderedStops.filter((o) => o.type === "stop");
+      const deferred = r.deferredStops.map((d) => ({ ...d, deferred: true }));
+      const orderedStops = [...served, ...deferred].map((o, i) => ({ order: i + 1, binId: o.binId, binName: o.binName, priorityTier: o.priorityTier, priorityScore: o.priorityScore ?? null, hasCoords: o.lat != null, lat: o.lat ?? null, lng: o.lng ?? null, fillLevelPercent: o.fillLevelPercent ?? null, arrivalMin: o.arrivalMin ?? null, deferred: !!o.deferred }));
+      const dumpStops = r.orderedStops.filter((o) => o.type === "dump").map((o) => ({ afterOrder: o.order - 1, lat: o.lat, lng: o.lng, label: o.label, arrivalMin: o.arrivalMin }));
+      await updateRoute(route.id, {
+        orderedStops, binIds: orderedStops.map((o) => o.binId), estimatedDistanceKm: r.totalDistanceKm, estimatedWasteLiters: r.estimatedWasteLiters,
+        optimization: { at: new Date().toISOString(), by: loggedInUser?.uid || "", matrixSource: r.matrixSource, confidence: r.confidence, improvementPct: r.objective.improvementPct, totalDurationMin: r.totalDurationMin, trips: r.trips, constraints: r.constraints, dumpStops, startLabel: opt.origin?.label || "", deferredBinIds: deferred.map((d) => d.binId) },
+      });
+      await writeAuditLog("route_optimized", loggedInUser?.uid, actorName, { routeId: route.id, routeName: route.routeName, beforeKm: opt.before.km, afterKm: r.totalDistanceKm, beforeMin: opt.before.totalMin, afterMin: r.totalDurationMin, matrixSource: r.matrixSource, confidence: r.confidence, constraints: r.constraints });
+      setOpt(null); onChanged();
+    } finally { setBusy(false); }
+  };
 
   const routeBins = route.binIds.map((id) => bins.find((b) => b.id === id)).filter(Boolean);
   const vehicle = vehicles.find((v) => v.id === vehicleId);
@@ -4760,6 +4847,21 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, loggedInUser, 
   const actorName = loggedInUser?.name || loggedInUser?.email || "موظف";
 
   const handleApprove = async () => {
+    if (driverProfiles.length > 0) {
+      // Driver-based model: the vehicle comes from the driver's active assignment; the route is scoped to that driver.
+      if (!chosen) { alert("اختر السائق المنفذ أولًا"); return; }
+      if (routeConflicts.length) { alert(routeConflicts.map((c) => c.message).join("\n")); return; }
+      if (!chosen.profile.vehicleId) { alert("السائق بلا مركبة مسندة — أسند له مركبة من صفحة السائقين."); return; }
+      const exceptional = !chosen.eligible;
+      if (exceptional && !exceptionReason.trim()) { alert("هذا إسناد استثنائي (السائق غير مؤهل حاليًا) — اكتب مبررًا."); return; }
+      setBusy(true);
+      try {
+        await approveAndAssignRoute(route.id, loggedInUser?.uid, { driverId: effectiveDriverId, driverName: chosen.profile.fullName, vehicleId: chosen.profile.vehicleId }, exceptional ? { reason: exceptionReason.trim() } : null);
+        await writeAuditLog("route_assigned", loggedInUser?.uid, actorName, { routeId: route.id, routeName: route.routeName, driverId: effectiveDriverId, vehicleId: chosen.profile.vehicleId, exceptional, reason: exceptionReason.trim(), ineligibleReasons: chosen.reasons, recommendedDriverId: ranking.recommended?.driverId || null, recommendationScore: chosen.cand?.score ?? null, travelSource: chosen.cand?.travelSource || null });
+        onChanged(); onClose();
+      } finally { setBusy(false); }
+      return;
+    }
     if (!vehicleId) { alert("اختر مركبة أولًا"); return; }
     setBusy(true);
     try {
@@ -4850,6 +4952,39 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, loggedInUser, 
         <RouteMap stops={route.orderedStops} bins={bins} neighborhoods={neighborhoods} />
 
         <div style={{ marginTop: 14 }}>
+          {(route.status === "suggested" || route.status === "approved") && can(loggedInUser?.role, "routes.approve") && (
+            <div style={{ marginBottom: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>🧮 تحسين ترتيب الزيارات {route.optimization && <span style={{ color: C.accent, fontWeight: 400 }}>· محسّنة ({route.optimization.matrixSource === "osrm" ? "طرق فعلية" : "تقديري"}، ثقة {CONFIDENCE_LABELS[route.optimization.confidence] || route.optimization.confidence})</span>}</div>
+                <button disabled={optBusy} onClick={runOptimizer} style={{ padding: "7px 12px", borderRadius: 8, border: "none", background: C.purple, color: "#fff", fontWeight: 700, fontSize: 11.5, cursor: "pointer", fontFamily: ARABIC_FONT }}>{optBusy ? "جاري الحساب…" : route.optimization ? "إعادة الحساب" : "احسب الترتيب الأمثل"}</button>
+              </div>
+              <div style={{ fontSize: 10.5, color: C.dim, marginTop: 4 }}>بحث محلي (2-opt/Or-opt) على مصفوفة أزمنة الطرق من OSRM، بقيود السعة والأولوية ونقطة التفريغ إن وُجدت. الانطلاق من {chosen?.cand?.origin?.label || "مستودع المركبة"}.</div>
+              {opt && opt.result.ok && (() => { const r = opt.result; const conf = { high: ["عالية", C.accent], medium: ["متوسطة", C.warning], low: ["منخفضة", C.dim] }[r.confidence]; return (
+                <div style={{ marginTop: 10, fontSize: 12, color: C.text, lineHeight: 1.9 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
+                    {[
+                      ["المسافة", `${opt.before.km} ← ${r.totalDistanceKm} كم`, r.totalDistanceKm < opt.before.km ? C.accent : C.muted],
+                      ["الزمن الكلي", `${opt.before.totalMin} ← ${r.totalDurationMin} د`, r.totalDurationMin < opt.before.totalMin ? C.accent : C.muted],
+                      ["النفايات المتوقع جمعها", `${r.estimatedWasteLiters} لتر`, C.info],
+                      ["الرحلات", r.trips > 1 ? `${r.trips} (مع تفريغ)` : "رحلة واحدة", C.text],
+                      ["تحسّن عن الترتيب الحالي", `${opt.before.totalMin > 0 ? Math.max(0, Math.round((1 - r.totalDurationMin / opt.before.totalMin) * 100)) : 0}% زمنًا · ${opt.before.km > 0 ? Math.max(0, Math.round((1 - r.totalDistanceKm / opt.before.km) * 100)) : 0}% مسافة`, C.purple],
+                      ["مستوى الثقة", conf[0], conf[1]],
+                    ].map(([l, v, c]) => <div key={l} style={{ background: C.card, borderRadius: 8, padding: "6px 10px" }}><div style={{ fontSize: 10.5, color: C.muted }}>{l}</div><b style={{ color: c }}>{v}</b></div>)}
+                  </div>
+                  {r.constraints.length > 0 && (
+                    <ul style={{ margin: "8px 0 0", paddingInlineStart: 18, color: C.warning, fontSize: 11.5 }}>{r.constraints.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                  )}
+                  <div style={{ marginTop: 8, color: C.muted, fontSize: 11.5 }}>
+                    الترتيب المقترح: {r.orderedStops.map((o) => o.type === "dump" ? `🔄 ${o.label}` : `#${o.order} ${o.binName}${o.arrivalMin != null ? ` (${o.arrivalMin} د)` : ""}`).join(" ← ")}
+                    {r.deferredStops.length > 0 && <span style={{ color: C.warning }}> · مؤجَّلة: {r.deferredStops.map((d) => d.binName).join("، ")}</span>}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: C.dim }}>الزمن = قيادة ({r.driveMin} د) + خدمة ({r.serviceMin} د بواقع {r.assumptions.minutesPerStop} د/حاوية){r.finishAt ? ` · الانتهاء المتوقع ${new Date(r.finishAt).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}` : ""}</div>
+                  <button disabled={busy} onClick={applyOptimization} style={{ marginTop: 8, padding: "8px 14px", borderRadius: 8, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>اعتماد هذا الترتيب</button>
+                </div>
+              ); })()}
+              {opt && !opt.result.ok && <div style={{ marginTop: 8, color: C.danger, fontSize: 11.5 }}>{opt.result.constraints.join("، ")}</div>}
+            </div>
+          )}
           <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>التوقفات ({route.orderedStops.length})</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {route.orderedStops.map((s) => (
@@ -4876,9 +5011,54 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, loggedInUser, 
           )}
         </div>
 
-        {(route.status === "suggested" || route.status === "approved") && (
+        {(route.status === "suggested" || route.status === "approved") && driverProfiles.length > 0 && (
           <div style={{ marginTop: 14 }}>
-            <label style={{ fontSize: 12, fontWeight: 700, color: C.text, display: "block", marginBottom: 6 }}>المركبة</label>
+            <label style={{ fontSize: 12, fontWeight: 700, color: C.text, display: "block", marginBottom: 6 }}>🤖 توصية الإسناد — {routeNeighborhoodName || "الحي"} {legsStatus === "loading" && <span style={{ color: C.dim, fontWeight: 400 }}>· جاري حساب أزمنة الوصول عبر الطرق…</span>}</label>
+            {ranking.warnings.map((w, i) => (
+              <div key={i} style={{ fontSize: 11.5, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>⚠️ {w}</div>
+            ))}
+            {ranking.recommended && (() => { const r = ranking.recommended; const conf = { high: ["عالية", C.accent], medium: ["متوسطة", C.warning], low: ["منخفضة", C.dim] }[r.confidence]; return (
+              <div style={{ background: C.accent + "10", border: `1px solid ${C.accent}50`, borderRadius: 10, padding: 12, marginBottom: 8, fontSize: 12, lineHeight: 1.9, color: C.text }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                  <div>السائق المقترح: <b>{r.driverName}</b></div>
+                  <div>المركبة: <b>{r.vehicleNumber || "—"}</b></div>
+                  <div style={{ gridColumn: "1 / -1" }}>النطاق: <b>{r.scope || "—"}</b></div>
+                  <div>عدد الحاويات: <b>{r.binsCount}</b></div>
+                  <div>مستوى الثقة: <b style={{ color: conf[1] }}>{conf[0]}</b></div>
+                  <div>المسافة التقديرية: <b>{r.totalKm != null ? `${r.totalKm} كم` : "غير محسوبة"}</b> <span style={{ color: C.dim, fontSize: 10.5 }}>({r.approachKm != null ? `${r.approachKm} وصول + ${Math.round((r.totalKm - r.approachKm) * 10) / 10} جولة` : "—"})</span></div>
+                  <div>مدة الجولة: <b>{r.totalMin != null ? `~${r.totalMin} د` : "غير محسوبة"}</b> <span style={{ color: C.dim, fontSize: 10.5 }}>({r.travelSource === "osrm" ? "طرق فعلية" : "تقدير جوي"} + {ranking.assumptions.minutesPerStop} د/حاوية)</span></div>
+                </div>
+                <div style={{ color: C.accent, marginTop: 4 }}>سبب الترشيح: {r.reason}</div>
+                {r.nearestOverridden && <div style={{ color: C.muted, fontSize: 11.5 }}>ℹ️ لماذا ليس الأقرب؟ {r.nearestOverridden}</div>}
+              </div>
+            ); })()}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {driverOptions.map((d) => {
+                const c = d.cand; const active = effectiveDriverId === d.profile.uid;
+                return (
+                  <button key={d.profile.uid} type="button" onClick={() => setDriverId(d.profile.uid)} style={{ textAlign: "right", padding: "8px 12px", borderRadius: 8, border: `1px solid ${active ? C.info : C.border}`, background: active ? C.info + "15" : C.bg, color: C.text, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT, lineHeight: 1.7 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                      <span>{d.eligible ? "✅" : "⚠️"} <b>{d.profile.fullName}</b> — {d.vehicle?.vehicleNumber || "بلا مركبة"}{c.verdict.eligible ? ` · تقييم ${c.score}/100` : ""}</span>
+                      <span style={{ color: C.muted }}>{c.approachMin != null ? `وصول ~${c.approachMin} د · ${c.approachKm} كم (${c.travelSource === "osrm" ? "طرق" : "جوي"})` : "زمن الوصول غير محسوب"}{c.remainingL != null ? ` · سعة متبقية ${c.remainingL} لتر` : ""}</span>
+                    </div>
+                    {!d.eligible && <div style={{ color: C.warning, fontSize: 11 }}>{d.reasons.join("، ")}</div>}
+                    {d.eligible && c.flags.length > 0 && <div style={{ color: C.dim, fontSize: 11 }}>{c.flags.join("، ")}</div>}
+                  </button>
+                );
+              })}
+            </div>
+            {chosen && (
+              <div style={{ fontSize: 11.5, color: chosen.eligible ? C.accent : C.warning, marginTop: 6, lineHeight: 1.7 }}>
+                {chosen.eligible ? (effectiveDriverId === ranking.recommended?.driverId ? "سيُسند إلى السائق المقترح." : "اخترت سائقًا مؤهلًا غير المقترح — يُسجَّل في سجل العمليات مع تقييم التوصية.") : `إسناد استثنائي: ${chosen.reasons.join("، ")}`}
+                {routeConflicts.map((c, i) => <div key={i} style={{ color: C.danger }}>⛔ {c.message}</div>)}
+                {!chosen.eligible && <input value={exceptionReason} onChange={(e) => setExceptionReason(e.target.value)} placeholder="مبرر الإسناد الاستثنائي (إلزامي)" style={{ width: "100%", marginTop: 6, padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.warning}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT, boxSizing: "border-box" }} />}
+              </div>
+            )}
+          </div>
+        )}
+        {(route.status === "suggested" || route.status === "approved") && driverProfiles.length === 0 && (
+          <div style={{ marginTop: 14 }}>
+            <label style={{ fontSize: 12, fontWeight: 700, color: C.text, display: "block", marginBottom: 6 }}>المركبة <span style={{ color: C.dim, fontWeight: 400 }}>(لا توجد ملفات سائقين بعد — أنشئها من صفحة السائقين)</span></label>
             <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT }}>
               <option value="">اختر مركبة…</option>
               {vehicles.map((v) => <option key={v.id} value={v.id} disabled={v.status !== "available" && v.id !== route.vehicleId}>{v.vehicleNumber} — {VEHICLE_STATUS_LABELS[v.status] || v.status}</option>)}
@@ -4935,11 +5115,323 @@ const AUDIT_ACTION_LABELS = {
   route_obstacle_reported: "بلاغ عائق أثناء جولة",
   vehicle_added: "إضافة مركبة",
   device_key_rotated: "توليد مفتاح جهاز IoT",
+  driver_profile_updated: "تعديل ملف سائق",
+  driver_vehicle_assigned: "إسناد مركبة لسائق",
+  driver_vehicle_unassigned: "إنهاء إسناد مركبة",
+  driver_clocked_in: "بدء مناوبة سائق",
+  driver_clocked_out: "إنهاء مناوبة سائق",
+  driver_break: "استراحة سائق",
+  route_assigned: "إسناد جولة لسائق",
+  route_optimized: "تحسين ترتيب جولة",
+  route_unreachable_reported: "بلاغ تعذر الوصول لحاوية",
+  incident_reviewed: "مراجعة بلاغ ميداني",
+  route_stop_reinstated: "إعادة إدراج حاوية في جولة",
   device_disabled: "تعطيل جهاز IoT",
   device_enabled: "تفعيل جهاز IoT",
   demo_simulation_started: "بدء محاكاة ESP32 حية",
   demo_simulation_stopped: "إيقاف محاكاة ESP32",
   demo_action: "إجراء تجريبي (Demo)",
+};
+
+// ======================== FLEET MONITOR (Phase 5) ========================
+const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents = [], bins = [], neighborhoods = [], loggedInUser }) => {
+  const [selectedUid, setSelectedUid] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const now = Date.now();
+  const active = routes.filter((r) => r.status === "in_progress");
+  const approved = routes.filter((r) => r.status === "approved");
+  const todayStr = new Date().toDateString();
+  const completedToday = routes.filter((r) => r.status === "completed" && r.completedAt && new Date(r.completedAt).toDateString() === todayStr);
+  const onShift = profiles.filter((p) => p.shiftStatus === "on_shift");
+  const available = onShift.filter((p) => p.availability === "available" && !routes.some((r) => r.status === "in_progress" && r.driverId === p.uid));
+  const openIncidents = incidents.filter((i) => i.status === "open");
+  const remainingBins = active.reduce((a, r) => a + routeProgress(r).remaining, 0);
+  const vehicleById = useMemo(() => new Map(vehicles.map((v) => [v.id, v])), [vehicles]);
+  const routeFor = (uid) => routes.find((r) => r.driverId === uid && (r.status === "in_progress" || r.status === "approved")) || null;
+  // Only drivers on shift who share a location are shown on the map; freshness is labelled.
+  const tracked = onShift.filter((p) => p.locationSharing && p.lastLocation?.lat != null).map((p) => ({ p, fresh: locationFreshness(p.lastLocation, { now }), route: routeFor(p.uid), vehicle: vehicleById.get(p.vehicleId) }));
+  const sel = tracked.find((t) => t.p.uid === selectedUid) || null;
+  const selProgress = sel?.route ? routeProgress(sel.route) : null;
+  const selNext = sel?.route ? nextStopFor(sel.route) : null;
+  const selEta = sel && selNext?.lat != null ? estimateTravelMinutes((haversineDistanceKm(sel.p.lastLocation.lat, sel.p.lastLocation.lng, selNext.lat, selNext.lng) ?? 0)) : null;
+  const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name || "" };
+
+  if (!can(loggedInUser?.role, "fleet.monitor")) return <EmptyState icon="🔒" title="غير مصرح" />;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+        {[["في المناوبة", onShift.length, C.accent], ["متاحون", available.length, C.info], ["مركبات نشطة", vehicles.filter((v) => v.status === "on_route").length, C.purple], ["جولات نشطة", active.length, C.info], ["معتمدة بانتظار البدء", approved.length, C.warning], ["حاويات متبقية", remainingBins, C.danger], ["مكتملة اليوم", completedToday.length, C.accent], ["بلاغات مفتوحة", openIncidents.length, openIncidents.length ? C.danger : C.dim]].map(([l, v, c]) => (
+          <div key={l} style={{ background: C.card, border: `1px solid ${c}30`, borderRadius: 12, padding: "12px 14px" }}><div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 11, color: C.muted }}>{l}</div></div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1.5fr) minmax(260px, 1fr)", gap: 16 }}>
+        <Card title="🗺️ مواقع المركبات (أثناء المناوبة فقط، بإذن السائق)" icon={<Truck size={16} color="#94a3b8" />}>
+          <div style={{ height: 460, borderRadius: 12, overflow: "hidden", border: `1px solid ${C.border}` }}>
+            <MapContainer center={BURAIDAH_CENTER} zoom={12} style={{ width: "100%", height: "100%" }} preferCanvas>
+              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
+              {tracked.map(({ p, fresh, route, vehicle }) => (
+                <CircleMarker key={p.uid} center={[p.lastLocation.lat, p.lastLocation.lng]} radius={selectedUid === p.uid ? 13 : 10}
+                  pathOptions={{ color: "#fff", weight: 2, fillColor: fresh.state === "live" ? C.info : C.dim, fillOpacity: 0.95, dashArray: fresh.state === "live" ? null : "3 3" }}
+                  eventHandlers={{ click: () => setSelectedUid(p.uid) }}>
+                  <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}><b>{p.fullName}</b> · {vehicle?.vehicleNumber || "بلا مركبة"}<br />{route ? `${route.routeName} (${ROUTE_STATUS_LABELS[route.status]})` : "بلا جولة"}<br />{fresh.state === "live" ? "موقع مباشر" : `آخر موقع قبل ${fresh.ageMin} د`}</div></Popup>
+                </CircleMarker>
+              ))}
+              {sel?.route && (sel.route.orderedStops || []).filter((s) => s.lat != null).map((s) => (
+                <CircleMarker key={s.binId} center={[s.lat, s.lng]} radius={6} pathOptions={{ color: "#fff", weight: 1, fillColor: (sel.route.collectedBinIds || []).includes(s.binId) ? "#64748b" : STATUS_COLORS[s.priorityTier] || C.info, fillOpacity: 0.9 }} />
+              ))}
+            </MapContainer>
+          </div>
+          <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6 }}>{tracked.length === 0 ? "لا توجد مركبات تشارك موقعها الآن (يبدأ التتبع ببدء المناوبة من بوابة السائق)." : `${tracked.length} مركبة · النقطة المتقطعة = موقع قديم (أكثر من 5 دقائق). التتبع يتوقف تلقائيًا عند إغلاق الشاشة على بعض الجوالات.`}</div>
+        </Card>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <Card title={sel ? `🚛 ${sel.p.fullName}` : "اختر مركبة من الخريطة"} icon={<Users size={16} color="#94a3b8" />}>
+            {!sel ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {onShift.length === 0 && <EmptyState icon="🛌" title="لا سائقين في المناوبة" />}
+                {onShift.map((p) => { const r = routeFor(p.uid); const f = locationFreshness(p.lastLocation, { now }); return (
+                  <div key={p.uid} onClick={() => p.lastLocation && setSelectedUid(p.uid)} style={{ padding: "8px 10px", borderRadius: 8, background: C.bg, fontSize: 12, cursor: p.lastLocation ? "pointer" : "default" }}>
+                    <b style={{ color: C.text }}>{p.fullName}</b> · {vehicleById.get(p.vehicleId)?.vehicleNumber || "بلا مركبة"} · {r ? `${r.routeName} (${ROUTE_STATUS_LABELS[r.status]})` : "بلا جولة"}
+                    <div style={{ color: f.state === "live" ? C.accent : f.state === "stale" ? C.warning : C.dim, fontSize: 11 }}>{f.state === "live" ? "📍 موقع مباشر" : f.state === "stale" ? `📍 آخر موقع قبل ${f.ageMin} د` : "📍 لا يشارك موقعه"}</div>
+                  </div>
+                ); })}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: C.muted, lineHeight: 2 }}>
+                المركبة: <b style={{ color: C.text }}>{sel.vehicle?.vehicleNumber || "—"}</b> ({VEHICLE_STATUS_LABELS[sel.vehicle?.status] || "—"})<br />
+                الحي: <b style={{ color: C.text }}>{sel.route ? neighborhoods.find((n) => (sel.route.neighborhoodIds || []).includes(n.id))?.name || "—" : (sel.p.neighborhoodKeys || []).map((k) => `حي ${k}`).join("، ") || "—"}</b><br />
+                الجولة الحالية: <b style={{ color: C.text }}>{sel.route ? `${sel.route.routeName} — ${ROUTE_STATUS_LABELS[sel.route.status]}` : "لا توجد"}</b><br />
+                {selProgress && <>التقدم: <b style={{ color: C.accent }}>{selProgress.collected}/{selProgress.total}</b> جُمعت · {selProgress.skipped} تخطٍ · {selProgress.remaining} متبقية<br /></>}
+                آخر موقع: <b style={{ color: sel.fresh.state === "live" ? C.accent : C.warning }}>{sel.fresh.state === "live" ? "مباشر" : `قبل ${sel.fresh.ageMin} د`}</b> · {getReadingAgeLabel(sel.p.lastLocation.at)}{sel.p.lastLocation.accuracyM != null ? ` · دقة ${Math.round(sel.p.lastLocation.accuracyM)} م` : ""}<br />
+                {selNext && <>الوجهة التالية: <b style={{ color: C.text }}>{selNext.binName}</b>{selEta != null ? ` · وصول تقديري ~${selEta} د (مسافة جوية)` : ""}<br /></>}
+                <button onClick={() => setSelectedUid(null)} style={{ marginTop: 6, padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>← كل السائقين</button>
+              </div>
+            )}
+          </Card>
+
+          <Card title={`🚧 البلاغات والعوائق (${openIncidents.length} مفتوح)`} icon={<AlertTriangle size={16} color="#94a3b8" />}>
+            {incidents.length === 0 ? <EmptyState icon="✅" title="لا بلاغات" /> : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                {[...incidents].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 30).map((inc) => {
+                  const t = INCIDENT_TYPES[inc.type] || { label: inc.type, icon: "❓" };
+                  const r = routes.find((x) => x.id === inc.routeId);
+                  const bin = bins.find((b) => b.id === inc.binId);
+                  const stillSkipped = r && (r.skippedStops || []).some((s) => s.binId === inc.binId);
+                  return (
+                    <div key={inc.id} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px", fontSize: 12, borderRight: `3px solid ${inc.status === "open" ? C.danger : C.dim}` }}>
+                      <div><b style={{ color: C.text }}>{t.icon} {t.label}</b> · {inc.driverName} · {getReadingAgeLabel(inc.createdAt)}</div>
+                      <div style={{ color: C.muted, fontSize: 11 }}>{inc.routeName}{bin ? ` · ${bin.name}` : ""}{inc.note ? ` · ${inc.note}` : ""} · {inc.status === "open" ? "مفتوح" : inc.status === "reviewed" ? "تمت المراجعة" : "محلول"}{inc.resolution ? ` — ${inc.resolution}` : ""}</div>
+                      {inc.status === "open" && (
+                        <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                          <button disabled={busy} onClick={async () => { const res = window.prompt("ملاحظة المراجعة (اختياري):", "") ?? ""; setBusy(true); try { await reviewRouteIncident(inc.id, actor.uid, "reviewed", res); await writeAuditLog("incident_reviewed", actor.uid, actor.name, { incidentId: inc.id, routeId: inc.routeId, resolution: res }); } finally { setBusy(false); } }} style={smallBtn(C.info)}>تمت المراجعة</button>
+                          {stillSkipped && inc.binId && (
+                            <button disabled={busy} onClick={async () => { setBusy(true); try { await reinstateRouteStop(r.id, reinstateSkippedStop(r, inc.binId).skippedStops); await reviewRouteIncident(inc.id, actor.uid, "resolved", "أُعيد إدراج الحاوية في الجولة"); await writeAuditLog("route_stop_reinstated", actor.uid, actor.name, { routeId: r.id, binId: inc.binId, incidentId: inc.id }); } finally { setBusy(false); } }} style={smallBtn(C.accent)}>إعادة إدراج الحاوية</button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>بلاغ العائق يخص هذه الجولة فقط ولا يغيّر شبكة الطرق لبقية المركبات إلا بعد مراجعة.</div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ======================== DRIVERS & FLEET (Phase 1) ========================
+const NEIGHBORHOOD_KEYS = buraidahNeighborhoodsGeo.features.map((f) => f.properties.baseName);
+const inputSt = { width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT, boxSizing: "border-box" };
+const smallBtn = (color, filled = false) => ({ padding: "6px 12px", borderRadius: 8, border: filled ? "none" : `1px solid ${color}`, background: filled ? color : color + "15", color: filled ? "#07231A" : color, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT });
+
+const DriversPage = ({ profiles = [], assignments = [], vehicles = [], loggedInUser }) => {
+  const { data: driverUsers } = useCollectionWhere(COLLECTIONS.USERS, "role", "driver");
+  const [selectedId, setSelectedId] = useState(null);
+  const [form, setForm] = useState(null);
+  const [errors, setErrors] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [vehicleForm, setVehicleForm] = useState({ vehicleId: "", start: new Date().toISOString().slice(0, 16), end: "" });
+  const { data: history } = useDriverAssignmentHistory(selectedId);
+  const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name || loggedInUser?.email || "موظف" };
+  const canManage = can(loggedInUser?.role, "drivers.manage");
+
+  const profileById = useMemo(() => new Map(profiles.map((p) => [p.uid || p.id, p])), [profiles]);
+  const rows = useMemo(() => (driverUsers || []).map((u) => ({ user: u, profile: profileById.get(u.uid || u.id) || null })), [driverUsers, profileById]);
+  const selected = rows.find((r) => (r.user.uid || r.user.id) === selectedId) || null;
+  const selectedProfile = selected?.profile || null;
+  const activeAssignment = selectedProfile ? activeAssignmentFor(selectedProfile.uid, assignments) : null;
+  const matrix = useMemo(() => coverageMatrix(NEIGHBORHOOD_KEYS, profiles), [profiles]);
+  const vehicleById = useMemo(() => new Map(vehicles.map((v) => [v.id, v])), [vehicles]);
+
+  // Reset the form when the selected driver changes (derived state during render — no effect cascade).
+  const [formFor, setFormFor] = useState(null);
+  const formKey = selectedProfile ? `${selectedProfile.uid}:${selectedProfile.updatedAt || ""}` : null;
+  if (formKey !== formFor) {
+    setFormFor(formKey);
+    setForm(selectedProfile ? { fullName: selectedProfile.fullName || "", phone: selectedProfile.phone || "", neighborhoodKeys: selectedProfile.neighborhoodKeys || [], shiftStart: selectedProfile.shiftStart || "", shiftEnd: selectedProfile.shiftEnd || "" } : null);
+    setErrors([]);
+    if (selectedProfile) setVehicleForm((f) => ({ ...f, vehicleId: selectedProfile.vehicleId || "" }));
+  }
+
+  const kpis = {
+    total: rows.length,
+    onShift: profiles.filter((p) => p.shiftStatus === "on_shift").length,
+    available: profiles.filter((p) => p.shiftStatus === "on_shift" && p.availability === "available").length,
+    activeVehicles: vehicles.filter((v) => v.status === "on_route").length,
+    uncovered: NEIGHBORHOOD_KEYS.filter((k) => (matrix[k] || []).length === 0).length,
+  };
+
+  const createProfile = async (u) => { setBusy(true); try { await ensureDriverProfile({ ...u, uid: u.uid || u.id }); setSelectedId(u.uid || u.id); } finally { setBusy(false); } };
+
+  const saveProfile = async () => {
+    const v = validateDriverProfile(form, { knownNeighborhoodKeys: NEIGHBORHOOD_KEYS });
+    setErrors(v.errors);
+    if (!v.ok) return;
+    const reason = window.prompt("سبب التعديل (يُحفظ في سجل التغييرات):", "") ?? "";
+    setBusy(true);
+    try {
+      await updateDriverProfile(selectedProfile.uid, { ...v.value, driverCode: selectedProfile.driverCode || driverCodeFor(selectedProfile.uid), accountStatus: selected.user.status || selectedProfile.accountStatus }, selectedProfile, actor, reason);
+    } finally { setBusy(false); }
+  };
+
+  const vehicleConflicts = vehicleForm.vehicleId && selectedProfile
+    ? findVehicleAssignmentConflicts({ driverId: selectedProfile.uid, vehicleId: vehicleForm.vehicleId, start: vehicleForm.start, end: vehicleForm.end || null }, assignments)
+    : [];
+  const assignVehicle = async () => {
+    if (!vehicleForm.vehicleId || vehicleConflicts.length) return;
+    const reason = window.prompt("سبب الإسناد (اختياري):", "") ?? "";
+    setBusy(true);
+    try {
+      if (activeAssignment) await endVehicleAssignment(activeAssignment, actor, "استبدال بمركبة أخرى");
+      const v = vehicleById.get(vehicleForm.vehicleId);
+      await assignVehicleToDriver({ driverId: selectedProfile.uid, driverName: selectedProfile.fullName, vehicleId: v.id, vehicleNumber: v.vehicleNumber, start: new Date(vehicleForm.start).toISOString(), end: vehicleForm.end ? new Date(vehicleForm.end).toISOString() : null }, actor, reason);
+    } finally { setBusy(false); }
+  };
+
+  if (!canManage) return <EmptyState icon="🔒" title="غير مصرح" desc="إدارة السائقين متاحة للموظفين والإدارة فقط." />;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+        {[["السائقون", kpis.total, C.info], ["في المناوبة", kpis.onShift, C.accent], ["متاحون الآن", kpis.available, C.accent], ["مركبات في جولة", kpis.activeVehicles, C.purple], ["أحياء بلا تغطية", kpis.uncovered, kpis.uncovered ? C.warning : C.dim]].map(([l, v, c]) => (
+          <div key={l} style={{ background: C.card, border: `1px solid ${c}30`, borderRadius: 12, padding: "12px 14px" }}><div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 11, color: C.muted }}>{l}</div></div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(320px, 1.4fr)", gap: 16 }}>
+        <Card title="السائقون" icon={<Users size={16} color="#94a3b8" />}>
+          {rows.length === 0 ? <EmptyState icon="🚛" title="لا توجد حسابات بدور سائق بعد" desc="يسجل السائق حسابه من شاشة التسجيل بدور «سائق ميداني»، ثم يُفعَّل من إدارة المستخدمين ويُهيأ ملفه هنا." /> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {rows.map(({ user: u, profile: p }) => {
+                const uid = u.uid || u.id;
+                const v = p?.vehicleId ? vehicleById.get(p.vehicleId) : null;
+                const fresh = locationFreshness(p?.lastLocation);
+                return (
+                  <div key={uid} onClick={() => p && setSelectedId(uid)} style={{ padding: "10px 12px", borderRadius: 10, background: selectedId === uid ? C.info + "15" : C.bg, border: `1px solid ${selectedId === uid ? C.info : C.border}`, cursor: p ? "pointer" : "default", fontSize: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <div>
+                        <b style={{ color: C.text }}>{p?.fullName || u.fullName}</b> <span style={{ color: C.dim, fontSize: 10.5 }}>{p?.driverCode || ""}</span>
+                        <div style={{ color: C.muted, fontSize: 11 }}>{u.email} · حساب: {u.status === "active" ? "مفعّل" : u.status === "pending" ? "بانتظار التفعيل" : u.status}</div>
+                      </div>
+                      {p ? (
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 10, background: (p.shiftStatus === "on_shift" ? C.accent : C.dim) + "20", color: p.shiftStatus === "on_shift" ? C.accent : C.dim }}>{SHIFT_STATUS_LABELS[p.shiftStatus] || p.shiftStatus}</span>
+                          <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 10, background: C.info + "20", color: C.info }}>{v ? v.vehicleNumber : "بلا مركبة"}</span>
+                          {fresh.state !== "none" && <span style={{ fontSize: 10.5, color: fresh.state === "live" ? C.accent : C.warning }}>📍 {fresh.state === "live" ? "موقع مباشر" : `آخر موقع قبل ${fresh.ageMin} د`}</span>}
+                        </div>
+                      ) : (
+                        <button disabled={busy} onClick={(e) => { e.stopPropagation(); createProfile(u); }} style={smallBtn(C.accent, true)}>تهيئة ملف السائق</button>
+                      )}
+                    </div>
+                    {p && <div style={{ color: C.dim, fontSize: 11, marginTop: 4 }}>النطاق: {(p.neighborhoodKeys || []).length ? p.neighborhoodKeys.map((k) => `حي ${k}`).join("، ") : "غير محدد"}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+
+        <Card title={selectedProfile ? `ملف السائق — ${selectedProfile.fullName}` : "اختر سائقًا"} icon={<HardHat size={16} color="#94a3b8" />}>
+          {!selectedProfile || !form ? <EmptyState icon="👈" title="اختر سائقًا من القائمة لتعديل مركبته ونطاقه" /> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <label>الاسم<input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} style={inputSt} /></label>
+                <label>الهاتف<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={inputSt} dir="ltr" /></label>
+                <label>بداية المناوبة اليومية<input type="time" value={form.shiftStart} onChange={(e) => setForm({ ...form, shiftStart: e.target.value })} style={inputSt} /></label>
+                <label>نهاية المناوبة<input type="time" value={form.shiftEnd} onChange={(e) => setForm({ ...form, shiftEnd: e.target.value })} style={inputSt} /></label>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>نطاق الأحياء المصرح بتغطيتها (من حدود بريدة)</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {NEIGHBORHOOD_KEYS.map((k) => {
+                    const on = form.neighborhoodKeys.includes(k);
+                    return <button key={k} type="button" onClick={() => setForm({ ...form, neighborhoodKeys: on ? form.neighborhoodKeys.filter((x) => x !== k) : [...form.neighborhoodKeys, k] })} style={{ ...smallBtn(on ? C.accent : C.dim), background: on ? C.accent + "25" : "transparent" }}>{on ? "✓ " : ""}حي {k}</button>;
+                  })}
+                </div>
+              </div>
+              {errors.length > 0 && <div style={{ color: C.danger, fontSize: 11.5 }}>{errors.map((e, i) => <div key={i}>• {e}</div>)}</div>}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button disabled={busy} onClick={saveProfile} style={smallBtn(C.accent, true)}>حفظ الملف</button>
+                <span style={{ color: C.dim, fontSize: 11 }}>الحالة: {SHIFT_STATUS_LABELS[selectedProfile.shiftStatus]} · {AVAILABILITY_LABELS[selectedProfile.availability] || "—"} · الحساب: {selected.user.status === "active" ? "مفعّل" : "غير مفعّل (فعّله من إدارة المستخدمين)"}</span>
+              </div>
+
+              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>🚛 المركبة المسندة</div>
+                {activeAssignment ? (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, background: C.bg, borderRadius: 8, padding: "8px 12px", marginBottom: 8, flexWrap: "wrap" }}>
+                    <span><b style={{ color: C.text }}>{activeAssignment.vehicleNumber || vehicleById.get(activeAssignment.vehicleId)?.vehicleNumber}</b> <span style={{ color: C.dim }}>· منذ {new Date(activeAssignment.start).toLocaleString("ar-SA")} {activeAssignment.end ? `حتى ${new Date(activeAssignment.end).toLocaleString("ar-SA")}` : "(مفتوح)"}</span></span>
+                    <button disabled={busy} onClick={async () => { const r = window.prompt("سبب إنهاء الإسناد:", "") ?? ""; setBusy(true); try { await endVehicleAssignment(activeAssignment, actor, r); } finally { setBusy(false); } }} style={smallBtn(C.danger)}>إنهاء الإسناد</button>
+                  </div>
+                ) : <div style={{ color: C.warning, marginBottom: 8 }}>لا توجد مركبة مسندة حاليًا.</div>}
+                <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr", gap: 8 }}>
+                  <select value={vehicleForm.vehicleId} onChange={(e) => setVehicleForm({ ...vehicleForm, vehicleId: e.target.value })} style={inputSt}>
+                    <option value="">اختر مركبة…</option>
+                    {vehicles.map((v) => { const holder = vehicleHolderAt(v.id, assignments); return <option key={v.id} value={v.id}>{v.vehicleNumber} — {VEHICLE_STATUS_LABELS[v.status] || v.status}{holder && holder.driverId !== selectedProfile.uid ? ` (مع ${holder.driverName || "سائق آخر"})` : ""}</option>; })}
+                  </select>
+                  <input type="datetime-local" value={vehicleForm.start} onChange={(e) => setVehicleForm({ ...vehicleForm, start: e.target.value })} style={inputSt} title="بداية نافذة الإسناد" />
+                  <input type="datetime-local" value={vehicleForm.end} onChange={(e) => setVehicleForm({ ...vehicleForm, end: e.target.value })} style={inputSt} title="نهاية النافذة (اتركها فارغة للإسناد المفتوح)" />
+                </div>
+                {vehicleConflicts.length > 0 && <div style={{ color: C.danger, fontSize: 11.5, marginTop: 6 }}>{vehicleConflicts.map((c, i) => <div key={i}>⛔ {c.message}</div>)}</div>}
+                <button disabled={busy || !vehicleForm.vehicleId || vehicleConflicts.length > 0} onClick={assignVehicle} style={{ ...smallBtn(C.info, true), color: "#fff", marginTop: 8, opacity: !vehicleForm.vehicleId || vehicleConflicts.length ? 0.5 : 1 }}>إسناد المركبة</button>
+              </div>
+
+              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>📜 سجل التغييرات</div>
+                {(history || []).length === 0 ? <div style={{ color: C.dim }}>لا تغييرات مسجلة بعد.</div> : (
+                  <div style={{ maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+                    {[...history].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).map((h) => (
+                      <div key={h.id} style={{ fontSize: 11, color: C.muted, background: C.bg, borderRadius: 6, padding: "6px 10px" }}>
+                        <b style={{ color: C.text }}>{h.actorName || "—"}</b> · {getReadingAgeLabel(h.createdAt)} · عدّل: {(h.fields || []).join("، ")}{h.reason ? ` · السبب: ${h.reason}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <Card title="🗺️ تغطية الأحياء — من يغطي كل حي؟" icon={<MapGlyph size={16} color="#94a3b8" />}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
+          {NEIGHBORHOOD_KEYS.map((k) => {
+            const ds = matrix[k] || [];
+            const ready = ds.filter((p) => p.shiftStatus === "on_shift" && p.availability === "available" && p.vehicleId);
+            return (
+              <div key={k} style={{ background: C.bg, border: `1px solid ${ds.length === 0 ? C.warning + "60" : ready.length ? C.accent + "40" : C.border}`, borderRadius: 10, padding: "10px 12px", fontSize: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}><b style={{ color: C.text }}>حي {k}</b><span style={{ color: ds.length === 0 ? C.warning : ready.length ? C.accent : C.muted, fontSize: 11 }}>{ds.length === 0 ? "بلا تغطية" : `${ready.length} جاهز / ${ds.length}`}</span></div>
+                <div style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>{ds.length ? ds.map((p) => `${p.fullName}${p.vehicleId ? ` (${vehicleById.get(p.vehicleId)?.vehicleNumber || "مركبة"})` : ""}`).join("، ") : "—"}</div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    </div>
+  );
 };
 
 const AuditLogPage = ({ auditLog = [] }) => {
@@ -4975,7 +5467,7 @@ const AuditLogPage = ({ auditLog = [] }) => {
   );
 };
 
-const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [], fireSensors = [], citizenReports = [], vehicles = [], routes = [], loadingVehicles, loadingRoutes, loggedInUser, draftBinId, onConsumeDraftBin, initialRouteId = null, onConsumeInitialRoute, onShowOnMap }) => {
+const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [], fireSensors = [], citizenReports = [], vehicles = [], routes = [], driverProfiles = [], loadingVehicles, loadingRoutes, loggedInUser, draftBinId, onConsumeDraftBin, initialRouteId = null, onConsumeInitialRoute, onShowOnMap }) => {
   const [tab, setTab] = useState("suggested");
   const [selectedRouteId, setSelectedRouteId] = useState(null);
 
@@ -5158,7 +5650,7 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
 
       {selectedRoute && (
         <RouteDetailModal
-          route={selectedRoute} bins={bins} neighborhoods={neighborhoods} vehicles={vehicles} loggedInUser={loggedInUser}
+          route={selectedRoute} bins={bins} neighborhoods={neighborhoods} vehicles={vehicles} routes={routes} driverProfiles={driverProfiles} loggedInUser={loggedInUser}
           onClose={() => setSelectedRouteId(null)}
           onChanged={() => {}}
           onShowOnMap={onShowOnMap}
@@ -6149,32 +6641,190 @@ const DEFAULT_DEPOT = { lat: 26.3340, lng: 43.9720, label: "المستودع ا�
  * vehicle's depot, else the city depot. The source is always shown in the UI
  * so a demo never passes a fallback off as a real fix.
  */
-function useDriverPosition(vehicle) {
+// ======================== DRIVER NAVIGATION (Phase 4) ========================
+/** watchPosition-based driver location. `watch=false` → single fix (planning); `watch=true` → continuous while on shift. */
+function useDriverPosition(vehicle, { watch = false } = {}) {
   const fallback = useMemo(
     () => (vehicle?.depotLat != null ? { lat: vehicle.depotLat, lng: vehicle.depotLng, source: "depot", label: vehicle.depotLabel || "مستودع المركبة" } : { ...DEFAULT_DEPOT, source: "default" }),
     [vehicle]
   );
   const [pos, setPos] = useState(null);
-  const [status, setStatus] = useState(() => (typeof navigator !== "undefined" && navigator.geolocation ? "locating" : "denied")); // locating | gps | denied
-
+  const [status, setStatus] = useState(() => (typeof navigator !== "undefined" && navigator.geolocation ? "locating" : "denied")); // locating | gps | denied | error
+  const [error, setError] = useState("");
+  const onFix = useCallback((p) => {
+    setPos({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy ?? null, heading: p.coords.heading != null && !Number.isNaN(p.coords.heading) ? p.coords.heading : null, speed: p.coords.speed ?? null, at: new Date(p.timestamp || Date.now()).toISOString(), source: "gps", label: "موقعك الحالي (GPS)" });
+    setStatus("gps"); setError("");
+  }, []);
+  const onErr = useCallback((e) => {
+    setStatus(e?.code === 1 ? "denied" : "error");
+    setError(e?.code === 1 ? "لم يُمنح إذن الموقع" : e?.code === 3 ? "انتهت مهلة تحديد الموقع" : "تعذر تحديد الموقع");
+  }, []);
   const requestFix = useCallback(() => {
     if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (p) => { setPos({ lat: p.coords.latitude, lng: p.coords.longitude, source: "gps", label: "موقعك الحالي (GPS)" }); setStatus("gps"); },
-      () => setStatus("denied"),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
-    );
-  }, []);
+    navigator.geolocation.getCurrentPosition(onFix, onErr, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+  }, [onFix, onErr]);
   useEffect(() => { requestFix(); }, [requestFix]);
-
-  const locate = () => {
-    if (!navigator.geolocation) { setStatus("denied"); return; }
-    setStatus("locating");
-    requestFix();
-  };
-
-  return { position: pos || fallback, status, locate };
+  useEffect(() => {
+    if (!watch || !navigator.geolocation) return;
+    const id = navigator.geolocation.watchPosition(onFix, onErr, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+    return () => navigator.geolocation.clearWatch(id);
+  }, [watch, onFix, onErr]);
+  const locate = () => { if (!navigator.geolocation) { setStatus("denied"); return; } setStatus("locating"); requestFix(); };
+  return { position: pos || fallback, status, error, locate, watching: watch && status === "gps" };
 }
+
+/** Keeps the map centered on the driver while `follow` is on; dragging the map switches follow off (parent owns the flag). */
+function FollowMe({ position, follow, zoom = 16, onUserDrag }) {
+  const map = useMap();
+  useEffect(() => { if (follow && position) map.setView([position.lat, position.lng], Math.max(map.getZoom(), zoom), { animate: true }); }, [position, follow, map, zoom]);
+  useEffect(() => { const h = () => onUserDrag && onUserDrag(); map.on("dragstart", h); return () => map.off("dragstart", h); }, [map, onUserDrag]);
+  return null;
+}
+
+const vehicleIcon = (headingDeg, live) => L.divIcon({
+  className: "",
+  html: `<div style="width:30px;height:30px;border-radius:50%;background:${live ? "#3b82f6" : "#64748b"};border:3px solid #fff;box-shadow:0 0 0 4px ${live ? "#3b82f655" : "#64748b55"};display:flex;align-items:center;justify-content:center;transform:rotate(${headingDeg ?? 0}deg)"><div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:12px solid #fff;margin-top:-4px"></div></div>`,
+  iconSize: [30, 30], iconAnchor: [15, 15],
+});
+
+/** Voice guidance via Web Speech API (Arabic voice when the device has one). Never the only channel. */
+function useVoiceGuidance(enabled) {
+  const lastRef = useRef("");
+  const speak = useCallback((text) => {
+    if (!enabled || typeof window === "undefined" || !window.speechSynthesis || !text || text === lastRef.current) return;
+    lastRef.current = text;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      const ar = window.speechSynthesis.getVoices().find((v) => /^ar/i.test(v.lang));
+      if (ar) u.voice = ar; u.lang = ar?.lang || "ar-SA"; u.rate = 0.95;
+      window.speechSynthesis.speak(u);
+    } catch { /* unsupported */ }
+  }, [enabled]);
+  useEffect(() => { if (!enabled && window.speechSynthesis) window.speechSynthesis.cancel(); }, [enabled]);
+  const supported = typeof window !== "undefined" && !!window.speechSynthesis;
+  const hasArabic = supported && window.speechSynthesis.getVoices().some((v) => /^ar/i.test(v.lang));
+  return { speak, supported, hasArabic };
+}
+
+/**
+ * Turn-by-turn view for the active route: road path from the live position
+ * through the REMAINING stops (OSRM with steps), maneuver banner, next-stop
+ * card, off-route detection → recompute, follow-me / recenter / fullscreen,
+ * heading rotation when the fix carries a reliable heading.
+ */
+const NavigationView = ({ position, posStatus, remainingStops = [], nextStop, allStops = [], onArrivedChange, voiceOn, onToggleVoice, recomputeKey = 0 }) => {
+  const [follow, setFollow] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [headingMode, setHeadingMode] = useState(false);
+  const [recompute, setRecompute] = useState(0);
+  const [road, setRoad] = useState({ route: null, status: "idle", at: null });
+  const samplesRef = useRef([]);
+  const { speak, supported: voiceSupported, hasArabic } = useVoiceGuidance(voiceOn);
+
+  const stopsKey = remainingStops.map((s) => s.binId).join("|");
+  // Fetch the road path when the stop list changes, when an off-route recompute fires, or when the parent asks (after an incident).
+  useEffect(() => {
+    if (!position || remainingStops.length === 0) return;
+    const pts = [{ lat: position.lat, lng: position.lng }, ...remainingStops.filter((s) => s.lat != null).map((s) => ({ lat: s.lat, lng: s.lng }))];
+    if (pts.length < 2) return;
+    let cancelled = false;
+    setRoad((r) => ({ ...r, status: "loading" }));
+    fetchRoadRoute(pts, { steps: true }).then((r) => { if (!cancelled) { setRoad({ route: r, status: r ? "ok" : "unavailable", at: Date.now() }); samplesRef.current = []; } });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopsKey, recompute, recomputeKey]);
+
+  const coords = useMemo(() => road.route?.coordinates || [], [road.route]);
+  const steps = useMemo(() => (road.route?.raw ? parseSteps(road.route.raw) : []), [road.route]);
+  const proj = useMemo(() => projectOnRoute(position, coords), [position, coords]);
+  const maneuver = useMemo(() => nextManeuver(position, steps, coords), [position, steps, coords]);
+  const quality = fixQuality(position?.accuracy);
+  const liveFix = posStatus === "gps";
+  const headingReliable = liveFix && position?.heading != null && (position?.speed ?? 0) > 1.5;
+
+  // Off-route: window of recent fixes vs the path; recompute from the current position, keeping the remaining stops.
+  useEffect(() => {
+    if (!liveFix || coords.length < 2 || road.status !== "ok") return;
+    samplesRef.current = [...samplesRef.current.slice(-4), { distanceM: proj.distanceM, accuracyM: position.accuracy || 0 }];
+    const d = offRouteDecision(samplesRef.current);
+    if (d.offRoute && Date.now() - (road.at || 0) > 15000) { setRecompute((n) => n + 1); speak("خرجت عن المسار، تتم إعادة حساب المسار"); }
+  }, [position, liveFix, coords.length, road.status, road.at, proj.distanceM, speak]);
+
+  // Distance/ETA to the next stop along the road (first leg) — falls back to straight line when no road.
+  const toNext = useMemo(() => {
+    if (!nextStop || nextStop.lat == null) return null;
+    if (coords.length >= 2) {
+      const stopProj = projectOnRoute({ lat: nextStop.lat, lng: nextStop.lng }, coords);
+      const m = Math.max(0, (stopProj.traveledM ?? 0) - (proj.traveledM ?? 0));
+      const leg = road.route?.legs?.[0];
+      const min = leg && leg.distanceKm > 0 ? Math.round((m / 1000) / leg.distanceKm * leg.durationMin) : estimateTravelMinutes(m / 1000);
+      return { m, min, source: "osrm" };
+    }
+    const m = distanceM(position, nextStop);
+    return { m, min: estimateTravelMinutes(m / 1000), source: "straight" };
+  }, [nextStop, coords, proj, road.route, position]);
+
+  const arrived = !!(nextStop && liveFix && arrivedAtStop(position, nextStop, { accuracyM: position.accuracy || 0 }));
+  useEffect(() => { onArrivedChange && onArrivedChange(arrived); }, [arrived, onArrivedChange]);
+  // Speak the maneuver when it changes or when it gets close.
+  useEffect(() => {
+    if (!maneuver) return;
+    if (maneuver.distanceToM <= 220) speak(`${maneuver.text} بعد ${formatDistanceAr(maneuver.distanceToM)}`);
+  }, [maneuver?.index, Math.round((maneuver?.distanceToM || 0) / 100), speak]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (arrived) speak("وصلت إلى الحاوية"); }, [arrived, speak]);
+
+  const wrap = fullscreen ? { position: "fixed", inset: 0, zIndex: 9999, background: C.bg, display: "flex", flexDirection: "column" } : { position: "relative" };
+  const mapH = fullscreen ? "100%" : 320;
+  const iconBtn = (active) => ({ width: 40, height: 40, borderRadius: 10, border: `1px solid ${active ? C.info : C.border}`, background: active ? C.info + "25" : C.card, color: active ? C.info : C.text, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" });
+
+  return (
+    <div style={wrap}>
+      {/* Maneuver banner */}
+      <div style={{ background: maneuver ? C.info : C.card, color: maneuver ? "#fff" : C.muted, borderRadius: fullscreen ? 0 : 14, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, minHeight: 64 }}>
+        <div style={{ fontSize: 28 }}>{maneuver ? ({ left: "⬅️", right: "➡️", "slight left": "↖️", "slight right": "↗️", uturn: "↩️" }[maneuver.modifier] || (maneuver.type === "arrive" ? "📍" : "⬆️")) : road.status === "loading" ? "⏳" : "🧭"}</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 800 }}>{maneuver ? maneuver.text : road.status === "loading" ? "جاري حساب المسار…" : road.status === "unavailable" ? "خدمة التوجيه غير متاحة — اتبع الخريطة والخط المستقيم" : "لا توجد توقفات متبقية"}</div>
+          <div style={{ fontSize: 12, opacity: 0.9 }}>{maneuver ? `بعد ${formatDistanceAr(maneuver.distanceToM)}` : ""}{!liveFix ? " · الموقع غير مباشر" : ""}</div>
+        </div>
+      </div>
+
+      <div style={{ height: mapH, flex: fullscreen ? 1 : undefined, position: "relative", borderRadius: fullscreen ? 0 : 14, overflow: "hidden", border: fullscreen ? "none" : `1px solid ${C.border}`, marginTop: fullscreen ? 0 : 10 }}>
+        <MapContainer center={[position.lat, position.lng]} zoom={15} style={{ width: "100%", height: "100%" }} zoomControl={false}>
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
+          <FollowMe position={position} follow={follow} onUserDrag={() => setFollow(false)} />
+          {coords.length > 1 ? <Polyline positions={coords} pathOptions={{ color: C.info, weight: 6, opacity: 0.85 }} />
+            : remainingStops.length > 0 && <Polyline positions={[[position.lat, position.lng], ...remainingStops.filter((s) => s.lat != null).map((s) => [s.lat, s.lng])]} pathOptions={{ color: C.info, weight: 4, dashArray: "8 8" }} />}
+          {allStops.filter((s) => s.lat != null).map((s) => (
+            <CircleMarker key={s.binId} center={[s.lat, s.lng]} radius={s.binId === nextStop?.binId ? 11 : 7}
+              pathOptions={{ color: "#fff", weight: 2, fillColor: s.done ? "#64748b" : s.skipped ? C.warning : (STATUS_COLORS[s.priorityTier] || C.info), fillOpacity: s.done ? 0.5 : 1 }}>
+              <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}>#{s.order} {s.binName}{s.done ? " ✅" : s.skipped ? " 🚧" : ""}</div></Popup>
+            </CircleMarker>
+          ))}
+          <Marker position={[position.lat, position.lng]} icon={vehicleIcon(headingMode && headingReliable ? position.heading : 0, liveFix)} />
+        </MapContainer>
+        <div style={{ position: "absolute", top: 10, left: 10, display: "flex", flexDirection: "column", gap: 8, zIndex: 1000 }}>
+          <button title="إعادة التمركز" onClick={() => setFollow(true)} style={iconBtn(follow)}>🎯</button>
+          <button title="ملء الشاشة" onClick={() => setFullscreen((f) => !f)} style={iconBtn(fullscreen)}>{fullscreen ? "✕" : "⛶"}</button>
+          <button title={headingReliable ? "متابعة اتجاه الحركة" : "اتجاه الحركة غير موثوق (سرعة منخفضة أو لا بيانات اتجاه)"} disabled={!headingReliable} onClick={() => setHeadingMode((h) => !h)} style={{ ...iconBtn(headingMode && headingReliable), opacity: headingReliable ? 1 : 0.4 }}>🧭</button>
+          {voiceSupported && <button title={voiceOn ? "إيقاف الصوت" : "تشغيل الإرشاد الصوتي"} onClick={onToggleVoice} style={iconBtn(voiceOn)}>{voiceOn ? "🔊" : "🔇"}</button>}
+        </div>
+        <div style={{ position: "absolute", bottom: 10, right: 10, left: 10, zIndex: 1000, background: C.card + "f2", border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px", fontSize: 12, color: C.text }}>
+          {nextStop ? (
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+              <span>📍 التالي: <b>{nextStop.binName}</b></span>
+              <span>{toNext ? `${formatDistanceAr(toNext.m)} · ~${toNext.min} د${toNext.source === "straight" ? " (تقدير مستقيم)" : ""}` : "—"}</span>
+              <span>🗑️ متبقٍ: <b>{remainingStops.length}</b></span>
+            </div>
+          ) : <span>🎉 لا توجد توقفات متبقية</span>}
+          <div style={{ fontSize: 10.5, color: quality.level === "poor" ? C.warning : C.dim, marginTop: 2 }}>
+            {liveFix ? quality.label : "الموقع غير مباشر — اضغط «تحديث موقعي» أو امنح الإذن"}{road.status === "ok" ? " · مسار على الطرق (OSRM)" : road.status === "unavailable" ? " · بلا خدمة توجيه: خط مستقيم" : ""}{voiceOn && voiceSupported && !hasArabic ? " · لا يوجد صوت عربي على هذا الجهاز" : ""}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 /** Field map: driver position, the neighborhood polygon, its bins, and the dashed preview path through the priority stops. */
 const FieldRouteMap = ({ position, feature, stops = [], allBins = [], neighborhoodIds = [], height = 300, onRoad }) => {
@@ -6222,13 +6872,29 @@ const FieldRouteMap = ({ position, feature, stops = [], allBins = [], neighborho
  * bins, and the status of the route that covers it. Execution (start /
  * collected / finish) is only possible on a route a supervisor approved.
  */
-const DriverPortal = ({ user, onLogout, vehicles = [], routes = [], bins = [], neighborhoods = [], fireSensors = [], recentReadings = [], citizenReports = [] }) => {
+const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods = [], fireSensors = [], recentReadings = [], citizenReports = [] }) => {
   const [activeRouteId, setActiveRouteId] = useState(null);
   const [focusKey, setFocusKey] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  const myVehicle = vehicles.find((v) => v.driverName && user?.name && v.driverName === user.name) || vehicles.find((v) => v.status === "available") || vehicles[0] || null;
-  const { position, status: posStatus, locate } = useDriverPosition(myVehicle);
+  // Phase 1: the driver sees ONLY their profile and the routes assigned to them (driverId == uid) — enforced by firestore.rules too.
+  const { profile, loading: loadingProfile } = useMyDriverProfile(user?.uid);
+  const { data: myRoutes } = useMyRoutes(user?.uid);
+  const routes = useMemo(() => myRoutes || [], [myRoutes]);
+  const myVehicle = vehicles.find((v) => v.id === profile?.vehicleId) || null;
+  const onShift = profile?.shiftStatus === "on_shift";
+  const toggleShift = async () => {
+    if (!profile) return;
+    setBusy(true);
+    try { await setDriverShift(user.uid, onShift ? "off_shift" : "on_shift", user.name); } finally { setBusy(false); }
+  };
+  const { position, status: posStatus, error: posError, locate } = useDriverPosition(myVehicle, { watch: onShift });
+  const [voiceOn, setVoiceOn] = useState(() => { try { return localStorage.getItem("swm_voice") !== "off"; } catch { return true; } });
+  const [arrived, setArrived] = useState(false);
+  const [recomputeKey, setRecomputeKey] = useState(0);
+  const queueRef = useRef(null);
+  if (!queueRef.current) queueRef.current = createOfflineQueue({ storage: typeof localStorage !== "undefined" ? localStorage : null });
+  const [pendingOffline, setPendingOffline] = useState(() => queueRef.current.size());
 
   // Same scoring inputs as the supervisor dashboard (incl. recent readings for
   // the "soon full" prediction) so both roles see the same ranked list.
@@ -6239,21 +6905,55 @@ const DriverPortal = ({ user, onLogout, vehicles = [], routes = [], bins = [], n
     return bins.map((bin) => ({ bin, priority: getBinPriority(bin, null, readingsByBin[bin.id] || [], ctx.forBin(bin)) }));
   }, [bins, neighborhoods, fireSensors, recentReadings, citizenReports]);
 
+  // Only the driver's coverage scope is ranked (no scope defined yet → everything, so the portal stays usable before setup).
+  const scopeKeys = profile?.neighborhoodKeys || [];
   const ranked = useMemo(() => {
-    const groups = groupNeighborhoodsByName(neighborhoods, bins);
+    const groups = groupNeighborhoodsByName(neighborhoods, bins).filter((g) => scopeKeys.length === 0 || scopeKeys.includes(g.key));
     return rankNeighborhoodsForCollection(groups, scoredBins, routes, {
       thermalAlertFor: makeThermalAlertFor(fireSensors),
       from: position ? { lat: position.lat, lng: position.lng } : null,
       centroidFor: centroidForGroup,
     });
-  }, [neighborhoods, bins, scoredBins, routes, fireSensors, position]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [neighborhoods, bins, scoredBins, routes, fireSensors, position, scopeKeys.join("|")]);
 
   const runnableRoutes = routes.filter((r) => r.status === "approved" || r.status === "in_progress");
   const route = routes.find((r) => r.id === activeRouteId);
   const vehicle = vehicles.find((v) => v.id === route?.vehicleId);
-  const collectedBinIds = route?.collectedBinIds || [];
-  const stops = route?.orderedStops || [];
-  const nextStop = stops.find((s) => !collectedBinIds.includes(s.binId));
+  const collectedBinIds = useMemo(() => route?.collectedBinIds || [], [route]);
+  const skippedIds = useMemo(() => new Set((route?.skippedStops || []).map((s) => s.binId)), [route]);
+  const stops = (route?.orderedStops || []).filter((s) => s.binId);
+  const progress = routeProgress(route);
+  const nextStop = route ? nextStopFor(route) : null;
+  const stopsWithCoords = useMemo(() => routeStopPositions(route, bins, neighborhoods).map((p) => ({ ...p, lat: p.pos[0], lng: p.pos[1], done: collectedBinIds.includes(p.binId), skipped: skippedIds.has(p.binId) })), [route, bins, neighborhoods, collectedBinIds, skippedIds]);
+  const remainingStopsPos = stopsWithCoords.filter((p) => !p.done && !p.skipped && !p.deferred);
+  const nextStopPos = nextStop ? stopsWithCoords.find((p) => p.binId === nextStop.binId) || null : null;
+
+  // Live location → Firestore while on shift and sharing (throttled by time/distance). Wiped at clock-out by setDriverShift.
+  const lastPersistRef = useRef(null);
+  useEffect(() => {
+    if (!onShift || !profile?.locationSharing || posStatus !== "gps" || !position?.at) return;
+    if (!shouldPersistLocation(lastPersistRef.current, position)) return;
+    lastPersistRef.current = position;
+    persistDriverLocation(user.uid, position, route?.status === "in_progress" ? route.id : null).catch((e) => console.warn("[driver-location]", e?.message));
+  }, [position, onShift, profile?.locationSharing, posStatus, user?.uid, route?.id, route?.status]);
+
+  // Offline queue: flush when the connection returns.
+  const flushQueue = useCallback(async () => {
+    const q = queueRef.current;
+    if (q.size() === 0) return;
+    const r = await q.flush(async (op) => {
+      if (op.type === "collect") await confirmCollection(op.payload);
+      else if (op.type === "incident") await reportRouteIncident(op.payload);
+    });
+    setPendingOffline(r.pending);
+  }, []);
+  useEffect(() => {
+    const onOnline = () => flushQueue();
+    window.addEventListener("online", onOnline);
+    flushQueue();
+    return () => window.removeEventListener("online", onOnline);
+  }, [flushQueue]);
 
   const focused = ranked.find((r) => r.group.key === focusKey) || null;
   const focusedFeature = focused ? buraidahNeighborhoodsGeo.features.find((f) => f.properties.baseName === focused.group.key) || null : null;
@@ -6268,32 +6968,44 @@ const DriverPortal = ({ user, onLogout, vehicles = [], routes = [], bins = [], n
   const approachMin = road.route?.legs?.[0]?.durationMin ?? focused?.etaMinutes ?? null;
 
   const handleStart = async () => {
+    if (!can("driver", "routes.execute", { assignedToMe: route.driverId === user.uid })) { alert("هذه الجولة غير مسندة لك."); return; }
+    if (!onShift) { alert("ابدأ مناوبتك أولًا قبل بدء الجولة."); return; }
     setBusy(true);
     try {
       await startRoute(route.id, route.vehicleId);
-      await updateRoute(route.id, { driverId: user.uid, driverName: user.name });
+      await updateRoute(route.id, { driverName: user.name });
       await writeAuditLog("route_started", user.uid, user.name, { routeId: route.id, routeName: route.routeName, by: "driver" });
     } finally { setBusy(false); }
   };
+  // ── Phase 5: field execution. Confirmations are idempotent (event id = routeId__binId),
+  // authorized (assigned driver, active route, bin in route, not already confirmed), carry
+  // the confirmation location+accuracy, and NEVER rewrite the sensor's fill reading.
+  const confirmingRef = useRef(new Set());
   const handleCollected = async (stop) => {
+    const check = canConfirmCollection({ user: { ...user, role: "driver" }, route, binId: stop.binId });
+    if (!check.ok) { alert(check.reason); return; }
+    if (confirmingRef.current.has(stop.binId)) return; // double-tap guard
+    confirmingRef.current.add(stop.binId);
     setBusy(true);
     try {
-      const bin = bins.find((b) => b.id === stop.binId);
-      await recordCollectionEvent(stop.binId, route.id, route.vehicleId, user.uid, bin?.lastFillLevelPercent ?? 0);
-      await updateRoute(route.id, { collectedBinIds: [...collectedBinIds, stop.binId] });
+      const bin = bins.find((b) => b.id === stop.binId) || { id: stop.binId };
+      const confirmation = buildConfirmation({ route, bin, user, position: posStatus === "gps" ? position : null });
+      if (!navigator.onLine) { queueRef.current.enqueue({ id: confirmation.id, type: "collect", payload: confirmation }); setPendingOffline(queueRef.current.size()); return; }
+      try { await confirmCollection(confirmation); }
+      catch (e) { queueRef.current.enqueue({ id: confirmation.id, type: "collect", payload: confirmation }); setPendingOffline(queueRef.current.size()); console.warn("[confirm] queued offline:", e?.message); }
+    } finally { confirmingRef.current.delete(stop.binId); setBusy(false); }
+  };
+  const handleIncident = async (type, stop) => {
+    const t = INCIDENT_TYPES[type];
+    const note = window.prompt(`${t.icon} ${t.label} — ملاحظة (اختياري):`, "") ?? "";
+    setBusy(true);
+    try {
+      const payload = { route, binId: stop?.binId || null, type, note, user: { uid: user.uid, name: user.name }, position: posStatus === "gps" ? position : null };
+      if (!navigator.onLine) { queueRef.current.enqueue({ id: `inc:${route.id}:${stop?.binId || "route"}:${Date.now()}`, type: "incident", payload }); setPendingOffline(queueRef.current.size()); }
+      else await reportRouteIncident(payload);
+      if (t.recompute) setRecomputeKey((k) => k + 1);
+      alert(`تم تسجيل البلاغ وإبلاغ المشرف.${stop ? " الحاوية لم تُعتبر مكتملة ويمكن إعادة إدراجها." : ""}${t.recompute ? " سيُعاد حساب المسار." : ""}`);
     } finally { setBusy(false); }
-  };
-  const handleSkip = async (stop) => {
-    await updateRoute(route.id, { collectedBinIds: [...collectedBinIds, stop.binId] });
-    await writeAuditLog("route_stop_skipped", user.uid, user.name, { routeId: route.id, binId: stop.binId });
-  };
-  const handleFault = async () => {
-    await writeAuditLog("route_fault_reported", user.uid, user.name, { routeId: route.id, routeName: route.routeName });
-    alert("تم تسجيل العطل — سيتم إبلاغ المشرف.");
-  };
-  const handleObstacle = async () => {
-    await writeAuditLog("route_obstacle_reported", user.uid, user.name, { routeId: route.id, routeName: route.routeName });
-    alert("تم تسجيل العائق — سيتم إبلاغ المشرف.");
   };
   const handleFinish = async () => {
     setBusy(true);
@@ -6312,7 +7024,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], routes = [], bins = [], n
     ? { title: "🚦 جولة معتمدة جاهزة للبدء", body: `${item.route.routeName} — ${item.route.orderedStops?.length || 0} توقف` }
     : { title: "🔴 حي يحتاج جمعًا الآن", body: `${item.r.group.name}: ${item.r.criticalCount} حاوية حرجة${item.r.distanceKm != null ? ` · يبعد ${item.r.distanceKm} كم` : ""}` }, []));
 
-  const positionNote = posStatus === "gps" ? "📍 موقعك الحالي عبر GPS" : posStatus === "locating" ? "⏳ جاري تحديد موقعك…" : `📍 ${position.label} — لم يُمنح إذن الموقع`;
+  const positionNote = posStatus === "gps" ? `📍 موقعك الحالي عبر GPS${onShift ? " (تتبع مستمر أثناء المناوبة)" : ""}` : posStatus === "locating" ? "⏳ جاري تحديد موقعك…" : `📍 ${position.label} — ${posError || "لم يُمنح إذن الموقع"}`;
   const btn = (extra) => ({ padding: 11, borderRadius: 10, border: "none", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT, ...extra });
 
   return (
@@ -6322,7 +7034,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], routes = [], bins = [], n
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 800 }}>🚛 بوابة التشغيل الميداني</div>
-            <div style={{ fontSize: 12, color: C.muted }}>{user.name}{myVehicle ? ` · ${myVehicle.vehicleNumber}` : ""}</div>
+            <div style={{ fontSize: 12, color: C.muted }}>{profile?.fullName || user.name}{profile?.driverCode ? ` · ${profile.driverCode}` : ""}{myVehicle ? ` · ${myVehicle.vehicleNumber}` : " · بلا مركبة مسندة"}</div>
           </div>
           <button onClick={onLogout} style={{ padding: "8px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>خروج</button>
         </div>
@@ -6331,6 +7043,20 @@ const DriverPortal = ({ user, onLogout, vehicles = [], routes = [], bins = [], n
           <span>{positionNote}</span>
           <button onClick={locate} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, color: C.info, fontSize: 11, cursor: "pointer", padding: "4px 10px", fontFamily: ARABIC_FONT }}>تحديث موقعي</button>
         </div>
+        {!loadingProfile && !profile && (
+          <div style={{ marginBottom: 12, fontSize: 12, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 10, padding: "10px 12px" }}>
+            ⚠️ لم يُهيأ ملفك كسائق بعد — اطلب من المشرف تهيئته من صفحة «السائقون والأسطول» (المركبة ونطاق الأحياء).
+          </div>
+        )}
+        {profile && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, background: C.card, border: `1px solid ${onShift ? C.accent + "60" : C.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 8, flexWrap: "wrap", fontSize: 12 }}>
+            <div style={{ color: C.muted, lineHeight: 1.8 }}>
+              <b style={{ color: onShift ? C.accent : C.text }}>{SHIFT_STATUS_LABELS[profile.shiftStatus] || profile.shiftStatus}</b> · {AVAILABILITY_LABELS[profile.availability] || "—"}<br />
+              النطاق: {(profile.neighborhoodKeys || []).length ? profile.neighborhoodKeys.map((k) => `حي ${k}`).join("، ") : "غير محدد"}{profile.shiftStart ? ` · المناوبة ${profile.shiftStart}–${profile.shiftEnd}` : ""}
+            </div>
+            <button disabled={busy} onClick={toggleShift} style={btn({ padding: "8px 14px", background: onShift ? C.danger + "20" : C.accent, color: onShift ? C.danger : "#07231A", border: onShift ? `1px solid ${C.danger}` : "none", fontSize: 12 })}>{onShift ? "⏹ إنهاء المناوبة" : "▶️ بدء المناوبة"}</button>
+          </div>
+        )}
         <div style={{ marginBottom: 14 }}><NotificationPermissionButton compact /></div>
 
         {route ? (
@@ -6345,41 +7071,45 @@ const DriverPortal = ({ user, onLogout, vehicles = [], routes = [], bins = [], n
               )}
             </div>
 
-            <FieldRouteMap position={position} feature={null} stops={routeStopPositions(route, bins, neighborhoods).map((p) => ({ ...p, lat: p.pos[0], lng: p.pos[1], fillLevelPercent: p.bin.lastFillLevelPercent }))} allBins={[]} height={260} />
+            {route.status !== "in_progress" && (
+              <FieldRouteMap position={position} feature={null} stops={stopsWithCoords.map((p) => ({ ...p, fillLevelPercent: p.bin.lastFillLevelPercent }))} allBins={[]} height={260} />
+            )}
 
             {route.status === "in_progress" && (
               <>
+                {pendingOffline > 0 && <div style={{ fontSize: 12, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 10, padding: "8px 12px" }}>📶 {pendingOffline} عملية محفوظة دون اتصال — ستُرسل تلقائيًا عند عودة الشبكة.</div>}
+                <NavigationView position={position} posStatus={posStatus} remainingStops={remainingStopsPos} nextStop={nextStopPos} allStops={stopsWithCoords} onArrivedChange={setArrived} voiceOn={voiceOn} onToggleVoice={() => setVoiceOn((v) => { try { localStorage.setItem("swm_voice", v ? "off" : "on"); } catch { /* ignore */ } return !v; })} recomputeKey={recomputeKey} />
+
                 {nextStop ? (
-                  <div style={{ background: C.card, border: `2px solid ${C.info}`, borderRadius: 14, padding: 16 }}>
-                    <div style={{ fontSize: 11, color: C.info, marginBottom: 4 }}>التوقف التالي — #{nextStop.order} من {stops.length}</div>
+                  <div style={{ background: C.card, border: `2px solid ${arrived ? C.accent : C.info}`, borderRadius: 14, padding: 16 }}>
+                    <div style={{ fontSize: 11, color: arrived ? C.accent : C.info, marginBottom: 4 }}>{arrived ? "✅ وصلت — " : ""}التوقف التالي — #{nextStop.order} من {stops.length}{nextStop.deferred ? " · مؤجَّل (تجاوز السعة)" : ""}</div>
                     <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>{nextStop.binName}</div>
                     {(() => {
                       const bin = bins.find((b) => b.id === nextStop.binId);
                       const n = neighborhoods.find((n2) => n2.id === bin?.neighborhoodId);
-                      const d = bin?.lat != null && position ? haversineDistanceKm(position.lat, position.lng, bin.lat, bin.lng) : null;
+                      const d = nextStopPos && posStatus === "gps" ? distanceM(position, nextStopPos) : null;
                       return (
                         <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
-                          الحي: {n?.name || "—"} · الامتلاء: {bin?.lastFillLevelPercent != null ? `${bin.lastFillLevelPercent}%` : "—"} · الأولوية: {STATE_LABELS[nextStop.priorityTier] || nextStop.priorityTier}
-                          {d != null && <span> · يبعد {Math.round(d * 10) / 10} كم</span>}
+                          الحي: {n?.name || "—"} · الامتلاء (آخر قراءة): {bin?.lastFillLevelPercent != null ? `${bin.lastFillLevelPercent}%` : "—"} · الأولوية: {STATE_LABELS[nextStop.priorityTier] || nextStop.priorityTier}
+                          {d != null && <span> · المسافة المتبقية {formatDistanceAr(d)}</span>}
                         </div>
                       );
                     })()}
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                      <button disabled={busy} onClick={() => handleCollected(nextStop)} style={btn({ flex: "1 1 120px", background: C.accent, color: "#07231A" })}>✅ تم التفريغ</button>
-                      <button disabled={busy} onClick={() => handleSkip(nextStop)} style={btn({ flex: "1 1 100px", border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12 })}>تخطي الحاوية</button>
+                    <button disabled={busy} onClick={() => handleCollected(nextStop)} style={btn({ width: "100%", padding: 14, fontSize: 15, background: C.accent, color: "#07231A" })}>✅ تم التفريغ</button>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 8 }}>
+                      {Object.entries(INCIDENT_TYPES).map(([k, t]) => (
+                        <button key={k} disabled={busy} onClick={() => handleIncident(k, nextStop)} style={btn({ padding: 9, border: `1px solid ${C.warning}`, background: C.warning + "15", color: C.warning, fontSize: 11.5, fontWeight: 600 })}>{t.icon} {t.label.split(" (")[0]}</button>
+                      ))}
                     </div>
-                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                      <button onClick={handleFault} style={btn({ flex: 1, padding: 9, border: `1px solid ${C.warning}`, background: C.warning + "15", color: C.warning, fontSize: 12, fontWeight: 600 })}>⚠️ يوجد عطل</button>
-                      <button onClick={handleObstacle} style={btn({ flex: 1, padding: 9, border: `1px solid ${C.warning}`, background: C.warning + "15", color: C.warning, fontSize: 12, fontWeight: 600 })}>🚧 يوجد عائق</button>
-                    </div>
+                    <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6 }}>تأكيد التفريغ يسجّل الوقت وموقعك ودقته، ولا يغيّر قراءة المستشعر — تتحدث عند وصول قراءة جديدة من الجهاز.</div>
                   </div>
                 ) : (
-                  <EmptyState icon="🎉" title="تم الوصول لجميع التوقفات" desc="يمكنك الآن إنهاء الجولة." />
+                  <EmptyState icon="🎉" title={progress.skipped > 0 ? `اكتملت التوقفات المتاحة — ${progress.skipped} متخطاة ببلاغ` : "تم الوصول لجميع التوقفات"} desc="يمكنك الآن إنهاء الجولة." />
                 )}
                 <div>
-                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>التقدم: {collectedBinIds.length} / {stops.length}</div>
+                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>التقدم: {progress.collected} / {progress.total} جُمعت{progress.skipped > 0 ? ` · ${progress.skipped} متخطاة` : ""} · {progress.remaining} متبقية</div>
                   <div style={{ height: 8, background: C.card, borderRadius: 4, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${stops.length ? (collectedBinIds.length / stops.length) * 100 : 0}%`, background: C.accent, transition: "width .3s" }} />
+                    <div style={{ height: "100%", width: `${progress.pct}%`, background: C.accent, transition: "width .3s" }} />
                   </div>
                 </div>
                 <button disabled={busy} onClick={handleFinish} style={btn({ padding: 12, background: C.info, color: "#fff" })}>إنهاء الجولة</button>
@@ -6391,9 +7121,10 @@ const DriverPortal = ({ user, onLogout, vehicles = [], routes = [], bins = [], n
               {stops.map((s) => {
                 const bin = bins.find((b) => b.id === s.binId);
                 const done = collectedBinIds.includes(s.binId);
+                const skipped = skippedIds.has(s.binId);
                 return (
                   <div key={s.binId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12, opacity: done ? 0.5 : 1 }}>
-                    <span>{done ? "✅" : `#${s.order}`} {s.binName}</span>
+                    <span>{done ? "✅" : skipped ? "🚧" : `#${s.order}`} {s.binName}{skipped && <span style={{ color: C.warning, fontSize: 10.5 }}> (متخطاة — بلاغ)</span>}{s.deferred && !done && <span style={{ color: C.dim, fontSize: 10.5 }}> (مؤجَّل)</span>}</span>
                     <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                       <b style={{ color: STATUS_COLORS[s.priorityTier] || C.text }}>{bin?.lastFillLevelPercent != null ? `${bin.lastFillLevelPercent}%` : "—"}</b>
                       <StateBadge state={s.priorityTier} />
@@ -6466,7 +7197,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], routes = [], bins = [], n
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <NeedsCollectionBanner ranked={ranked} compact onSelect={(r) => setFocusKey(r.group.key)} />
+            <NeedsCollectionBanner ranked={ranked} compact onSelect={(r) => setFocusKey(r.group.key)} noRouteLabel="بانتظار إسناد من المشرف" />
 
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🚦 جولاتي المعتمدة / النشطة</div>
@@ -7136,9 +7867,13 @@ function SmartWasteManagement() {
   const { bins, loading: loadingBins } = useBins();
   const { readings: recentReadings } = useRecentReadings();
   const { vehicles, loading: loadingVehicles } = useVehicles();
-  const { routes, loading: loadingRoutes } = useCollectionRoutes();
+  const isDriverAccount = userData?.role === "driver";
+  const { routes, loading: loadingRoutes } = useCollectionRoutes(!isDriverAccount);
   const { events: collectionEvents } = useCollectionEvents();
-  const { auditLog } = useAuditLog();
+  const { auditLog } = useAuditLog(!isDriverAccount);
+  const { profiles: driverProfiles } = useDriverProfiles(!isDriverAccount && userData?.role !== "citizen");
+  const { incidents: routeIncidents } = useRouteIncidents(!isDriverAccount && userData?.role !== "citizen");
+  const { assignments: vehicleAssignments } = useDriverVehicleAssignments(!isDriverAccount && userData?.role !== "citizen");
   const { data: _citizenReportsCol } = useCollection(COLLECTIONS.CITIZEN_REPORTS);
   const citizenReports = useMemo(() => _citizenReportsCol || [], [_citizenReportsCol]);
 
@@ -7245,9 +7980,12 @@ function SmartWasteManagement() {
   const staffNotifItems = useMemo(() => [
     ...(realAlerts || []).filter((a) => a.severity === "high" || a.severity === "critical").map((a) => ({ key: `alert:${a.id}`, kind: "alert", alert: a })),
     ...routes.filter((r) => r.status === "suggested").map((r) => ({ key: `suggested:${r.id}`, kind: "route", route: r })),
-  ], [realAlerts, routes]);
+    ...(routeIncidents || []).filter((i) => i.status === "open").map((i) => ({ key: `incident:${i.id}`, kind: "incident", inc: i })),
+  ], [realAlerts, routes, routeIncidents]);
   useBrowserNotifications(staffNotifItems, useCallback((item) => item.kind === "alert"
     ? { title: `🔴 ${ALERT_TYPE_LABELS[item.alert.type] || "تنبيه حرج"}`, body: item.alert.message }
+    : item.kind === "incident"
+    ? { title: `🚧 بلاغ من السائق ${item.inc.driverName || ""}`, body: `${INCIDENT_TYPES[item.inc.type]?.label || item.inc.type} — ${item.inc.routeName || ""}` }
     : { title: "🧭 جولة مقترحة جديدة بانتظار اعتمادك", body: `${item.route.routeName} — ${item.route.binIds?.length || 0} حاوية` }, []),
     !!userData && userData.role !== "citizen" && userData.role !== "driver");
 
@@ -7310,7 +8048,7 @@ function SmartWasteManagement() {
     return (
       <DriverPortal
         user={loggedInUser} onLogout={handleLogout}
-        vehicles={vehicles} routes={routes} bins={bins} neighborhoods={neighborhoods} fireSensors={fireSensors} recentReadings={recentReadings} citizenReports={citizenReports}
+        vehicles={vehicles} bins={bins} neighborhoods={neighborhoods} fireSensors={fireSensors} recentReadings={recentReadings} citizenReports={citizenReports}
       />
     );
   }
@@ -7322,6 +8060,8 @@ function SmartWasteManagement() {
     { key: "neighborhoods", label: "الأحياء",         icon: <Home size={20} /> },
     { key: "bins",      label: "الحاويات الذكية",     icon: <Trash2 size={20} /> },
     { key: "control",   label: "إدارة الجولات",       icon: <RouteIcon size={20} /> },
+    { key: "drivers",   label: "السائقون والأسطول",    icon: <Truck size={20} /> },
+    { key: "fleet",     label: "متابعة الأسطول",        icon: <Radio size={20} /> },
     { key: "requests",  label: "الطلبات والبلاغات",   icon: <Inbox size={20} /> },
     { key: "fire",      label: "التنبيهات الحرارية",  icon: <Flame size={20} /> },
     { key: "predictions", label: "التنبؤات",          icon: <Sparkles size={20} /> },
@@ -7529,12 +8269,14 @@ function SmartWasteManagement() {
           {page === "map"         && <MapPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods || loadingBins} onViewBins={goToBins} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} initialSelectedKey={mapInitialKey} />}
           {page === "neighborhoods" && <NeighborhoodsPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods} onViewBins={goToBins} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
           {page === "bins"        && <BinsPage neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} loading={loadingBins} initialNeighborhoodId={binsNeighborhoodFilter} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} />}
-          {page === "control"    && <RouteManagementPage neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} vehicles={vehicles} routes={routes} loadingVehicles={loadingVehicles} loadingRoutes={loadingRoutes} loggedInUser={loggedInUser} draftBinId={routeDraftBinId} onConsumeDraftBin={() => setRouteDraftBinId(null)} initialRouteId={routeInitialId} onConsumeInitialRoute={() => setRouteInitialId(null)} onShowOnMap={goToMapNeighborhood} />}
+          {page === "control"    && <RouteManagementPage neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} vehicles={vehicles} routes={routes} driverProfiles={driverProfiles} loadingVehicles={loadingVehicles} loadingRoutes={loadingRoutes} loggedInUser={loggedInUser} draftBinId={routeDraftBinId} onConsumeDraftBin={() => setRouteDraftBinId(null)} initialRouteId={routeInitialId} onConsumeInitialRoute={() => setRouteInitialId(null)} onShowOnMap={goToMapNeighborhood} />}
           {page === "requests"   && <RequestsManagementPage />}
           {page === "fire"       && <FireAlertPage stations={stations} fireSensors={fireSensors} fireTempHistory={fireTempHistory} fireWeekly={fireWeeklyData} />}
           {page === "predictions" && <PredictionsPage stations={stations} neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} />}
           {page === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} bins={bins} neighborhoods={neighborhoods} routes={routes} collectionEvents={collectionEvents} vehicles={vehicles} auditLog={auditLog} fireSensors={fireSensors} citizenReports={citizenReports} />}
           {page === "settings"   && <SettingsPage bins={bins} loggedInUser={loggedInUser} autoSyncRoutes={autoSyncRoutes} onToggleAutoSync={toggleAutoSync} />}
+          {page === "fleet"      && <FleetMonitorPage profiles={driverProfiles} vehicles={vehicles} routes={routes} incidents={routeIncidents} bins={bins} neighborhoods={neighborhoods} loggedInUser={loggedInUser} />}
+          {page === "drivers"    && <DriversPage profiles={driverProfiles} assignments={vehicleAssignments} vehicles={vehicles} loggedInUser={loggedInUser} />}
           {page === "audit"      && <AuditLogPage auditLog={auditLog} />}
         </div>
       </main>

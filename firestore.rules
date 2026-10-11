@@ -65,18 +65,64 @@ service cloud.firestore {
     }
 
     match /vehicles/{id} { allow read: if isStaff(); allow write: if isEmployee(); }
+    match /route_bins/{id} { allow read: if isStaff(); allow write: if isEmployee(); } // declared, currently unused
+
+    // ── Fleet platform (Phase 1) — mirrors src/fleetEngine.js can() ──
+    // Driver profile: id == auth uid. Employees manage it; the driver may
+    // only flip their own shift/availability/location fields.
+    match /driver_profiles/{uid} {
+      allow read: if isEmployee() || (isDriver() && request.auth.uid == uid);
+      allow create, delete: if isEmployee();
+      allow update: if isEmployee()
+                    || (isDriver() && request.auth.uid == uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["shiftStatus", "availability", "locationSharing", "lastLocation", "updatedAt"]));
+    }
+    // Time-windowed vehicle ↔ driver assignments: append/close by employees only; history is never deleted.
+    match /driver_vehicle_assignments/{id} { allow read: if isStaff(); allow create, update: if isEmployee(); allow delete: if false; }
+    match /driver_assignment_history/{id}  { allow read: if isEmployee(); allow create: if isEmployee(); allow update, delete: if false; }
+    // Shift records: a driver writes their own clock-in/out; employees read.
+    match /driver_shifts/{id} {
+      allow read: if isEmployee() || (isDriver() && resource.data.driverId == request.auth.uid);
+      allow create: if isDriver() && request.resource.data.driverId == request.auth.uid;
+      allow update, delete: if false;
+    }
 
     match /collection_routes/{id} {
-      allow read: if isStaff();
+      // A driver reads ONLY routes assigned to them (driverId == uid); list queries must filter on driverId.
+      allow read: if isEmployee() || (isDriver() && resource.data.driverId == request.auth.uid);
       allow create, delete: if isEmployee();
-      // Drivers advance only the execution fields of a route; approval/rejection stays with employees.
+      // Drivers advance only the execution fields of THEIR OWN approved/active route; approval/assignment stays with employees.
       allow update: if isEmployee()
-                    || (isDriver() && resource.data.status in ["approved", "in_progress"]
-                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "startedAt", "completedAt", "collectedBinIds"])
+                    || (isDriver() && resource.data.driverId == request.auth.uid
+                        && resource.data.status in ["approved", "in_progress"]
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "startedAt", "completedAt", "collectedBinIds", "skippedStops", "lastProgressAt", "driverName", "liveRoad"])
                         && request.resource.data.status in ["in_progress", "completed"]);
     }
 
-    match /collection_events/{id} { allow read: if isStaff(); allow create: if isStaff(); allow update, delete: if false; }
+    // Collection events: operational confirmations. A driver may write only events
+    // carrying their own uid on a route assigned to them; id = routeId__binId keeps
+    // retries idempotent (set-merge on the same doc). Never deletable.
+    match /collection_events/{id} {
+      allow read: if isStaff();
+      allow create, update: if isEmployee()
+                    || (isDriver() && request.resource.data.driverId == request.auth.uid
+                        && get(/databases/$(database)/documents/collection_routes/$(request.resource.data.routeId)).data.driverId == request.auth.uid);
+      allow delete: if false;
+    }
+    // Incidents: drivers open them on their own routes; employees review/resolve.
+    match /route_incidents/{id} {
+      allow read: if isEmployee() || (isDriver() && resource.data.driverId == request.auth.uid);
+      allow create: if isEmployee() || (isDriver() && request.resource.data.driverId == request.auth.uid);
+      allow update: if isEmployee();
+      allow delete: if false;
+    }
+    // Live location pings: a driver appends their own; employees read; nobody edits.
+    match /driver_locations/{id} {
+      allow read: if isEmployee();
+      allow create: if isDriver() && request.resource.data.driverId == request.auth.uid;
+      allow update, delete: if false;
+    }
+    match /vehicle_status_history/{id} { allow read: if isStaff(); allow create: if isStaff(); allow update, delete: if false; }
     match /audit_log/{id}         { allow read: if isEmployee(); allow create: if isStaff(); allow update, delete: if false; }
     match /alerts/{id}            { allow read: if isStaff(); allow write: if isEmployee(); }
     match /fire_sensors/{id}      { allow read: if signedIn(); allow write: if isEmployee(); }

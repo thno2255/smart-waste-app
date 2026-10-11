@@ -14,7 +14,7 @@ import { useState, useEffect } from "react";
 import {
   collection, addDoc, updateDoc, deleteDoc,
   doc, onSnapshot, query, where, orderBy,
-  getDoc, getDocs, setDoc, writeBatch,
+  getDoc, getDocs, setDoc, writeBatch, arrayUnion,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { getStatus, getStatusColor, getBinStatus, THRESHOLDS } from "./config";
@@ -75,7 +75,7 @@ export { getStatus, getStatusColor, getBinStatus };
  */
 export function useCollection(col, sortField = "createdAt") {
   const [data, setData]       = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!!col); // a disabled hook (col=null) is never "loading"
   const [error, setError]     = useState(null);
 
   useEffect(() => {
@@ -669,9 +669,10 @@ export const deleteVehicle = (id) => deleteItem(COLLECTIONS.VEHICLES, id);
 //    every later transition requires an explicit employee/driver action
 //    from the UI, never a side effect of a snapshot listener.
 // ══════════════════════════════════════════════════════════════════════
-export function useCollectionRoutes() {
-  const { data, loading, error } = useCollection(COLLECTIONS.COLLECTION_ROUTES);
-  return { routes: data, loading, error };
+/** All routes — staff only. Pass enabled=false for driver accounts (rules deny the unscoped list; drivers use useMyRoutes). */
+export function useCollectionRoutes(enabled = true) {
+  const { data, loading, error } = useCollection(enabled ? COLLECTIONS.COLLECTION_ROUTES : null);
+  return { routes: data, loading: enabled ? loading : false, error };
 }
 
 /** Persists engine-recommended routes as "suggested" — skips any route whose binIds set already matches an existing open (non-completed/rejected) suggestion, so re-running the engine doesn't spam duplicates. */
@@ -768,8 +769,8 @@ export const recordCollectionEvent = async (binId, routeId, vehicleId, operatorI
 // ══════════════════════════════════════════════════════════════════════
 // 20. Audit log — §37
 // ══════════════════════════════════════════════════════════════════════
-export function useAuditLog() {
-  const { data, loading, error } = useCollection(COLLECTIONS.AUDIT_LOG);
+export function useAuditLog(enabled = true) {
+  const { data, loading, error } = useCollection(enabled ? COLLECTIONS.AUDIT_LOG : null);
   return { auditLog: data, loading, error };
 }
 
@@ -874,3 +875,183 @@ export const rotateDeviceKey = async (deviceDocId) => {
 
 export const setDeviceDisabled = (deviceDocId, disabled) =>
   updateItem(COLLECTIONS.IOT_DEVICES, deviceDocId, { disabled: !!disabled });
+
+// ══════════════════════════════════════════════════════════════════════
+// 24. Fleet platform — Phase 1: driver profiles, vehicle assignments,
+//     shifts, and driver-scoped route reads. Rules in src/fleetEngine.js;
+//     enforcement mirrored in firestore.rules (deploy explicitly).
+// ══════════════════════════════════════════════════════════════════════
+COLLECTIONS.DRIVER_PROFILES = "driver_profiles";                 // one doc per driver, id = auth uid
+COLLECTIONS.DRIVER_VEHICLE_ASSIGNMENTS = "driver_vehicle_assignments"; // time-windowed history, never deleted
+COLLECTIONS.DRIVER_ASSIGNMENT_HISTORY = "driver_assignment_history";  // coverage/vehicle/shift changes with before/after
+COLLECTIONS.DRIVER_SHIFTS = "driver_shifts";                     // clock-in / clock-out records
+
+export function useDriverProfiles(enabled = true) {
+  const { data, loading, error } = useCollection(enabled ? COLLECTIONS.DRIVER_PROFILES : null, "fullName");
+  return { profiles: data, loading, error };
+}
+export function useDriverVehicleAssignments(enabled = true) {
+  const { data, loading, error } = useCollection(enabled ? COLLECTIONS.DRIVER_VEHICLE_ASSIGNMENTS : null, "start");
+  return { assignments: data, loading, error };
+}
+export function useDriverAssignmentHistory(driverId) {
+  return useCollectionWhere(COLLECTIONS.DRIVER_ASSIGNMENT_HISTORY, "driverId", driverId || null);
+}
+/** A driver's own profile (live). */
+export function useMyDriverProfile(uid) {
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(!!uid);
+  useEffect(() => {
+    if (!uid) return;
+    const unsub = onSnapshot(doc(db, COLLECTIONS.DRIVER_PROFILES, uid), (snap) => { setProfile(snap.exists() ? { id: snap.id, ...snap.data() } : null); setLoading(false); }, () => setLoading(false));
+    return () => unsub();
+  }, [uid]);
+  return { profile, loading };
+}
+/** Routes assigned to THIS driver only (driverId == uid) — the only route query a driver account is allowed to run. */
+export function useMyRoutes(uid) {
+  return useCollectionWhere(COLLECTIONS.COLLECTION_ROUTES, "driverId", uid || null);
+}
+
+/** Creates/refreshes the profile shell for a users/{uid} doc with role=driver. Idempotent. */
+export const ensureDriverProfile = async (userDoc) => {
+  const ref = doc(db, COLLECTIONS.DRIVER_PROFILES, userDoc.uid);
+  const snap = await getDoc(ref);
+  if (snap.exists()) return snap.data();
+  const data = {
+    uid: userDoc.uid, driverCode: null, fullName: userDoc.fullName || "", phone: userDoc.phone || "", email: userDoc.email || "",
+    accountStatus: userDoc.status || "pending", shiftStatus: "off_shift", availability: "available",
+    vehicleId: null, neighborhoodKeys: [], shiftStart: null, shiftEnd: null,
+    locationSharing: false, lastLocation: null, currentRouteId: null,
+    stats: { routesCompleted: 0, binsCollected: 0 },
+    createdAt: ts(), updatedAt: ts(),
+  };
+  await setDoc(ref, data);
+  return data;
+};
+
+/** Admin update of profile fields + history row + audit. `patch` is already validated by fleetEngine.validateDriverProfile. */
+export const updateDriverProfile = async (driverId, patch, before, actor, reason = "") => {
+  const changed = Object.keys(patch).filter((k) => JSON.stringify(patch[k]) !== JSON.stringify(before?.[k]));
+  const batch = writeBatch(db);
+  batch.set(doc(db, COLLECTIONS.DRIVER_PROFILES, driverId), { ...patch, updatedAt: ts() }, { merge: true });
+  if (changed.length) {
+    batch.set(doc(collection(db, COLLECTIONS.DRIVER_ASSIGNMENT_HISTORY)), {
+      driverId, fields: changed, before: Object.fromEntries(changed.map((k) => [k, before?.[k] ?? null])), after: Object.fromEntries(changed.map((k) => [k, patch[k] ?? null])),
+      actorId: actor?.uid || "", actorName: actor?.name || "", reason, createdAt: ts(),
+    });
+    batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "driver_profile_updated", actorId: actor?.uid || "", actorName: actor?.name || "", details: { driverId, fields: changed, reason }, createdAt: ts() });
+  }
+  await batch.commit();
+};
+
+/** Time-windowed vehicle assignment. Caller MUST have run fleetEngine.findVehicleAssignmentConflicts first; this re-checks nothing. */
+export const assignVehicleToDriver = async ({ driverId, driverName, vehicleId, vehicleNumber, start, end = null }, actor, reason = "") => {
+  const batch = writeBatch(db);
+  const ref = doc(collection(db, COLLECTIONS.DRIVER_VEHICLE_ASSIGNMENTS));
+  batch.set(ref, { driverId, driverName: driverName || "", vehicleId, vehicleNumber: vehicleNumber || "", start, end, active: true, assignedBy: actor?.uid || "", assignedByName: actor?.name || "", reason, createdAt: ts() });
+  batch.set(doc(db, COLLECTIONS.DRIVER_PROFILES, driverId), { vehicleId, updatedAt: ts() }, { merge: true });
+  if ((await getDoc(doc(db, COLLECTIONS.VEHICLES, vehicleId))).exists()) batch.update(doc(db, COLLECTIONS.VEHICLES, vehicleId), { driverId, driverName: driverName || null });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "driver_vehicle_assigned", actorId: actor?.uid || "", actorName: actor?.name || "", details: { driverId, vehicleId, start, end, reason }, createdAt: ts() });
+  await batch.commit();
+  return ref.id;
+};
+export const endVehicleAssignment = async (assignment, actor, reason = "") => {
+  const batch = writeBatch(db);
+  batch.update(doc(db, COLLECTIONS.DRIVER_VEHICLE_ASSIGNMENTS, assignment.id), { active: false, end: ts(), endedBy: actor?.uid || "", endReason: reason });
+  batch.set(doc(db, COLLECTIONS.DRIVER_PROFILES, assignment.driverId), { vehicleId: null, updatedAt: ts() }, { merge: true });
+  // The vehicle may have been deleted since the assignment was made — closing the assignment must still succeed.
+  if ((await getDoc(doc(db, COLLECTIONS.VEHICLES, assignment.vehicleId))).exists()) batch.update(doc(db, COLLECTIONS.VEHICLES, assignment.vehicleId), { driverId: null, driverName: null });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "driver_vehicle_unassigned", actorId: actor?.uid || "", actorName: actor?.name || "", details: { driverId: assignment.driverId, vehicleId: assignment.vehicleId, reason }, createdAt: ts() });
+  await batch.commit();
+};
+
+/** Driver clock-in / clock-out (own profile only — enforced by rules). Location sharing is ON only while on shift. */
+export const setDriverShift = async (uid, shiftStatus, actorName = "") => {
+  const batch = writeBatch(db);
+  const patch = { shiftStatus, updatedAt: ts() };
+  if (shiftStatus === "on_shift") { patch.locationSharing = true; patch.availability = "available"; }
+  if (shiftStatus === "off_shift") { patch.locationSharing = false; patch.lastLocation = null; patch.availability = "unavailable"; } // location retention: wiped at clock-out
+  batch.set(doc(db, COLLECTIONS.DRIVER_PROFILES, uid), patch, { merge: true });
+  batch.set(doc(collection(db, COLLECTIONS.DRIVER_SHIFTS)), { driverId: uid, status: shiftStatus, at: ts(), createdAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: shiftStatus === "on_shift" ? "driver_clocked_in" : shiftStatus === "off_shift" ? "driver_clocked_out" : "driver_break", actorId: uid, actorName, details: {}, createdAt: ts() });
+  await batch.commit();
+};
+export const setDriverAvailability = (uid, availability) =>
+  setDoc(doc(db, COLLECTIONS.DRIVER_PROFILES, uid), { availability, updatedAt: ts() }, { merge: true });
+
+/** Approve + assign in one write: the route carries driverId/vehicleId so the driver's scoped query sees it. */
+export const approveAndAssignRoute = (id, uid, { driverId, driverName, vehicleId }, exceptional = null) =>
+  updateItem(COLLECTIONS.COLLECTION_ROUTES, id, {
+    status: "approved", approvedBy: uid, approvedAt: ts(), vehicleId, driverId, driverName: driverName || null,
+    assignmentException: exceptional ? { reason: exceptional.reason, by: uid, at: ts() } : null,
+  });
+
+// ══════════════════════════════════════════════════════════════════════
+// 25. Fleet platform — Phases 4/5: field execution, incidents, live locations.
+// ══════════════════════════════════════════════════════════════════════
+COLLECTIONS.ROUTE_INCIDENTS = "route_incidents";
+COLLECTIONS.DRIVER_LOCATIONS = "driver_locations";
+COLLECTIONS.VEHICLE_STATUS_HISTORY = "vehicle_status_history";
+
+export function useRouteIncidents(enabled = true) {
+  const { data, loading, error } = useCollection(enabled ? COLLECTIONS.ROUTE_INCIDENTS : null);
+  return { incidents: data, loading, error };
+}
+
+/**
+ * Idempotent collection confirmation: the event doc id is routeId__binId, so a
+ * repeated tap (or an offline replay) overwrites the same doc instead of
+ * creating a second event. Updates ONLY operational fields on the bin
+ * (lastCollectionAt) — the measured fill level is never touched here.
+ */
+export const confirmCollection = async (confirmation) => {
+  const batch = writeBatch(db);
+  batch.set(doc(db, COLLECTIONS.COLLECTION_EVENTS, confirmation.id), { ...confirmation, collectedAt: confirmation.confirmedAt, createdAt: ts() }, { merge: true });
+  batch.update(doc(db, COLLECTIONS.COLLECTION_ROUTES, confirmation.routeId), { collectedBinIds: arrayUnion(confirmation.binId), lastProgressAt: ts() });
+  batch.update(doc(db, COLLECTIONS.BINS, confirmation.binId), { lastCollectionAt: confirmation.confirmedAt });
+  await batch.commit();
+  return confirmation.id;
+};
+
+/** Driver reports an obstacle/fault/unreachable stop: incident doc + the stop moves to skippedStops (never to collected). */
+export const reportRouteIncident = async ({ route, binId = null, type, note = "", user, position }) => {
+  const incRef = doc(collection(db, COLLECTIONS.ROUTE_INCIDENTS));
+  const batch = writeBatch(db);
+  batch.set(incRef, {
+    routeId: route.id, routeName: route.routeName || "", binId, driverId: user.uid, driverName: user.name || "", vehicleId: route.vehicleId || null,
+    type, note, status: "open", reviewedBy: null, reviewedAt: null, resolution: "",
+    location: position?.lat != null ? { lat: position.lat, lng: position.lng, accuracyM: position.accuracy ?? null } : null,
+    createdAt: ts(),
+  });
+  if (binId) batch.update(doc(db, COLLECTIONS.COLLECTION_ROUTES, route.id), { skippedStops: arrayUnion({ binId, reason: type, incidentId: incRef.id, note, at: ts() }), lastProgressAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: `route_${type === "fault" ? "fault" : type === "obstacle" ? "obstacle" : "unreachable"}_reported`, actorId: user.uid, actorName: user.name || "", details: { routeId: route.id, routeName: route.routeName, binId, incidentId: incRef.id, note }, createdAt: ts() });
+  await batch.commit();
+  return incRef.id;
+};
+export const reviewRouteIncident = (id, uid, status, resolution = "") =>
+  updateItem(COLLECTIONS.ROUTE_INCIDENTS, id, { status, reviewedBy: uid, reviewedAt: ts(), resolution });
+/** Put a skipped stop back in the queue (admin or driver re-attempt). */
+export const reinstateRouteStop = (routeId, skippedStops) => updateItem(COLLECTIONS.COLLECTION_ROUTES, routeId, { skippedStops });
+
+/**
+ * Live location while ON SHIFT only: profile.lastLocation (latest, for the fleet
+ * map) + an append-only ping in driver_locations (route replay). Retention: the
+ * profile copy is wiped at clock-out; pings carry `expiresAt` (7 days) for a
+ * scheduled cleanup/TTL policy.
+ */
+export const persistDriverLocation = async (uid, loc, routeId = null) => {
+  const at = loc.at || new Date().toISOString();
+  const batch = writeBatch(db);
+  batch.set(doc(db, COLLECTIONS.DRIVER_PROFILES, uid), { lastLocation: { lat: loc.lat, lng: loc.lng, accuracyM: loc.accuracy ?? null, heading: loc.heading ?? null, speedMps: loc.speed ?? null, at }, updatedAt: ts() }, { merge: true });
+  batch.set(doc(collection(db, COLLECTIONS.DRIVER_LOCATIONS)), { driverId: uid, routeId, lat: loc.lat, lng: loc.lng, accuracyM: loc.accuracy ?? null, heading: loc.heading ?? null, speedMps: loc.speed ?? null, at, expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(), createdAt: ts() });
+  await batch.commit();
+};
+
+/** Vehicle status changes are kept as history (who/when/why). */
+export const setVehicleStatusWithHistory = async (vehicleId, from, to, actor, reason = "", currentRouteId = null) => {
+  const batch = writeBatch(db);
+  batch.update(doc(db, COLLECTIONS.VEHICLES, vehicleId), { status: to, currentRouteId, lastActiveAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.VEHICLE_STATUS_HISTORY)), { vehicleId, from, to, actorId: actor?.uid || "", actorName: actor?.name || "", reason, createdAt: ts() });
+  await batch.commit();
+};

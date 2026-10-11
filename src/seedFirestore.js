@@ -663,11 +663,17 @@ async function removePreviousDemoData() {
   const demoBins = await getDocs(query(collection(db, COLLECTIONS.BINS), where("demo", "==", true)));
   demoBins.docs.forEach((d) => deletedBinIds.add(d.id));
 
-  for (const col of [COLLECTIONS.BINS, COLLECTIONS.IOT_DEVICES, COLLECTIONS.SENSOR_READINGS, COLLECTIONS.VEHICLES]) {
+  for (const col of [COLLECTIONS.BINS, COLLECTIONS.IOT_DEVICES, COLLECTIONS.SENSOR_READINGS]) {
     const snap = await getDocs(query(collection(db, col), where("demo", "==", true)));
     await deleteDocsInBatches(snap.docs.map((d) => d.ref));
     deleted += snap.size;
   }
+
+  // Legacy demo vehicles created with random ids (before stable demo-vehicle-N ids) are removed once.
+  const legacyVehicles = await getDocs(query(collection(db, COLLECTIONS.VEHICLES), where("demo", "==", true)));
+  const legacyRefs = legacyVehicles.docs.filter((d) => !d.id.startsWith("demo-vehicle-")).map((d) => d.ref);
+  await deleteDocsInBatches(legacyRefs);
+  deleted += legacyRefs.length;
 
   // Routes/events that referenced the removed bins would otherwise dangle.
   const routesSnap = await getDocs(collection(db, COLLECTIONS.COLLECTION_ROUTES));
@@ -823,10 +829,17 @@ export async function seedCityDemoData() {
     await batch.commit();
   }
 
-  for (const v of DEMO_VEHICLES) {
-    await addDoc(collection(db, COLLECTIONS.VEHICLES), {
+  // Stable doc ids (demo-vehicle-N) so re-seeding never orphans driver ↔ vehicle
+  // assignments or routes that already point at these vehicles.
+  for (let i = 0; i < DEMO_VEHICLES.length; i++) {
+    const v = DEMO_VEHICLES[i];
+    const ref = doc(db, COLLECTIONS.VEHICLES, `demo-vehicle-${i + 1}`);
+    const prev = await getDoc(ref);
+    await setDoc(ref, {
       ...v, depotLat: DEPOT.lat, depotLng: DEPOT.lng, depotLabel: DEPOT.label,
       currentRouteId: null, lastActiveAt: null,
+      driverId: prev.exists() ? prev.data().driverId ?? null : null,
+      driverName: prev.exists() ? prev.data().driverName ?? v.driverName ?? null : v.driverName ?? null,
       demo: true, _demoSeedVersion: DEMO_SEED_VERSION, createdAt: ts(),
     });
   }
