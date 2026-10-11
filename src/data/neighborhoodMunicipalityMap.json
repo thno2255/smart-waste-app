@@ -1,0 +1,25 @@
+{
+  "_provenance": {
+    "method": "قراءة بصرية لخرائط النطاق الرسمية (PDF مصوّر، بلا إحداثيات) مقابل مراكز مضلعات الأحياء من OpenStreetMap، بالاتجاه والمسافة من وسط الديرة القديمة (26.326N, 43.975E).",
+    "status": "unverified",
+    "retrievedAt": "2026-10-12",
+    "note": "هذه تبعية تشغيلية مبدئية لا تحل محل قرار الأمانة. درجة الثقة: high = داخل النطاق المرسوم بوضوح، medium = قرب حد بين بلديتين، low = خارج نطاق الخرائط أو موضع الحي نفسه تقريبي. يمكن لمدير المنصة تعديلها من الواجهة مع حفظ السجل.",
+    "evidenceImages": { "north": "docs/sources/north_scope_official.jpg", "east": "docs/sources/east_scope_official.jpg", "west": "docs/sources/west_scope_official.jpg", "south": "docs/sources/south_scope_official.jpg", "dirah": "docs/sources/dirah_scope_official.jpg", "safra": "docs/sources/safra_scope_official.jpg" }
+  },
+  "assignments": {
+    "الخليج":   { "municipalityId": "dirah", "confidence": "high",   "evidence": "2.3 كم جنوب الوسط داخل مستطيل بلدية الديرة" },
+    "النقع":    { "municipalityId": "safra", "confidence": "medium", "evidence": "3.1 كم شمال-شرق الوسط، ضمن الشبكة الكثيفة الممتدة شمال الوسط التي يغطيها نطاق الصفراء" },
+    "الفايزية": { "municipalityId": "safra", "confidence": "medium", "evidence": "5.2 كم شمال الوسط، عند الحد الشمالي لنطاق الصفراء قرب بلدية الشمال" },
+    "الحمراء":  { "municipalityId": "north", "confidence": "medium", "evidence": "5.4 كم شمال-غرب، خارج نطاق الصفراء ضمن امتداد نطاق الشمال" },
+    "الأفق":    { "municipalityId": "north", "confidence": "high",   "evidence": "7.1 كم شمال-شمال-غرب داخل نطاق بلدية الشمال" },
+    "الإسكان":  { "municipalityId": "north", "confidence": "medium", "evidence": "7.6 كم شمال-غرب، قرب الحد بين بلديتي الشمال والغرب" },
+    "الريان":   { "municipalityId": "west",  "confidence": "medium", "evidence": "10.2 كم شمال-غرب، ضمن الجناح الشمالي الشرقي لنطاق الغرب" },
+    "النخيل":   { "municipalityId": "west",  "confidence": "high",   "evidence": "9.3 كم غرب-شمال-غرب داخل نطاق بلدية الغرب" },
+    "النقيب":   { "municipalityId": "north", "confidence": "medium", "evidence": "11.5 كم شمال-شمال-شرق، ضمن الذراع الشرقية لنطاق الشمال" },
+    "الشروق":   { "municipalityId": "east",  "confidence": "high",   "evidence": "6.4 كم شرق الوسط داخل نطاق بلدية الشرق" },
+    "البساتين": { "municipalityId": "east",  "confidence": "high",   "evidence": "4.8 كم شرق الوسط داخل نطاق بلدية الشرق" },
+    "الروابي":  { "municipalityId": "east",  "confidence": "medium", "evidence": "7.4 كم شرق-جنوب-شرق، قرب الحد بين الشرق والجنوب" },
+    "السلامة":  { "municipalityId": "east",  "confidence": "low",    "evidence": "موضع الحي نفسه تقريبي (لا حدود في OSM)، 4.1 كم شمال-شرق" },
+    "السالمية": { "municipalityId": "south", "confidence": "high",   "evidence": "5.3 كم جنوب-جنوب-شرق داخل الشريط الجنوبي لنطاق بلدية الجنوب" }
+  }
+}

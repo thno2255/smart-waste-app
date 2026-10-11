@@ -1,0 +1,29 @@
+{
+  "_provenance": {
+    "retrievedAt": "2026-10-12",
+    "sources": [
+      { "id": "amana-submun-2021", "title": "أمانة منطقة القصيم — البلديات الفرعية (الصفحة الحديثة، تتضمن بلدية جنوب بريدة)", "url": "https://qassim.gov.sa/ar/QM/MUN/Pages/SubMun.aspx", "publishedAt": "2021-11-17", "status": "official", "provides": ["الأسماء", "الهواتف", "البريد", "خرائط النطاق PDF"] },
+      { "id": "amana-submun-2024", "title": "أمانة منطقة القصيم — عن الأمانة / البلديات الفرعية (خمس بلديات)", "url": "https://www.qassim.gov.sa/ar/QM/About/Pages/SubMun.aspx", "publishedAt": "2024-10-23", "status": "official", "provides": ["الأسماء", "الهواتف", "البريد", "خرائط النطاق PDF"] },
+      { "id": "amana-annual-2024", "title": "التقرير السنوي لأمانة منطقة القصيم 2024", "url": "https://qassim.gov.sa/ar/Documents/Annual%20Report%202024.pdf", "publishedAt": "2025", "status": "official", "provides": ["مساحات البلديات (إحصاء قاعدة البيانات الجغرافية)", "إحصاءات النظافة"] },
+      { "id": "spa-N2200041", "title": "واس — السجل العقاري يبدأ تسجيل 351,334 قطعة عقارية بمنطقة القصيم (قائمة 130 حيًا في بريدة)", "url": "https://www.spa.gov.sa/N2200041", "publishedAt": "2024-11-03", "status": "official", "provides": ["أسماء الأحياء الرسمية"] },
+      { "id": "osm", "title": "OpenStreetMap — حدود 13 حيًا في بريدة", "url": "https://www.openstreetmap.org/", "status": "open", "provides": ["مضلعات الأحياء"] }
+    ],
+    "boundaries": {
+      "status": "unverified",
+      "note": "حدود البلديات الرسمية منشورة فقط كخرائط PDF مصوّرة (صور أقمار صناعية، إسقاط WGS-1984 UTM Zone 38N) دون إحداثيات أو ملفات متجهة؛ لا يمكن تحويلها إلى GeoJSON دون تحديد مرجعي يدوي. النطاقات المرسومة في النظام نطاقات تشغيلية تجريبية مشتقة من أحياء OSM وليست الحد الإداري المعتمد."
+    },
+    "cityStats2024": {
+      "wasteTons": 16535, "areasServed": 64, "neighborhoodsCleaned": "80+", "containerComplaintsHandled": 5806,
+      "note": "من التقرير السنوي 2024 (أعمال النظافة): كمية النفايات 16,535 طن، 64 منطقة مخدومة، تغطية أكثر من 80 حيًا؛ 5,806 حاوية ضمن معالجة بلاغات «الحاويات وتكدس النفايات» — وليس عدد أسطول الحاويات.",
+      "source": "amana-annual-2024"
+    }
+  },
+  "municipalities": [
+    { "id": "north", "nameAr": "بلدية شمال بريدة الفرعية", "shortAr": "شمال بريدة", "color": "#22c55e", "phone": "0163168244", "email": "north.m@qassim.gov.sa", "areaKm2": 595, "scopeMap": { "url": "https://qassim.gov.sa/ar/QM/MUN/Documents/Range3.pdf", "localImage": "docs/sources/north_scope_official.jpg", "status": "official", "machineReadable": false }, "sources": ["amana-submun-2021", "amana-annual-2024"] },
+    { "id": "east", "nameAr": "بلدية شرق بريدة الفرعية", "shortAr": "شرق بريدة", "color": "#ef4444", "phone": "0163168179", "email": "east.m@qassim.gov.sa", "areaKm2": 377, "scopeMap": { "url": "https://qassim.gov.sa/ar/QM/MUN/Documents/Range2.pdf", "localImage": "docs/sources/east_scope_official.jpg", "status": "official", "machineReadable": false }, "sources": ["amana-submun-2021", "amana-annual-2024"] },
+    { "id": "west", "nameAr": "بلدية غرب بريدة الفرعية", "shortAr": "غرب بريدة", "color": "#3b82f6", "phone": "0163168256", "email": "West.m@qassim.gov.sa", "areaKm2": 257, "scopeMap": { "url": "https://qassim.gov.sa/ar/QM/MUN/Documents/Z5.pdf", "localImage": "docs/sources/west_scope_official.jpg", "status": "official", "machineReadable": false }, "sources": ["amana-submun-2021", "amana-annual-2024"] },
+    { "id": "south", "nameAr": "بلدية جنوب بريدة الفرعية", "shortAr": "جنوب بريدة", "color": "#f59e0b", "phone": "0163168197", "email": "MSBuraidah@qassim.gov.sa", "areaKm2": 363, "scopeMap": { "url": "https://qassim.gov.sa/ar/QM/MUN/Documents/Range4.pdf", "localImage": "docs/sources/south_scope_official.jpg", "status": "official", "machineReadable": false }, "sources": ["amana-submun-2021", "amana-annual-2024"] },
+    { "id": "dirah", "nameAr": "بلدية الديرة الفرعية", "shortAr": "الديرة", "color": "#8b5cf6", "phone": "0163251136", "email": "aldeerah.m@qassim.gov.sa", "areaKm2": 55, "scopeMap": { "url": "https://qassim.gov.sa/ar/QM/MUN/Documents/Range1.pdf", "localImage": "docs/sources/dirah_scope_official.jpg", "status": "official", "machineReadable": false }, "sources": ["amana-submun-2021", "amana-annual-2024"] },
+    { "id": "safra", "nameAr": "بلدية الصفراء الفرعية", "shortAr": "الصفراء", "color": "#06b6d4", "phone": "0163168195", "email": "safra.m@qassim.gov.sa", "areaKm2": 68, "scopeMap": { "url": "https://qassim.gov.sa/ar/QM/MUN/Documents/Z4.pdf", "localImage": "docs/sources/safra_scope_official.jpg", "status": "official", "machineReadable": false }, "sources": ["amana-submun-2021", "amana-annual-2024"] }
+  ]
+}

@@ -16,7 +16,9 @@
  */
 import { normalizeNeighborhoodName } from "./config";
 
-export const ROLES = ["citizen", "employee", "executive", "driver"];
+export const ROLES = ["citizen", "employee", "manager", "executive", "driver"];
+/** Staff roles that act as operations management (scoped by municipality when users.municipalityId is set; "executive" is the platform admin). */
+const MGMT = (r) => r === "employee" || r === "manager" || r === "executive";
 export const SHIFT_STATUSES = ["off_shift", "on_shift", "break"];
 export const AVAILABILITY = ["available", "busy", "unavailable"];
 export const ACTIVE_ROUTE_STATUSES = ["approved", "in_progress"];
@@ -30,18 +32,21 @@ export const AVAILABILITY_LABELS = { available: "متاح", busy: "مشغول ب
  * readable so firestore.rules can mirror it line by line.
  */
 const MATRIX = {
-  "drivers.manage":        (r) => r === "employee" || r === "executive",
-  "drivers.view":          (r) => r === "employee" || r === "executive",
+  "drivers.manage":        (r) => MGMT(r),
+  "drivers.view":          (r) => MGMT(r),
   "driver.self.update":    (r, c) => r === "driver" && c.isSelf === true,     // shiftStatus/availability/location only
-  "routes.create":         (r) => r === "employee" || r === "executive",
-  "routes.approve":        (r) => r === "employee" || r === "executive",
-  "routes.assign":         (r) => r === "employee" || r === "executive",
-  "routes.view":           (r, c) => r === "employee" || r === "executive" || (r === "driver" && c.assignedToMe === true),
+  "routes.create":         (r) => MGMT(r),
+  "routes.approve":        (r) => MGMT(r),
+  "routes.assign":         (r) => MGMT(r),
+  "routes.view":           (r, c) => MGMT(r) || (r === "driver" && c.assignedToMe === true),
   "routes.execute":        (r, c) => r === "driver" && c.assignedToMe === true, // start/collect/complete
   "incidents.report":      (r, c) => r === "driver" && c.assignedToMe === true,
-  "vehicles.manage":       (r) => r === "employee" || r === "executive",
-  "fleet.monitor":         (r) => r === "employee" || r === "executive",
+  "vehicles.manage":       (r) => MGMT(r),
+  "fleet.monitor":         (r) => MGMT(r),
   "users.manageRoles":     (r) => r === "executive",
+  "municipalities.manage": (r) => r === "executive",           // seed/backfill + neighborhood ↔ municipality overrides
+  "municipalities.viewAll":(r) => r === "executive",           // the city-wide view across all six
+  "simulation.control":    (r) => MGMT(r),                     // demo simulator (never touches real sensor readings)
 };
 export function can(role, action, ctx = {}) {
   const rule = MATRIX[action];

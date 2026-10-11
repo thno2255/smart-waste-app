@@ -40,7 +40,9 @@ export const COLLECTIONS = {
   NEIGHBORHOODS:   "neighborhoods", // replaces the old unused "districts" collection
   BINS:            "bins",          // replaces embedded stations[].containers[]
   IOT_DEVICES:     "iot_devices",
-  SENSOR_READINGS: "sensor_readings",
+  SENSOR_READINGS: "sensor_readings",     // REAL device readings — server-only writes (api/iot/readings)
+  SIMULATED_READINGS: "simulated_readings", // demo/simulator readings (source: "SIMULATED") — never mixed into sensor_readings
+  MUNICIPALITIES: "municipalities",
   SENSORS:         "sensors",
   ALERTS:          "alerts",
   FIRE_ALERTS:     "fire_alerts",
@@ -189,8 +191,32 @@ export function useAnalyticsDoc(docId) {
  * useCollection so every page that needs neighborhoods shares one
  * subscription pattern instead of each writing its own onSnapshot call.
  */
-export function useNeighborhoods() {
-  const { data, loading, error } = useCollection(COLLECTIONS.NEIGHBORHOODS, "name");
+/**
+ * Municipality-scoped real-time collection. `municipalityId` null → whole
+ * collection (platform admin / legacy unscoped staff); otherwise a server-side
+ * `where("municipalityId","==",…)` query, which is also what firestore.rules
+ * requires for scoped roles. `enabled=false` → no listener at all.
+ */
+export function useScopedCollection(col, { municipalityId = null, enabled = true, sortField = "createdAt" } = {}) {
+  const [data, setData]       = useState([]);
+  const [loading, setLoading] = useState(!!(col && enabled));
+  const [error, setError]     = useState(null);
+  useEffect(() => {
+    if (!col || !enabled) return;
+    const base = collection(db, col);
+    const q = municipalityId ? query(base, where("municipalityId", "==", municipalityId)) : base;
+    const unsub = onSnapshot(q, (snap) => {
+      let rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      if (sortField) rows = rows.sort((a, b) => String(b[sortField] ?? "").localeCompare(String(a[sortField] ?? "")));
+      setData(rows); setLoading(false);
+    }, (err) => { console.error(`[useScopedCollection:${col}]`, err); setError(err); setLoading(false); });
+    return () => unsub();
+  }, [col, municipalityId, enabled, sortField]);
+  return { data, loading, error };
+}
+
+export function useNeighborhoods(scope = {}) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.NEIGHBORHOODS, { ...scope, sortField: "name" });
   return { neighborhoods: data, loading, error };
 }
 
@@ -200,8 +226,8 @@ export function useNeighborhoods() {
  * never sensor_readings history (per the performance guidance: the
  * dashboard/map must only ever need the latest value per bin).
  */
-export function useBins() {
-  const { data, loading, error } = useCollection(COLLECTIONS.BINS, "name");
+export function useBins(scope = {}) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.BINS, { ...scope, sortField: "name" });
   return { bins: data, loading, error };
 }
 
@@ -219,21 +245,17 @@ export function useBinReadings(binId, windowHours = THRESHOLDS.predictionWindowH
     const cutoff = new Date(Date.now() - windowHours * 3600000).toISOString();
     // No composite index needed: filter client-side by timestamp after an
     // unordered equality query, same no-orderBy pattern as useCollectionWhere.
-    const q = query(collection(db, COLLECTIONS.SENSOR_READINGS), where("bin_id", "==", binId));
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const readings = snap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .filter((r) => r.timestamp >= cutoff)
-          .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1))
-          .slice(-50); // hard cap regardless of window
-        setData(readings);
-        setLoading(false);
-      },
-      (err) => { console.error(`[useBinReadings:${binId}]`, err); setLoading(false); }
-    );
-    return () => unsub();
+    const parts = { real: [], simulated: [] };
+    const publish = () => {
+      setData([...parts.real, ...parts.simulated].filter((r) => r.timestamp >= cutoff).sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1)).slice(-50)); // hard cap regardless of window
+      setLoading(false);
+    };
+    const unsubReal = onSnapshot(query(collection(db, COLLECTIONS.SENSOR_READINGS), where("bin_id", "==", binId)),
+      (snap) => { parts.real = snap.docs.map((d) => ({ id: d.id, ...d.data() })); publish(); },
+      (err) => { console.error(`[useBinReadings:${binId}]`, err); setLoading(false); });
+    const unsubSim = onSnapshot(query(collection(db, COLLECTIONS.SIMULATED_READINGS), where("bin_id", "==", binId)),
+      (snap) => { parts.simulated = snap.docs.map((d) => ({ id: d.id, ...d.data(), source: "SIMULATED" })); publish(); }, () => {});
+    return () => { unsubReal(); unsubSim(); };
   }, [binId, windowHours]);
 
   return { readings: binId ? data : [], loading: binId ? loading : false };
@@ -252,18 +274,22 @@ export function useRecentReadings(windowHours = THRESHOLDS.predictionWindowHours
 
   useEffect(() => {
     const cutoff = new Date(Date.now() - windowHours * 3600000).toISOString();
+    // Real + simulated readings are kept in separate collections; the prediction
+    // engines consume both, and every simulated row carries source: "SIMULATED".
+    const parts = { real: [], simulated: [] };
+    const publish = () => { setData([...parts.real, ...parts.simulated]); setLoading(false); };
+    const unsubSim = onSnapshot(collection(db, COLLECTIONS.SIMULATED_READINGS), (snap) => { parts.simulated = snap.docs.map((d) => ({ id: d.id, ...d.data(), source: "SIMULATED" })).filter((r) => r.timestamp >= cutoff); publish(); }, () => {});
     const unsub = onSnapshot(
       collection(db, COLLECTIONS.SENSOR_READINGS),
       (snap) => {
-        const readings = snap.docs
+        parts.real = snap.docs
           .map((d) => ({ id: d.id, ...d.data() }))
           .filter((r) => r.timestamp >= cutoff);
-        setData(readings);
-        setLoading(false);
+        publish();
       },
       (err) => { console.error("[useRecentReadings]", err); setLoading(false); }
     );
-    return () => unsub();
+    return () => { unsub(); unsubSim(); };
   }, [windowHours]);
 
   return { readings: data, loading };
@@ -639,13 +665,14 @@ export const recordDailyStationHistory = async (stations = []) => {
 // ══════════════════════════════════════════════════════════════════════
 // 17. Vehicles — §19
 // ══════════════════════════════════════════════════════════════════════
-export function useVehicles() {
-  const { data, loading, error } = useCollection(COLLECTIONS.VEHICLES, "vehicleNumber");
+export function useVehicles(scope = {}) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.VEHICLES, { ...scope, sortField: "vehicleNumber" });
   return { vehicles: data, loading, error };
 }
 
 export const addVehicle = (data) =>
   addItem(COLLECTIONS.VEHICLES, {
+    municipalityId: data.municipalityId || null,
     vehicleNumber:  data.vehicleNumber  || "",
     driverName:     data.driverName     || null,
     status:         data.status         || "available", // available | on_route | maintenance | offline
@@ -670,8 +697,8 @@ export const deleteVehicle = (id) => deleteItem(COLLECTIONS.VEHICLES, id);
 //    from the UI, never a side effect of a snapshot listener.
 // ══════════════════════════════════════════════════════════════════════
 /** All routes — staff only. Pass enabled=false for driver accounts (rules deny the unscoped list; drivers use useMyRoutes). */
-export function useCollectionRoutes(enabled = true) {
-  const { data, loading, error } = useCollection(enabled ? COLLECTIONS.COLLECTION_ROUTES : null);
+export function useCollectionRoutes(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.COLLECTION_ROUTES, { enabled, municipalityId });
   return { routes: data, loading: enabled ? loading : false, error };
 }
 
@@ -700,7 +727,10 @@ export const createSuggestedRoutes = async (recommended = []) => {
  * in-progress routes are never part of the input, so they are never touched.
  */
 export const applyRouteReconciliation = async ({ toCreate = [], toUpdate = [], toWithdraw = [] }, meta = {}) => {
+  const { municipalityIdFor = null, ...metaRest } = meta; // municipalityIdFor(neighborhoodId) → municipalityId (denormalized for scoping)
+  meta = metaRest;
   for (const route of toCreate) {
+    if (municipalityIdFor) route.municipalityId = municipalityIdFor(route.neighborhoodIds?.[0]) || null;
     await addItem(COLLECTIONS.COLLECTION_ROUTES, { ...route, manualBinIds: [], approvedBy: null, approvedAt: null, startedAt: null, completedAt: null, vehicleId: null, ...meta });
   }
   for (const { id, data } of toUpdate) {
@@ -738,8 +768,8 @@ export const deleteRoute = (id) => deleteItem(COLLECTIONS.COLLECTION_ROUTES, id)
 // ══════════════════════════════════════════════════════════════════════
 // 19. Collection events — §26/§27
 // ══════════════════════════════════════════════════════════════════════
-export function useCollectionEvents() {
-  const { data, loading, error } = useCollection(COLLECTIONS.COLLECTION_EVENTS);
+export function useCollectionEvents(scope = {}) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.COLLECTION_EVENTS, scope);
   return { events: data, loading, error };
 }
 
@@ -818,10 +848,10 @@ const HOUR_MS_FS = 60 * 60 * 1000;
 export const demoSetReading = async (binId, fillLevelPercent, temperatureCelsius) => {
   const timestamp = ts();
   const batch = writeBatch(db);
-  const readingRef = doc(collection(db, COLLECTIONS.SENSOR_READINGS));
+  const readingRef = doc(collection(db, COLLECTIONS.SIMULATED_READINGS));
   batch.set(readingRef, {
     bin_id: binId, device_id: "DEMO", fill_level_percent: Number(fillLevelPercent), temperature_celsius: Number(temperatureCelsius),
-    battery_level: null, signal: null, timestamp, receivedAt: timestamp, demo: true, source: "demo",
+    battery_level: null, signal: null, timestamp, receivedAt: timestamp, demo: true, source: "SIMULATED",
   });
   batch.update(doc(db, COLLECTIONS.BINS, binId), {
     lastFillLevelPercent: Number(fillLevelPercent), lastTemperatureCelsius: Number(temperatureCelsius), lastReadingAt: timestamp,
@@ -835,7 +865,7 @@ export const demoSetOffline = (binId) =>
 export const demoSetFault = async (binId) => {
   const timestamp = ts();
   const batch = writeBatch(db);
-  const readingRef = doc(collection(db, COLLECTIONS.SENSOR_READINGS));
+  const readingRef = doc(collection(db, COLLECTIONS.SIMULATED_READINGS));
   batch.set(readingRef, {
     bin_id: binId, device_id: "DEMO", fill_level_percent: 240, temperature_celsius: 25,
     battery_level: null, signal: null, timestamp, receivedAt: timestamp, demo: true, source: "demo",
@@ -886,12 +916,12 @@ COLLECTIONS.DRIVER_VEHICLE_ASSIGNMENTS = "driver_vehicle_assignments"; // time-w
 COLLECTIONS.DRIVER_ASSIGNMENT_HISTORY = "driver_assignment_history";  // coverage/vehicle/shift changes with before/after
 COLLECTIONS.DRIVER_SHIFTS = "driver_shifts";                     // clock-in / clock-out records
 
-export function useDriverProfiles(enabled = true) {
-  const { data, loading, error } = useCollection(enabled ? COLLECTIONS.DRIVER_PROFILES : null, "fullName");
+export function useDriverProfiles(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.DRIVER_PROFILES, { enabled, municipalityId, sortField: "fullName" });
   return { profiles: data, loading, error };
 }
-export function useDriverVehicleAssignments(enabled = true) {
-  const { data, loading, error } = useCollection(enabled ? COLLECTIONS.DRIVER_VEHICLE_ASSIGNMENTS : null, "start");
+export function useDriverVehicleAssignments(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.DRIVER_VEHICLE_ASSIGNMENTS, { enabled, municipalityId, sortField: "start" });
   return { assignments: data, loading, error };
 }
 export function useDriverAssignmentHistory(driverId) {
@@ -920,6 +950,7 @@ export const ensureDriverProfile = async (userDoc) => {
   if (snap.exists()) return snap.data();
   const data = {
     uid: userDoc.uid, driverCode: null, fullName: userDoc.fullName || "", phone: userDoc.phone || "", email: userDoc.email || "",
+    municipalityId: userDoc.municipalityId || null,
     accountStatus: userDoc.status || "pending", shiftStatus: "off_shift", availability: "available",
     vehicleId: null, neighborhoodKeys: [], shiftStart: null, shiftEnd: null,
     locationSharing: false, lastLocation: null, currentRouteId: null,
@@ -994,8 +1025,8 @@ COLLECTIONS.ROUTE_INCIDENTS = "route_incidents";
 COLLECTIONS.DRIVER_LOCATIONS = "driver_locations";
 COLLECTIONS.VEHICLE_STATUS_HISTORY = "vehicle_status_history";
 
-export function useRouteIncidents(enabled = true) {
-  const { data, loading, error } = useCollection(enabled ? COLLECTIONS.ROUTE_INCIDENTS : null);
+export function useRouteIncidents(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.ROUTE_INCIDENTS, { enabled, municipalityId });
   return { incidents: data, loading, error };
 }
 
@@ -1019,7 +1050,7 @@ export const reportRouteIncident = async ({ route, binId = null, type, note = ""
   const incRef = doc(collection(db, COLLECTIONS.ROUTE_INCIDENTS));
   const batch = writeBatch(db);
   batch.set(incRef, {
-    routeId: route.id, routeName: route.routeName || "", binId, driverId: user.uid, driverName: user.name || "", vehicleId: route.vehicleId || null,
+    routeId: route.id, routeName: route.routeName || "", binId, driverId: user.uid, driverName: user.name || "", vehicleId: route.vehicleId || null, municipalityId: route.municipalityId || null,
     type, note, status: "open", reviewedBy: null, reviewedAt: null, resolution: "",
     location: position?.lat != null ? { lat: position.lat, lng: position.lng, accuracyM: position.accuracy ?? null } : null,
     createdAt: ts(),
@@ -1044,7 +1075,7 @@ export const persistDriverLocation = async (uid, loc, routeId = null) => {
   const at = loc.at || new Date().toISOString();
   const batch = writeBatch(db);
   batch.set(doc(db, COLLECTIONS.DRIVER_PROFILES, uid), { lastLocation: { lat: loc.lat, lng: loc.lng, accuracyM: loc.accuracy ?? null, heading: loc.heading ?? null, speedMps: loc.speed ?? null, at }, updatedAt: ts() }, { merge: true });
-  batch.set(doc(collection(db, COLLECTIONS.DRIVER_LOCATIONS)), { driverId: uid, routeId, lat: loc.lat, lng: loc.lng, accuracyM: loc.accuracy ?? null, heading: loc.heading ?? null, speedMps: loc.speed ?? null, at, expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(), createdAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.DRIVER_LOCATIONS)), { driverId: uid, routeId, municipalityId: loc.municipalityId || null, lat: loc.lat, lng: loc.lng, accuracyM: loc.accuracy ?? null, heading: loc.heading ?? null, speedMps: loc.speed ?? null, at, expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(), createdAt: ts() });
   await batch.commit();
 };
 
@@ -1055,3 +1086,97 @@ export const setVehicleStatusWithHistory = async (vehicleId, from, to, actor, re
   batch.set(doc(collection(db, COLLECTIONS.VEHICLE_STATUS_HISTORY)), { vehicleId, from, to, actorId: actor?.uid || "", actorName: actor?.name || "", reason, createdAt: ts() });
   await batch.commit();
 };
+
+
+// ══════════════════════════════════════════════════════════════════════
+// 26. Municipalities (Phase 1 of the multi-municipality restructure)
+//    Source data: src/data/municipalities.json + neighborhoodMunicipalityMap.json
+//    (provenance-tagged). municipalityId is denormalized onto every
+//    operational doc so firestore.rules can scope managers/employees.
+// ══════════════════════════════════════════════════════════════════════
+export function useMunicipalities() {
+  const { data, loading, error } = useCollection(COLLECTIONS.MUNICIPALITIES, "id");
+  return { municipalities: data, loading, error };
+}
+
+/**
+ * Idempotent: writes the 6 municipality docs (with provenance), assigns a
+ * municipalityId to every neighborhood that has none (file default + evidence),
+ * then denormalizes municipalityId onto bins, routes, vehicles (via driver
+ * profiles), driver profiles (via users) and incidents. Explicit admin
+ * assignments on neighborhoods are never overwritten.
+ * @param {{municipalities:Array, defaultAssignmentFor:Function, municipalityForNeighborhood:Function, provenance:object}} data  from src/municipalities.js
+ */
+export async function seedMunicipalitiesAndBackfill({ municipalities, defaultAssignmentFor, provenance }, actor) {
+  const result = { municipalities: 0, neighborhoodsAssigned: 0, bins: 0, routes: 0, vehicles: 0, profiles: 0, incidents: 0, unassignedNeighborhoods: [] };
+  let batch = writeBatch(db); let ops = 0;
+  const flush = async () => { if (ops > 0) { await batch.commit(); batch = writeBatch(db); ops = 0; } };
+  const add = async (fn) => { fn(batch); ops += 1; if (ops >= 400) await flush(); };
+
+  for (const m of municipalities) {
+    await add((b) => b.set(doc(db, COLLECTIONS.MUNICIPALITIES, m.id), { ...m, provenance, updatedAt: ts() }, { merge: true }));
+    result.municipalities += 1;
+  }
+  const nSnap = await getDocs(collection(db, COLLECTIONS.NEIGHBORHOODS));
+  const midByNeighborhoodId = {};
+  for (const d of nSnap.docs) {
+    const n = { id: d.id, ...d.data() };
+    let mid = n.municipalityId || null;
+    if (!mid) {
+      const a = defaultAssignmentFor(n.name);
+      if (a) {
+        mid = a.municipalityId;
+        await add((b) => b.update(doc(db, COLLECTIONS.NEIGHBORHOODS, d.id), { municipalityId: mid, municipalityAssignment: { ...a, assignedAt: ts(), assignedBy: actor?.uid || "system" } }));
+        result.neighborhoodsAssigned += 1;
+      } else result.unassignedNeighborhoods.push(n.name);
+    }
+    if (mid) midByNeighborhoodId[d.id] = mid;
+  }
+  const bSnap = await getDocs(collection(db, COLLECTIONS.BINS));
+  for (const d of bSnap.docs) { const mid = midByNeighborhoodId[d.data().neighborhoodId] || null; if (d.data().municipalityId !== mid) { await add((b) => b.update(d.ref, { municipalityId: mid })); result.bins += 1; } }
+  const rSnap = await getDocs(collection(db, COLLECTIONS.COLLECTION_ROUTES));
+  for (const d of rSnap.docs) { const mid = midByNeighborhoodId[d.data().neighborhoodIds?.[0]] || null; if (d.data().municipalityId !== mid) { await add((b) => b.update(d.ref, { municipalityId: mid })); result.routes += 1; } }
+  const uSnap = await getDocs(collection(db, COLLECTIONS.USERS));
+  const munByUid = Object.fromEntries(uSnap.docs.map((d) => [d.id, d.data().municipalityId || null]));
+  const pSnap = await getDocs(collection(db, COLLECTIONS.DRIVER_PROFILES));
+  const munByDriver = {};
+  for (const d of pSnap.docs) { const mid = munByUid[d.id] || d.data().municipalityId || null; munByDriver[d.id] = mid; if (d.data().municipalityId !== mid) { await add((b) => b.update(d.ref, { municipalityId: mid })); result.profiles += 1; } }
+  const vSnap = await getDocs(collection(db, COLLECTIONS.VEHICLES));
+  for (const d of vSnap.docs) { const mid = d.data().municipalityId || munByDriver[d.data().driverId] || null; if (d.data().municipalityId !== mid) { await add((b) => b.update(d.ref, { municipalityId: mid })); result.vehicles += 1; } }
+  const iSnap = await getDocs(collection(db, COLLECTIONS.ROUTE_INCIDENTS));
+  const midByRoute = Object.fromEntries(rSnap.docs.map((d) => [d.id, midByNeighborhoodId[d.data().neighborhoodIds?.[0]] || null]));
+  for (const d of iSnap.docs) { const mid = midByRoute[d.data().routeId] || null; if (d.data().municipalityId !== mid) { await add((b) => b.update(d.ref, { municipalityId: mid })); result.incidents += 1; } }
+  await add((b) => b.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "municipalities_seeded", actorId: actor?.uid || "", actorName: actor?.name || "", details: { ...result, unassignedNeighborhoods: result.unassignedNeighborhoods.length }, createdAt: ts() }));
+  await flush();
+  return result;
+}
+
+/** Platform admin overrides a neighborhood's municipality (operational exception) — history kept on the doc and in the audit log; dependent bins/routes are re-denormalized. */
+export async function setNeighborhoodMunicipality(neighborhoodId, municipalityId, actor, reason = "") {
+  const ref = doc(db, COLLECTIONS.NEIGHBORHOODS, neighborhoodId);
+  const before = (await getDoc(ref)).data() || {};
+  const batch = writeBatch(db);
+  batch.update(ref, {
+    municipalityId,
+    municipalityAssignment: { municipalityId, source: "admin_override", status: "operational_exception", confidence: "declared", evidence: reason, assignedAt: ts(), assignedBy: actor?.uid || "" },
+    municipalityHistory: [...(before.municipalityHistory || []), { from: before.municipalityId || null, to: municipalityId, by: actor?.uid || "", byName: actor?.name || "", reason, at: ts() }],
+  });
+  const bins = await getDocs(query(collection(db, COLLECTIONS.BINS), where("neighborhoodId", "==", neighborhoodId)));
+  bins.docs.forEach((d) => batch.update(d.ref, { municipalityId }));
+  const routes = await getDocs(query(collection(db, COLLECTIONS.COLLECTION_ROUTES), where("neighborhoodIds", "array-contains", neighborhoodId)));
+  routes.docs.forEach((d) => batch.update(d.ref, { municipalityId }));
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "neighborhood_municipality_changed", actorId: actor?.uid || "", actorName: actor?.name || "", details: { neighborhoodId, from: before.municipalityId || null, to: municipalityId, reason }, createdAt: ts() });
+  await batch.commit();
+}
+
+/** Admin sets a user's municipality (and optionally role) — mirrored onto the driver profile when one exists. */
+export async function setUserMunicipality(uid, municipalityId, actor, role = null) {
+  const batch = writeBatch(db);
+  const patch = { municipalityId: municipalityId || null, updatedAt: ts() };
+  if (role) patch.role = role;
+  batch.update(doc(db, COLLECTIONS.USERS, uid), patch);
+  const prof = await getDoc(doc(db, COLLECTIONS.DRIVER_PROFILES, uid));
+  if (prof.exists()) batch.update(prof.ref, { municipalityId: municipalityId || null, updatedAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "user_municipality_set", actorId: actor?.uid || "", actorName: actor?.name || "", details: { uid, municipalityId, role }, createdAt: ts() });
+  await batch.commit();
+}

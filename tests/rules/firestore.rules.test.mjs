@@ -31,6 +31,17 @@ await env.withSecurityRulesDisabled(async (c) => {
   await setDoc(doc(db, "users/drv2"), { uid: "drv2", role: "driver", status: "active" });
   await setDoc(doc(db, "users/cit1"), { uid: "cit1", role: "citizen", status: "active" });
   await setDoc(doc(db, "users/pend"), { uid: "pend", role: "driver", status: "pending" });
+  // Multi-municipality scoping fixtures
+  await setDoc(doc(db, "users/admin1"), { uid: "admin1", role: "executive", status: "active" });
+  await setDoc(doc(db, "users/mgrE"), { uid: "mgrE", role: "manager", status: "active", municipalityId: "east" });
+  await setDoc(doc(db, "users/mgrNone"), { uid: "mgrNone", role: "manager", status: "active" });
+  await setDoc(doc(db, "users/empN"), { uid: "empN", role: "employee", status: "active", municipalityId: "north" });
+  await setDoc(doc(db, "bins/bE"), { name: "bE", municipalityId: "east", lastFillLevelPercent: 50 });
+  await setDoc(doc(db, "bins/bN"), { name: "bN", municipalityId: "north", lastFillLevelPercent: 50 });
+  await setDoc(doc(db, "collection_routes/RE"), { routeName: "RE", status: "suggested", municipalityId: "east", binIds: ["bE"] });
+  await setDoc(doc(db, "collection_routes/RN"), { routeName: "RN", status: "suggested", municipalityId: "north", binIds: ["bN"] });
+  await setDoc(doc(db, "vehicles/VE"), { vehicleNumber: "VE", municipalityId: "east", status: "available" });
+  await setDoc(doc(db, "neighborhoods/NE"), { name: "حي الشروق", municipalityId: "east" });
   await setDoc(doc(db, "driver_profiles/drv1"), { uid: "drv1", shiftStatus: "off_shift", vehicleId: "V1", neighborhoodKeys: ["الخليج"] });
   await setDoc(doc(db, "collection_routes/R1"), { routeName: "R1", status: "approved", driverId: "drv1", vehicleId: "V1", binIds: ["b1"], collectedBinIds: [] });
   await setDoc(doc(db, "collection_routes/R2"), { routeName: "R2", status: "approved", driverId: "drv2", vehicleId: "V2", binIds: ["b2"], collectedBinIds: [] });
@@ -119,6 +130,54 @@ await test("vehicle assignments: employees write, history never deleted, drivers
   await assertSucceeds(setDoc(doc(emp, "driver_vehicle_assignments/A1"), { driverId: "drv1", vehicleId: "V1", start: "now", active: true }));
   await assertFails(setDoc(doc(ctx("drv1", "driver"), "driver_vehicle_assignments/A2"), { driverId: "drv1", vehicleId: "V2", start: "now", active: true }));
   await assertSucceeds(getDoc(doc(ctx("drv1", "driver"), "driver_vehicle_assignments/A1")));
+});
+
+await test("driver may flip only the status of their own vehicle; cannot touch another vehicle or other fields", async () => {
+  await env.withSecurityRulesDisabled(async (c) => { await setDoc(doc(c.firestore(), "vehicles/V1"), { vehicleNumber: "V1", status: "available", driverId: "drv1" }); });
+  const drv = ctx("drv1", "driver");
+  await assertSucceeds(updateDoc(doc(drv, "vehicles/V1"), { status: "on_route", currentRouteId: "R1", lastActiveAt: "now", updatedAt: "now" }));
+  await assertFails(updateDoc(doc(drv, "vehicles/V1"), { capacityLiters: 1 }));
+  await assertFails(updateDoc(doc(ctx("drv2", "driver"), "vehicles/V1"), { status: "on_route" }));
+  await assertSucceeds(updateDoc(doc(drv, "collection_routes/R1"), { status: "in_progress", startedAt: "now", updatedAt: "now" }));
+});
+
+await test("municipality scoping: manager sees/edits only own municipality; scoped list must filter; admin sees all", async () => {
+  const mgr = ctx("mgrE", "manager");
+  await assertSucceeds(getDoc(doc(mgr, "bins/bE")));
+  await assertFails(getDoc(doc(mgr, "bins/bN")));
+  await assertSucceeds(getDocs(query(collection(mgr, "bins"), where("municipalityId", "==", "east"))));
+  await assertFails(getDocs(collection(mgr, "bins")));
+  await assertSucceeds(updateDoc(doc(mgr, "collection_routes/RE"), { status: "approved", driverId: "drv1", vehicleId: "VE" }));
+  await assertFails(updateDoc(doc(mgr, "collection_routes/RN"), { status: "approved" }));
+  await assertFails(setDoc(doc(mgr, "bins/bX"), { name: "x", municipalityId: "north" }));   // cannot create outside own municipality
+  await assertSucceeds(setDoc(doc(mgr, "bins/bY"), { name: "y", municipalityId: "east" }));
+  await assertSucceeds(getDoc(doc(mgr, "vehicles/VE")));
+  const admin = ctx("admin1", "executive");
+  await assertSucceeds(getDoc(doc(admin, "bins/bN")));
+  await assertSucceeds(getDocs(collection(admin, "bins")));
+});
+
+await test("employee scoped to north cannot touch east; manager without municipality has no operational access", async () => {
+  const emp = ctx("empN", "employee");
+  await assertSucceeds(getDoc(doc(emp, "bins/bN")));
+  await assertFails(getDoc(doc(emp, "bins/bE")));
+  await assertFails(updateDoc(doc(emp, "collection_routes/RE"), { status: "deferred" }));
+  const none = ctx("mgrNone", "manager");
+  await assertFails(getDoc(doc(none, "bins/bE")));
+  await assertFails(getDoc(doc(none, "vehicles/VE")));
+  await assertFails(setDoc(doc(none, "collection_routes/RZ"), { routeName: "z", status: "suggested" }));
+});
+
+await test("municipalities + neighborhood↔municipality assignment are platform-admin only; simulated readings never go to sensor_readings", async () => {
+  await assertSucceeds(setDoc(doc(ctx("admin1", "executive"), "municipalities/east"), { id: "east", nameAr: "x" }));
+  await assertFails(setDoc(doc(ctx("mgrE", "manager"), "municipalities/east"), { id: "east", nameAr: "hack" }));
+  await assertSucceeds(getDoc(doc(ctx("cit1", "citizen"), "municipalities/east")));
+  await assertFails(updateDoc(doc(ctx("mgrE", "manager"), "neighborhoods/NE"), { municipalityId: "north" }));
+  await assertSucceeds(updateDoc(doc(ctx("mgrE", "manager"), "neighborhoods/NE"), { note: "ok" }));
+  await assertSucceeds(updateDoc(doc(ctx("admin1", "executive"), "neighborhoods/NE"), { municipalityId: "north", municipalityAssignment: { source: "admin_override" } }));
+  await assertSucceeds(setDoc(doc(ctx("mgrE", "manager"), "simulated_readings/s1"), { bin_id: "bE", fill_level_percent: 70, source: "SIMULATED" }));
+  await assertFails(setDoc(doc(ctx("mgrE", "manager"), "sensor_readings/s1"), { bin_id: "bE", fill_level_percent: 70 }));
+  await assertFails(setDoc(doc(ctx("admin1", "executive"), "sensor_readings/s2"), { bin_id: "bE", fill_level_percent: 70 }));
 });
 
 await env.cleanup();

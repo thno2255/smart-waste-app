@@ -24,8 +24,17 @@ service cloud.firestore {
     function me() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
     function active() { return signedIn() && me().status == "active"; }
     function role() { return me().role; }
-    function isStaff() { return active() && role() in ["employee", "executive", "driver"]; }
-    function isEmployee() { return active() && role() in ["employee", "executive"]; }
+    // Roles: executive = PLATFORM_ADMIN (all municipalities), manager = MUNICIPALITY_MANAGER,
+    // employee = OPERATIONS_EMPLOYEE, driver = DRIVER. A manager/employee/driver with
+    // users.municipalityId set is SCOPED: they may only touch docs carrying that municipalityId.
+    function scoped() { return role() in ["manager", "employee", "driver"] && ("municipalityId" in me()) && me().municipalityId != null; }
+    // For list queries the client must filter where("municipalityId","==",<mine>) — that is what makes this provable.
+    function sameMun(data) { return !scoped() || data.municipalityId == me().municipalityId; }
+    // A manager without a municipality has no operational access at all (folded into isStaff/isEmployee).
+    function managerOk() { return role() != "manager" || scoped(); }
+    function isStaff() { return active() && role() in ["employee", "manager", "executive", "driver"] && managerOk(); }
+    function isEmployee() { return active() && role() in ["employee", "manager", "executive"] && managerOk(); }
+    function isAdmin() { return active() && role() == "executive"; }
     function isDriver() { return active() && role() == "driver"; }
 
     // Users: a user reads/updates their own profile; employees/executives manage roles & status.
@@ -34,26 +43,40 @@ service cloud.firestore {
       allow create: if signedIn() && request.auth.uid == uid
                     && request.resource.data.status == (request.resource.data.role == "citizen" ? "active" : "pending");
       allow update: if signedIn() && (
-        (request.auth.uid == uid && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["role", "status"]))
-        || isEmployee()
+        (request.auth.uid == uid && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["role", "status", "municipalityId"]))
+        || isAdmin()
+        || (isEmployee() && managerOk() && sameMun(resource.data) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["municipalityId"]))
       );
       allow delete: if false;
     }
 
-    match /neighborhoods/{id} { allow read: if signedIn(); allow write: if isEmployee(); }
+    match /municipalities/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+    // Neighborhood ↔ municipality assignment is a platform-admin decision (operational exceptions are logged).
+    match /neighborhoods/{id} {
+      allow read: if signedIn();
+      allow create, delete: if isEmployee() && managerOk();
+      allow update: if isAdmin() || (isEmployee() && managerOk() && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["municipalityId", "municipalityAssignment", "municipalityHistory"]));
+    }
+    // Simulated sensor readings (demo/simulator): separate from real readings; staff read, employees write.
+    match /simulated_readings/{id} { allow read: if isStaff(); allow create: if isEmployee() && managerOk(); allow update, delete: if isAdmin(); }
+    // Simulator state (one doc): staff read; employees/managers may start/stop/fire events; install/reset is an admin action in the UI.
+    match /simulation_state/{id} { allow read: if isStaff(); allow write: if isEmployee(); }
+    match /demo_sessions/{id}    { allow read: if isStaff(); allow write: if isEmployee(); }
 
     match /bins/{id} {
-      allow read: if signedIn();
-      allow create, delete: if isEmployee();
+      allow read: if (signedIn() && !scoped() && role() != "manager") || (isStaff() && sameMun(resource.data));
+      allow create: if isEmployee() && managerOk() && sameMun(request.resource.data);
+      allow delete: if isEmployee() && managerOk() && sameMun(resource.data);
       // Drivers may only stamp a collection (lastCollectionAt); the reading fields are server-only.
-      allow update: if isEmployee()
-                    || (isDriver() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["lastCollectionAt"]));
+      allow update: if (isEmployee() && managerOk() && sameMun(resource.data))
+                    || (isDriver() && sameMun(resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["lastCollectionAt"]));
     }
 
     // Readings: append-only history, written ONLY by the server ingest route.
     match /sensor_readings/{id} {
       allow read: if isStaff();
-      allow write: if false;
+      allow create, update: if false;
+      allow delete: if isAdmin() && resource.data.get("demo", false) == true; // legacy demo rows only; real readings are immutable
     }
 
     // Device registry: only a SHA-256 hash of each device key is ever stored
@@ -64,22 +87,31 @@ service cloud.firestore {
       allow write: if isEmployee();
     }
 
-    match /vehicles/{id} { allow read: if isStaff(); allow write: if isEmployee(); }
+    match /vehicles/{id} {
+      allow read: if isStaff() && sameMun(resource.data);
+      allow create: if isEmployee() && managerOk() && sameMun(request.resource.data);
+      // The assigned driver may only flip the operational status of THEIR vehicle (route start/finish).
+      allow update: if (isEmployee() && managerOk() && sameMun(resource.data))
+                    || (isDriver() && resource.data.driverId == request.auth.uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "currentRouteId", "lastActiveAt", "updatedAt"]));
+      allow delete: if isEmployee() && managerOk() && sameMun(resource.data);
+    }
     match /route_bins/{id} { allow read: if isStaff(); allow write: if isEmployee(); } // declared, currently unused
 
     // ── Fleet platform (Phase 1) — mirrors src/fleetEngine.js can() ──
     // Driver profile: id == auth uid. Employees manage it; the driver may
     // only flip their own shift/availability/location fields.
     match /driver_profiles/{uid} {
-      allow read: if isEmployee() || (isDriver() && request.auth.uid == uid);
-      allow create, delete: if isEmployee();
-      allow update: if isEmployee()
+      allow read: if (isEmployee() && managerOk() && sameMun(resource.data)) || (isDriver() && request.auth.uid == uid);
+      allow create: if isEmployee() && managerOk() && sameMun(request.resource.data);
+      allow delete: if isEmployee() && managerOk() && sameMun(resource.data);
+      allow update: if (isEmployee() && managerOk() && sameMun(resource.data))
                     || (isDriver() && request.auth.uid == uid
                         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["shiftStatus", "availability", "locationSharing", "lastLocation", "updatedAt"]));
     }
     // Time-windowed vehicle ↔ driver assignments: append/close by employees only; history is never deleted.
-    match /driver_vehicle_assignments/{id} { allow read: if isStaff(); allow create, update: if isEmployee(); allow delete: if false; }
-    match /driver_assignment_history/{id}  { allow read: if isEmployee(); allow create: if isEmployee(); allow update, delete: if false; }
+    match /driver_vehicle_assignments/{id} { allow read: if isStaff() && sameMun(resource.data); allow create, update: if isEmployee() && managerOk() && sameMun(request.resource.data); allow delete: if false; }
+    match /driver_assignment_history/{id}  { allow read: if isEmployee() && managerOk(); allow create: if isEmployee() && managerOk(); allow update, delete: if false; }
     // Shift records: a driver writes their own clock-in/out; employees read.
     match /driver_shifts/{id} {
       allow read: if isEmployee() || (isDriver() && resource.data.driverId == request.auth.uid);
@@ -89,13 +121,14 @@ service cloud.firestore {
 
     match /collection_routes/{id} {
       // A driver reads ONLY routes assigned to them (driverId == uid); list queries must filter on driverId.
-      allow read: if isEmployee() || (isDriver() && resource.data.driverId == request.auth.uid);
-      allow create, delete: if isEmployee();
+      allow read: if (isEmployee() && managerOk() && sameMun(resource.data)) || (isDriver() && resource.data.driverId == request.auth.uid);
+      allow create: if isEmployee() && managerOk() && sameMun(request.resource.data);
+      allow delete: if isEmployee() && managerOk() && sameMun(resource.data);
       // Drivers advance only the execution fields of THEIR OWN approved/active route; approval/assignment stays with employees.
-      allow update: if isEmployee()
+      allow update: if (isEmployee() && managerOk() && sameMun(resource.data))
                     || (isDriver() && resource.data.driverId == request.auth.uid
                         && resource.data.status in ["approved", "in_progress"]
-                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "startedAt", "completedAt", "collectedBinIds", "skippedStops", "lastProgressAt", "driverName", "liveRoad"])
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "startedAt", "completedAt", "collectedBinIds", "skippedStops", "lastProgressAt", "driverName", "liveRoad", "updatedAt"])
                         && request.resource.data.status in ["in_progress", "completed"]);
     }
 
@@ -103,27 +136,27 @@ service cloud.firestore {
     // carrying their own uid on a route assigned to them; id = routeId__binId keeps
     // retries idempotent (set-merge on the same doc). Never deletable.
     match /collection_events/{id} {
-      allow read: if isStaff();
-      allow create, update: if isEmployee()
+      allow read: if isStaff() && sameMun(resource.data);
+      allow create, update: if (isEmployee() && managerOk() && sameMun(request.resource.data))
                     || (isDriver() && request.resource.data.driverId == request.auth.uid
                         && get(/databases/$(database)/documents/collection_routes/$(request.resource.data.routeId)).data.driverId == request.auth.uid);
-      allow delete: if false;
+      allow delete: if isAdmin() && resource.data.get("demo", false) == true;
     }
     // Incidents: drivers open them on their own routes; employees review/resolve.
     match /route_incidents/{id} {
-      allow read: if isEmployee() || (isDriver() && resource.data.driverId == request.auth.uid);
-      allow create: if isEmployee() || (isDriver() && request.resource.data.driverId == request.auth.uid);
-      allow update: if isEmployee();
-      allow delete: if false;
+      allow read: if (isEmployee() && managerOk() && sameMun(resource.data)) || (isDriver() && resource.data.driverId == request.auth.uid);
+      allow create: if (isEmployee() && managerOk() && sameMun(request.resource.data)) || (isDriver() && request.resource.data.driverId == request.auth.uid);
+      allow update: if isEmployee() && managerOk() && sameMun(resource.data);
+      allow delete: if isAdmin() && resource.data.get("demo", false) == true;
     }
     // Live location pings: a driver appends their own; employees read; nobody edits.
     match /driver_locations/{id} {
-      allow read: if isEmployee();
+      allow read: if isEmployee() && managerOk() && sameMun(resource.data);
       allow create: if isDriver() && request.resource.data.driverId == request.auth.uid;
       allow update, delete: if false;
     }
     match /vehicle_status_history/{id} { allow read: if isStaff(); allow create: if isStaff(); allow update, delete: if false; }
-    match /audit_log/{id}         { allow read: if isEmployee(); allow create: if isStaff(); allow update, delete: if false; }
+    match /audit_log/{id}         { allow read: if isEmployee(); allow create: if isStaff(); allow update: if false; allow delete: if isAdmin() && resource.data.get("demo", false) == true; }
     match /alerts/{id}            { allow read: if isStaff(); allow write: if isEmployee(); }
     match /fire_sensors/{id}      { allow read: if signedIn(); allow write: if isEmployee(); }
     match /fire_alerts/{id}       { allow read: if isStaff(); allow write: if isEmployee(); }
@@ -136,7 +169,8 @@ service cloud.firestore {
     }
     match /citizen_reports/{id} {
       allow read: if signedIn() && (resource.data.userId == request.auth.uid || isStaff());
-      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      // Citizens file their own reports; staff may only create rows flagged demo:true (seeded demo scene).
+      allow create: if (signedIn() && request.resource.data.userId == request.auth.uid) || (isEmployee() && request.resource.data.demo == true);
       allow update, delete: if isEmployee();
     }
 

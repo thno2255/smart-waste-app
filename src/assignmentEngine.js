@@ -118,13 +118,16 @@ export function rankDriverCandidates(route, ctx = {}) {
   if (!firstStop) warnings.push("لا إحداثيات لتوقفات الجولة — زمن الوصول غير قابل للحساب");
 
   if (eligible.length > 0 && !eligible.some(fits)) warnings.push("كل السائقين المؤهلين مركباتهم لا تستوعب حجم الجولة — قسّم الجولة أو أسند استثنائيًا");
-  const top = candidates.find(fits) || null;
+  // Nobody fits the load → still recommend the best eligible driver, flagged: the route needs a second trip or a split.
+  const capacityShortfall = eligible.length > 0 && !eligible.some(fits);
+  const top = candidates.find(fits) || (capacityShortfall ? candidates.find((c) => c.verdict.eligible) : null) || null;
   const recommended = top ? {
     driverId: top.profile.uid, driverName: top.profile.fullName, vehicleId: top.vehicle?.id || null, vehicleNumber: top.vehicle?.vehicleNumber || "",
     scope: (top.profile.neighborhoodKeys || []).map((k) => `حي ${k}`).join("، "), binsCount: stopsCount,
     approachKm: top.approachKm, approachMin: top.approachMin, totalKm: top.totalKm, totalMin: top.totalMin, travelSource: top.travelSource,
     routeSource: routeRoad ? "osrm" : "haversine", score: top.score,
-    confidence: top.travelSource === "osrm" && top.origin?.source === "live" ? "high" : top.travelSource === "osrm" || top.origin?.source === "live" ? "medium" : "low",
+    confidence: capacityShortfall ? "low" : top.travelSource === "osrm" && top.origin?.source === "live" ? "high" : top.travelSource === "osrm" || top.origin?.source === "live" ? "medium" : "low",
+    capacityShortfall,
     reason: [...top.reasons, ...top.flags].join("، "), flags: top.flags,
     // Why not the nearest? Explain when a closer-but-worse candidate exists.
     nearestOverridden: (() => { const nearest = eligible.filter((c) => c.approachMin != null).sort((a, b) => a.approachMin - b.approachMin)[0]; return nearest && nearest.profile.uid !== top.profile.uid ? `${nearest.profile.fullName} أقرب (${nearest.approachMin} د) لكن: ${nearest.flags.join("، ") || "تقييم أقل"}` : null; })(),

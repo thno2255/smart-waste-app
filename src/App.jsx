@@ -30,7 +30,7 @@ import {
   Layers, Map as MapGlyph,
 } from "lucide-react";
 
-import { MapContainer, TileLayer, GeoJSON, CircleMarker, Polyline, Popup, Marker, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, GeoJSON, CircleMarker, Polyline, Polygon, Popup, Marker, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import buraidahNeighborhoodsGeo from "./buraidahNeighborhoods.geo.json";
@@ -123,6 +123,10 @@ import {
   reinstateRouteStop,
   persistDriverLocation,
   useRouteIncidents,
+  useMunicipalities,
+  seedMunicipalitiesAndBackfill,
+  setNeighborhoodMunicipality,
+  setUserMunicipality,
   COLLECTIONS,
 } from "./firestoreService";
 import {
@@ -156,9 +160,13 @@ import { generateAlertCandidates, ALERT_TYPE_LABELS, ALERT_TYPE_ICONS } from "./
 import { useRoadRoute, useRoadLegs, fetchRoadMatrix, fetchRoadRoute } from "./roadRouting";
 import { rankDriverCandidates, driverOrigin } from "./assignmentEngine";
 import { optimizeRoute, evaluateOrder } from "./routeOptimizer";
+import { MUNICIPALITIES, municipalityById, municipalityForNeighborhood, defaultAssignmentFor, scopeFor, isStaffRole, ROLE_LABELS_AR, computeMunicipalityStats, operationalZones, DATA_PROVENANCE, NEIGHBORHOOD_ASSIGNMENT_PROVENANCE, OFFICIAL_NAMES_SOURCE, isOfficialNeighborhoodName } from "./municipalities";
 import { parseSteps, projectOnRoute, nextManeuver, offRouteDecision, arrivedAtStop, fixQuality, formatDistanceAr, distanceM, shouldPersistLocation } from "./navigation";
 import { INCIDENT_TYPES, canConfirmCollection, routeProgress, nextStopFor, reinstateSkippedStop, buildConfirmation } from "./executionEngine";
 import { createOfflineQueue } from "./offlineQueue";
+import { DEFAULT_SIM_CONFIG, SIM_EVENTS } from "./simulation/simulationEngine";
+import { installSimulation, subscribeSimState, tickSimulation, setSimulationStatus, fireSimulationEvent, realIntervalMs, resetSimulation } from "./simulation/simulationRunner";
+import { DEMO_STEPS, DEFAULT_DEMO_MUNICIPALITY, evaluateDemo, nextStepIndex } from "./demoScenario";
 import { can, validateDriverProfile, findVehicleAssignmentConflicts, findRouteAssignmentConflicts, activeAssignmentFor, vehicleHolderAt, coverageMatrix, driverCodeFor, locationFreshness, SHIFT_STATUS_LABELS, AVAILABILITY_LABELS } from "./fleetEngine";
 import { getBinMapState, computeNeighborhoodMapStats, binMatchesFilter, neighborhoodMatchesFilter, polygonStyle, markerStyle, MAP_STATE_COLORS, MAP_STATE_LABELS } from "./mapVisual";
 import { computeImpactMetrics, computeFleetPerformance } from "./impact";
@@ -200,15 +208,16 @@ const AuthProvider = ({ children }) => {
     return () => unsubscribe();
   }, []);
 
-  const register = async ({ email, password, fullName, phone, district, role }) => {
+  const register = async ({ email, password, fullName, phone, district, role, municipalityId = null }) => {
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(cred.user, { displayName: fullName });
       // المواطن يدخل مباشرة، بقية الأدوار (موظف/سائق/إدارة عليا) تنتظر الموافقة
-      const needsApproval = role === "employee" || role === "executive" || role === "driver";
-      const roleArMap = { executive: "إدارة عليا", employee: "موظف", driver: "سائق ميداني", citizen: "مواطن" };
+      const needsApproval = role === "employee" || role === "manager" || role === "executive" || role === "driver";
+      const roleArMap = { executive: "إدارة عليا", manager: "مدير بلدية", employee: "موظف", driver: "سائق ميداني", citizen: "مواطن" };
       const userDocData = {
         uid: cred.user.uid, email, fullName, phone: phone || "", district: district || "",
+        municipalityId: (role === "manager" || role === "employee" || role === "driver") ? (municipalityId || null) : null,
         role: role || "citizen",
         roleAr: roleArMap[role] || "مواطن",
         status: needsApproval ? "pending" : "active",
@@ -321,8 +330,10 @@ const ROLES_LIST = [
   { value: "citizen",   label: "الأفراد",    icon: <Home size={22} />,       desc: "طلب حاويات ومتابعة الخدمات", color: "#10b981" },
   { value: "employee",  label: "موظف",       icon: <HardHat size={22} />,    desc: "إدارة الأحياء والعمليات",    color: "#3b82f6" },
   { value: "driver",    label: "سائق ميداني", icon: <Truck size={22} />,     desc: "تنفيذ جولات الجمع ميدانيًا",  color: "#8b5cf6" },
+  { value: "manager",   label: "مدير بلدية", icon: <Landmark size={22} />,   desc: "إدارة بلدية فرعية واحدة",     color: "#06b6d4" },
   { value: "executive", label: "إدارة عليا", icon: <Landmark size={22} />,   desc: "لوحة متخذي القرار",          color: "#f59e0b" },
 ];
+const isMgmtRole = (r) => r === "employee" || r === "manager" || r === "executive";
 
 const inputStyle = { width:"100%", padding:"12px 16px", borderRadius:10, border:"1px solid #1e3a5f", background:"#0a1628", color:"#e2e8f0", fontSize:14, fontFamily:"'Noto Kufi Arabic',sans-serif", outline:"none", boxSizing:"border-box", transition:"border-color 0.2s" };
 
@@ -357,6 +368,7 @@ const AuthPage = () => {
   const [phone, setPhone] = useState("");
   const [district, setDistrict] = useState("");
   const [role, setRole] = useState("citizen");
+  const [municipalityId, setMunicipalityId] = useState("");
   const [isMobileAuth, setIsMobileAuth] = useState(window.innerWidth < 900);
 
   useEffect(() => {
@@ -382,7 +394,8 @@ const AuthPage = () => {
     if (password !== confirmPassword) { setError("كلمة المرور غير متطابقة"); return; }
     if (password.length < 6) { setError("كلمة المرور يجب أن تكون 6 أحرف على الأقل"); return; }
     setLoading(true); setError("");
-    const r = await register({ email, password, fullName, phone, district, role });
+    if ((role === "manager" || role === "employee" || role === "driver") && !municipalityId) { setError("اختر البلدية الفرعية التي تتبع لها"); return; }
+    const r = await register({ email, password, fullName, phone, district, role, municipalityId: municipalityId || null });
     if (r.success) setSuccess("تم إنشاء الحساب بنجاح!");
     else setError(r.error);
     setLoading(false);
@@ -636,6 +649,15 @@ const AuthPage = () => {
                       {DISTRICTS.map(d=><option key={d} value={d}>{d}</option>)}
                     </select>
                   </div>
+                  {(role === "manager" || role === "employee" || role === "driver") && (
+                    <div style={fieldWrap}>
+                      <label style={labelSt}>البلدية الفرعية</label>
+                      <select value={municipalityId} onChange={e=>setMunicipalityId(e.target.value)} style={{ ...inputStyle, appearance:"auto" }}>
+                        <option value="">اختر البلدية</option>
+                        {MUNICIPALITIES.map(m=><option key={m.id} value={m.id}>{m.nameAr}</option>)}
+                      </select>
+                    </div>
+                  )}
                 </div>
                 <button onClick={handleRegister} disabled={loading} style={{ padding:"13px 0", borderRadius:10, border:"none", background:loading?"#1e3a5f":"linear-gradient(135deg,#10b981,#059669)", color:loading?"#64748b":"#fff", fontSize:14, fontWeight:800, cursor:loading?"not-allowed":"pointer", fontFamily:F, marginTop:4, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
                   {loading ? <><Clock size={15}/> جاري إنشاء الحساب...</> : <><CheckCircle size={15}/> إنشاء الحساب</>}
@@ -1136,8 +1158,20 @@ const OPEN_ROUTE_STATUSES_UI = ["suggested", "approved", "in_progress"];
  * Everything per-bin is computed in ONE pass per (bins, horizon, readings) — no nested lookups
  * — so thousands of markers stay cheap; Leaflet renders them on a canvas (preferCanvas).
  */
-const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], height = 440, onViewBins, onAddToRoute, onOpenRoute, compact = false, initialSelectedKey = null }) => {
+const MAP_LAYERS = [
+  { key: "municipalities", label: "🏛️ البلديات" },
+  { key: "neighborhoods", label: "🏘️ الأحياء" },
+  { key: "bins", label: "🗑️ الحاويات" },
+  { key: "routes", label: "🚛 الجولات والمركبات" },
+];
+
+const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = [], fireSensors = [], recentReadings = [], routes: routesAll = [], citizenReports = [], profiles = [], municipalityFilter = null, initialLayer = "neighborhoods", height = 440, onViewBins, onAddToRoute, onOpenRoute, compact = false, initialSelectedKey = null }) => {
   const [filter, setFilter] = useState("all");
+  const [layer, setLayer] = useState(initialLayer);
+  // Optional municipality scope: only that municipality's neighborhoods, bins and routes are drawn.
+  const neighborhoods = useMemo(() => (municipalityFilter ? neighborhoodsAll.filter((n) => municipalityForNeighborhood(n) === municipalityFilter) : neighborhoodsAll), [neighborhoodsAll, municipalityFilter]);
+  const bins = useMemo(() => { if (!municipalityFilter) return binsAll; const ids = new Set(neighborhoods.map((n) => n.id)); return binsAll.filter((b) => ids.has(b.neighborhoodId)); }, [binsAll, neighborhoods, municipalityFilter]);
+  const routes = useMemo(() => { if (!municipalityFilter) return routesAll; const ids = new Set(neighborhoods.map((n) => n.id)); return routesAll.filter((r) => r.municipalityId === municipalityFilter || (r.neighborhoodIds || []).some((id) => ids.has(id))); }, [routesAll, neighborhoods, municipalityFilter]);
   const [horizon, setHorizon] = useState(0);
   const [selectedKey, setSelectedKey] = useState(initialSelectedKey);
   const [flyTarget, setFlyTarget] = useState(null);
@@ -1183,6 +1217,19 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
   }, [neighborhoods, bins, binViews, thermalFor, binCtx, openRoutes]);
 
   const statsByKey = useMemo(() => new Map(neighborhoodStats.map((n) => [n.key, n])), [neighborhoodStats]);
+
+  // Municipality layer: DEMO operational zones (convex hull of member neighborhoods — not the administrative boundary) + per-municipality stats.
+  const groupsAll = useMemo(() => groupNeighborhoodsByName(neighborhoodsAll, binsAll), [neighborhoodsAll, binsAll]);
+  const zones = useMemo(() => operationalZones(FEATURE_BY_KEY, groupsAll, neighborhoodsAll), [groupsAll, neighborhoodsAll]);
+  const munStats = useMemo(() => {
+    const now = Date.now();
+    const binStateById = Object.fromEntries(binsAll.map((b) => [b.id, getBinMapState(b, { now })]));
+    return computeMunicipalityStats({ groups: groupsAll, neighborhoods: neighborhoodsAll, bins: binsAll, binStateById, profiles, routes: routesAll, thermalFor, now });
+  }, [groupsAll, neighborhoodsAll, binsAll, profiles, routesAll, thermalFor]);
+  const vehiclePositions = useMemo(() => profiles.filter((p) => p.shiftStatus === "on_shift" && p.locationSharing && p.lastLocation?.lat != null && (!municipalityFilter || p.municipalityId === municipalityFilter)).map((p) => ({ p, fresh: locationFreshness(p.lastLocation) })), [profiles, municipalityFilter]);
+  const openRoutePaths = useMemo(() => (layer === "routes" ? openRoutes.map((r) => ({ r, pts: routeStopPositions(r, binsAll, neighborhoodsAll).map((x) => x.pos) })).filter((x) => x.pts.length > 1) : []), [layer, openRoutes, binsAll, neighborhoodsAll]);
+  const polygonsFaint = layer !== "neighborhoods";
+  const showBins = layer === "neighborhoods" || layer === "bins";
 
   const visibleBins = useMemo(
     () => binViews.views.filter((v) => v.pos && binMatchesFilter(filter, v.vs, { thermalAlert: v.nKey ? !!statsByKey.get(v.nKey)?.thermalAlert : false })),
@@ -1251,6 +1298,12 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
         </div>
       )}
 
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center" }}>
+        <span style={{ fontSize: 11, color: C.dim }}>الطبقة:</span>
+        {MAP_LAYERS.map((l) => (
+          <button key={l.key} onClick={() => setLayer(l.key)} style={pill(layer === l.key, C.purple)}>{l.label}</button>
+        ))}
+      </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         {MAP_FILTERS.map((f) => (
           <button key={f.key} onClick={() => setFilter(f.key)} style={pill(filter === f.key, C.accent)}>{f.label}</button>
@@ -1269,13 +1322,27 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
           <MapContainer center={BURAIDAH_CENTER} zoom={12} style={{ width: "100%", height: "100%", background: C.bg }} scrollWheelZoom preferCanvas>
             <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
             <FlyTo target={flyTarget} />
+            {Object.values(zones).filter((z) => (layer === "municipalities" || municipalityFilter === z.municipalityId) && z.hull.length >= 3).map((z) => {
+              const m = municipalityById(z.municipalityId); const st = munStats.byMunicipality[z.municipalityId];
+              return (
+                <Polygon key={`zone-${z.municipalityId}`} positions={z.hull} pathOptions={{ color: m?.color || C.info, weight: 3, dashArray: "10 6", fillColor: m?.color || C.info, fillOpacity: layer === "municipalities" ? 0.12 : 0.04, opacity: 0.9 }}>
+                  <Popup>
+                    <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 220 }}>
+                      <b>{m?.nameAr}</b><br />
+                      <span style={{ color: "#b45309", fontSize: 11 }}>{z.label}</span><br />
+                      {st && <>أحياء مُسندة: {st.neighborhoods.length} · حاويات: {st.bins} · حرجة: <b style={{ color: "#ef4444" }}>{st.critical}</b> · متصلة بالمحاكي: {st.connectedPct != null ? `${st.connectedPct}%` : "—"}<br />سائقون متاحون: {st.driversAvailable} · جولات جارية: {st.routesActive}</>}
+                    </div>
+                  </Popup>
+                </Polygon>
+              );
+            })}
             {neighborhoodStats.filter((n) => n.feature).map((n) => {
               const dimmed = !neighborhoodMatchesFilter(filter, n);
               return (
                 <GeoJSON
-                  key={`${n.key}-${n.state}-${dimmed}-${selectedKey === n.key}`}
+                  key={`${n.key}-${n.state}-${dimmed}-${selectedKey === n.key}-${polygonsFaint}`}
                   data={n.feature}
-                  style={() => polygonStyle(n, { selected: selectedKey === n.key, dimmed })}
+                  style={() => polygonsFaint ? { ...polygonStyle(n, { selected: selectedKey === n.key, dimmed }), fillOpacity: 0.06, weight: 1, opacity: 0.5 } : polygonStyle(n, { selected: selectedKey === n.key, dimmed })}
                   eventHandlers={{ click: () => focusNeighborhood(n) }}
                 >
                   <Popup>
@@ -1307,7 +1374,17 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
                 : <Polyline positions={selectedRoutePoints.map((p) => p.pos)} pathOptions={{ color: C.info, weight: 4, dashArray: "8 8", opacity: 0.9 }} />
             )}
 
-            {visibleBins.map(({ bin: b, n, pos, approx, vs }) => {
+            {openRoutePaths.map(({ r, pts }) => (
+              <Polyline key={`rp-${r.id}`} positions={pts} pathOptions={{ color: r.status === "in_progress" ? C.accent : r.status === "approved" ? C.info : C.warning, weight: r.status === "in_progress" ? 5 : 3, dashArray: r.status === "suggested" ? "6 6" : null, opacity: 0.85 }}>
+                <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}><b>{r.routeName}</b><br />{ROUTE_STATUS_LABELS[r.status] || r.status} · {r.binIds?.length || 0} حاوية{r.driverName ? ` · ${r.driverName}` : ""}{onOpenRoute && <><br /><button onClick={() => onOpenRoute(r.id)} style={{ marginTop: 4, padding: "3px 8px", borderRadius: 6, border: "1px solid #3b82f6", background: "#3b82f620", color: "#3b82f6", fontSize: 11, cursor: "pointer" }}>فتح الجولة</button></>}</div></Popup>
+              </Polyline>
+            ))}
+            {layer === "routes" && vehiclePositions.map(({ p, fresh }) => (
+              <CircleMarker key={`veh-${p.uid}`} center={[p.lastLocation.lat, p.lastLocation.lng]} radius={11} pathOptions={{ color: "#fff", weight: 2, fillColor: fresh.state === "live" ? C.info : C.dim, fillOpacity: 0.95, dashArray: fresh.state === "live" ? null : "3 3" }}>
+                <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}><b>🚛 {p.fullName}</b><br />{fresh.state === "live" ? "موقع مباشر" : `آخر موقع قبل ${fresh.ageMin} د`}</div></Popup>
+              </CircleMarker>
+            ))}
+            {showBins && visibleBins.map(({ bin: b, n, pos, approx, vs }) => {
               const inRoute = routeOrderByBinId[b.id];
               const highlighted = !!(inRoute && selectedStats?.route?.id === inRoute.route.id);
               const reports = binCtx.reportCountForBin(b.id);
@@ -1324,7 +1401,7 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
                         <span>الامتلاء: {vs.actualFill != null ? `${vs.actualFill}%` : "—"}{horizon > 0 && vs.state === "no_data" && <span style={{ color: "#999", fontSize: 11 }}> — {vs.forecastReason}</span>}<br /></span>
                       )}
                       الحرارة: {b.lastTemperatureCelsius != null ? `${b.lastTemperatureCelsius}°` : "—"}<br />
-                      حالة المستشعر: {STATE_LABELS[vs.connectivity === "online" ? "normal" : vs.connectivity] || vs.connectivity}{vs.connectivity === "online" ? " (متصل)" : ""}<br />
+                      حالة المستشعر: {sensorStateLabel(b, vs.connectivity)}<br />
                       آخر قراءة: {getReadingAgeLabel(b.lastReadingAt)}<br />
                       {reports > 0 && <span style={{ color: "#b45309" }}>📣 {reports} بلاغ مواطن على هذه الحاوية<br /></span>}
                       الجولة: {inRoute ? `${inRoute.route.routeName} — التوقف #${inRoute.order} (${routeStatusNote(inRoute.route)})` : "خارج أي جولة حاليًا"}<br />
@@ -1346,11 +1423,14 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
 
         <div style={{ flex: "1 1 240px", minWidth: 220 }}>
           <div style={{ fontSize: 11, color: C.dim, marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 10 }}>
-            {MAP_LEGEND.map(([label, key]) => (
+            {layer === "municipalities" ? MUNICIPALITIES.map((m) => (
+              <span key={m.id} style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 0, borderTop: `3px dashed ${m.color}`, display: "inline-block" }} />{m.shortAr}</span>
+            )) : MAP_LEGEND.map(([label, key]) => (
               <span key={key} style={{ display: "flex", alignItems: "center", gap: 5 }}>
                 <Dot color={MAP_STATE_COLORS[key]} hollow={key === "offline" || key === "fault"} />{label}
               </span>
             ))}
+            {layer === "routes" && <span style={{ display: "flex", alignItems: "center", gap: 5 }}><Dot color={C.info} />مركبة (موقع مباشر)</span>}
             <span style={{ display: "flex", alignItems: "center", gap: 5 }}><Dot color={C.info} hollow dashed />قيمة متوقعة</span>
             <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
               <span style={{ width: 16, height: 0, borderTop: `3px dashed ${C.info}`, display: "inline-block" }} />مسار جولة
@@ -1438,7 +1518,198 @@ const OperationalMap = ({ neighborhoods = [], bins = [], fireSensors = [], recen
 };
 
 // ======================== STANDALONE MAP PAGE ========================
-const MapPage = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], loading, onViewBins, onAddToRoute, onOpenRoute, initialSelectedKey = null }) => {
+// ======================== MUNICIPALITIES & OPERATIONAL ZONES (Phase 2) ========================
+/** "متصل" for a real device; "متصل بالمحاكي" for a demo/simulated bin — never call a virtual sensor "متصل فعليًا". */
+const sensorStateLabel = (bin, connectivity) => {
+  const sim = !!(bin?.demo || bin?.simulated);
+  if (connectivity === "online") return sim ? "متصل بالمحاكي" : "متصل";
+  if (connectivity === "offline") return sim ? "غير متصل (محاكي)" : "غير متصل";
+  if (connectivity === "fault") return sim ? "خلل بالمستشعر (محاكي)" : "خلل بالمستشعر";
+  return "بدون مستشعر";
+};
+
+/** Wall-clock read used inside memos (kept out of the React-compiler purity check: the value is a snapshot, re-taken whenever inputs change). */
+const currentTimeMs = () => Date.now();
+
+const DemoEnvBanner = () => (
+  <div style={{ background: "linear-gradient(90deg, #7c3aed, #4c1d95)", color: "#fff", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "5px 12px", fontFamily: ARABIC_FONT, letterSpacing: 0.2 }}>
+    🧪 بيئة عرض تجريبية — بيانات المستشعرات محاكاة (مصدر كل قراءة: SIMULATED) · التقسيم البلدي من مصادر رسمية، وحدود النطاقات تشغيلية تجريبية
+  </div>
+);
+
+const MUN_STATUS_LABEL = { normal: ["تشغيل طبيعي", C.accent], warning: ["يحتاج متابعة", C.warning], critical: ["تدخل عاجل", C.danger], no_data: ["لا بيانات", C.dim] };
+
+const MunicipalityCard = ({ s, onOpen }) => {
+  const [label, color] = MUN_STATUS_LABEL[s.status] || MUN_STATUS_LABEL.no_data;
+  const m = s.municipality;
+  const cell = (v, l, c = C.text) => <div style={{ background: C.bg, borderRadius: 8, padding: "6px 8px", textAlign: "center" }}><div style={{ fontSize: 16, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 10, color: C.muted }}>{l}</div></div>;
+  return (
+    <div onClick={() => onOpen(m.id)} style={{ background: C.card, border: `1px solid ${m.color}50`, borderTop: `4px solid ${m.color}`, borderRadius: 14, padding: 14, cursor: "pointer" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <div><div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{m.nameAr}</div><div style={{ fontSize: 10.5, color: C.dim }}>{m.areaKm2} كم² (التقرير السنوي 2024) · {s.neighborhoods.length} حي مُسند</div></div>
+        <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: color + "20", color, border: `1px solid ${color}40`, whiteSpace: "nowrap" }}>{label}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+        {cell(s.neighborhoods.length, "أحياء")}
+        {cell(s.bins, "حاويات")}
+        {cell(s.connectedPct != null ? `${s.connectedPct}%` : "—", "متصلة بالمحاكي", s.connectedPct == null ? C.dim : s.connectedPct >= 90 ? C.accent : C.warning)}
+        {cell(s.critical, "حرجة", s.critical ? C.danger : C.text)}
+        {cell(s.driversAvailable, "سائقون متاحون", s.driversAvailable ? C.accent : C.text)}
+        {cell(s.vehiclesActive, "مركبات نشطة")}
+        {cell(s.routesActive, "جولات جارية", s.routesActive ? C.info : C.text)}
+        {cell(s.routesSuggested, "مقترحة", s.routesSuggested ? C.warning : C.text)}
+      </div>
+      {(s.thermal > 0 || s.incidentsOpen > 0) && <div style={{ fontSize: 11, color: C.warning, marginTop: 6 }}>{s.thermal > 0 ? `🔥 ${s.thermal} تنبيه حراري ` : ""}{s.incidentsOpen > 0 ? `🚧 ${s.incidentsOpen} بلاغ مفتوح` : ""}</div>}
+    </div>
+  );
+};
+
+const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], profiles = [], vehicles = [], incidents = [], loggedInUser, onBack, onOpenRoute, onViewBins, onAddToRoute }) => {
+  const [tab, setTab] = useState("map");
+  const m = municipalityById(mid);
+  const s = stats.byMunicipality[mid];
+  const munNeighborhoods = useMemo(() => neighborhoods.filter((n) => municipalityForNeighborhood(n) === mid), [neighborhoods, mid]);
+  const nIds = useMemo(() => new Set(munNeighborhoods.map((n) => n.id)), [munNeighborhoods]);
+  const munBins = useMemo(() => bins.filter((b) => nIds.has(b.neighborhoodId)), [bins, nIds]);
+  const munRoutes = useMemo(() => routes.filter((r) => r.municipalityId === mid || (r.neighborhoodIds || []).some((id) => nIds.has(id))), [routes, mid, nIds]);
+  const munProfiles = profiles.filter((p) => p.municipalityId === mid);
+  const munVehicles = vehicles.filter((v) => v.municipalityId === mid);
+  const munIncidents = incidents.filter((i) => i.municipalityId === mid);
+  const impact = useMemo(() => {
+    const ctx = makeBinContext(fireSensors, citizenReports, munNeighborhoods);
+    const scored = munBins.map((bin) => ({ bin, priority: getBinPriority(bin, null, [], ctx.forBin(bin)) }));
+    return computeImpactMetrics(groupNeighborhoodsByName(munNeighborhoods, munBins), scored, munRoutes, { depot: DEFAULT_DEPOT });
+  }, [munBins, munNeighborhoods, munRoutes, fireSensors, citizenReports]);
+  const canOverride = can(loggedInUser?.role, "municipalities.manage");
+  const [overrideBusy, setOverrideBusy] = useState("");
+  const tabs = [["map", "🗺️ الخريطة"], ["neighborhoods", "🏘️ الأحياء"], ["bins", "🗑️ الحاويات والمستشعرات"], ["fleet", "🚛 السائقون والمركبات"], ["routes", "🧭 الجولات"], ["incidents", "🚧 البلاغات"], ["kpi", "📊 مؤشرات الأداء"]];
+  const [label, color] = MUN_STATUS_LABEL[s?.status] || MUN_STATUS_LABEL.no_data;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          {onBack && <button onClick={onBack} style={{ background: "none", border: "none", color: C.info, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT, padding: 0 }}>← كل البلديات</button>}
+          <div style={{ fontSize: 18, fontWeight: 900, color: C.text, display: "flex", alignItems: "center", gap: 10 }}><span style={{ width: 14, height: 14, borderRadius: 4, background: m.color, display: "inline-block" }} />{m.nameAr} <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: color + "20", color }}>{label}</span></div>
+          <div style={{ fontSize: 11.5, color: C.dim }}>هاتف {m.phone} · {m.email} · المساحة {m.areaKm2} كم² · <a href={m.scopeMap.url} target="_blank" rel="noreferrer" style={{ color: C.info }}>خريطة النطاق الرسمية (PDF)</a> · النطاق المرسوم تشغيلي تجريبي</div>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {tabs.map(([k, l]) => <button key={k} onClick={() => setTab(k)} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${tab === k ? m.color : C.border}`, background: tab === k ? m.color + "25" : "transparent", color: tab === k ? C.text : C.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT }}>{l}</button>)}
+        </div>
+      </div>
+
+      {tab === "map" && <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={profiles} municipalityFilter={mid} height={560} onViewBins={onViewBins} onAddToRoute={onAddToRoute} onOpenRoute={onOpenRoute} />}
+
+      {tab === "neighborhoods" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {(s?.neighborhoods || []).length === 0 && <EmptyState icon="🏘️" title="لا أحياء مُسندة لهذه البلدية بعد" />}
+          {munNeighborhoods.map((n) => {
+            const a = n.municipalityAssignment || defaultAssignmentFor(n.name) || {};
+            const off = isOfficialNeighborhoodName(n.name);
+            const nb = munBins.filter((b) => b.neighborhoodId === n.id);
+            const crit = nb.filter((b) => getBinMapState(b).state === "critical").length;
+            return (
+              <div key={n.id} style={{ background: C.card, border: `1px solid ${crit ? C.danger + "60" : C.border}`, borderRadius: 12, padding: 12, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", fontSize: 12 }}>
+                <div>
+                  <b style={{ color: C.text, fontSize: 14 }}>{n.name}</b> <span style={{ fontSize: 10.5, color: off.official ? C.accent : C.warning }}>{off.official ? `✓ اسم رسمي (واس${off.kind === "variant" ? `: ${off.match}` : ""})` : "⚠️ الاسم غير موجود في القائمة الرسمية"}</span>
+                  <div style={{ color: C.muted, marginTop: 2 }}>{nb.length} حاوية · {crit} حرجة · التبعية: <b style={{ color: a.source === "admin_override" ? C.info : C.warning }}>{a.source === "admin_override" ? "استثناء تشغيلي معتمد" : `قراءة بصرية للخريطة الرسمية — ثقة ${{ high: "عالية", medium: "متوسطة", low: "منخفضة" }[a.confidence] || "—"} (غير متحقق)`}</b></div>
+                  {a.evidence && <div style={{ color: C.dim, fontSize: 11 }}>{a.evidence}</div>}
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {canOverride && (
+                    <select disabled={overrideBusy === n.id} value={municipalityForNeighborhood(n) || ""} onChange={async (e) => { const to = e.target.value; const reason = window.prompt("مبرر الاستثناء التشغيلي (يُسجَّل):", "") ?? ""; if (!to) return; setOverrideBusy(n.id); try { await setNeighborhoodMunicipality(n.id, to, { uid: loggedInUser?.uid, name: loggedInUser?.name }, reason); } finally { setOverrideBusy(""); } }} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 11.5, fontFamily: ARABIC_FONT }}>
+                      {MUNICIPALITIES.map((mm) => <option key={mm.id} value={mm.id}>{mm.shortAr}</option>)}
+                    </select>
+                  )}
+                  {onViewBins && <button onClick={() => onViewBins(n.id)} style={smallBtn(C.accent)}>الحاويات</button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {tab === "bins" && <BinsPage neighborhoods={munNeighborhoods} bins={munBins} routes={munRoutes} fireSensors={fireSensors} citizenReports={citizenReports} loading={false} initialNeighborhoodId={null} onAddToRoute={onAddToRoute} onOpenRoute={onOpenRoute} />}
+
+      {tab === "fleet" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Card title={`السائقون (${munProfiles.length})`} icon={<Users size={16} color="#94a3b8" />}>
+            {munProfiles.length === 0 ? <EmptyState icon="🧑‍✈️" title="لا سائقين مرتبطين بهذه البلدية" desc="يُربط السائق ببلديته من إدارة المستخدمين، وبمركبته ونطاقه من صفحة السائقون والأسطول." /> : munProfiles.map((p) => (
+              <div key={p.uid} style={{ padding: "8px 10px", background: C.bg, borderRadius: 8, marginBottom: 6, fontSize: 12 }}><b style={{ color: C.text }}>{p.fullName}</b> · {SHIFT_STATUS_LABELS[p.shiftStatus] || p.shiftStatus} · {AVAILABILITY_LABELS[p.availability] || "—"} · {munVehicles.find((v) => v.id === p.vehicleId)?.vehicleNumber || vehicles.find((v) => v.id === p.vehicleId)?.vehicleNumber || "بلا مركبة"}<div style={{ color: C.dim, fontSize: 11 }}>النطاق: {(p.neighborhoodKeys || []).map((k) => `حي ${k}`).join("، ") || "غير محدد"}</div></div>
+            ))}
+          </Card>
+          <Card title={`المركبات (${munVehicles.length})`} icon={<Truck size={16} color="#94a3b8" />}>
+            {munVehicles.length === 0 ? <EmptyState icon="🚛" title="لا مركبات مرتبطة بهذه البلدية" /> : munVehicles.map((v) => (
+              <div key={v.id} style={{ padding: "8px 10px", background: C.bg, borderRadius: 8, marginBottom: 6, fontSize: 12 }}><b style={{ color: C.text }}>{v.vehicleNumber}</b> · {VEHICLE_STATUS_LABELS[v.status] || v.status} · {v.capacityLiters} لتر · {v.driverName || "بلا سائق"}</div>
+            ))}
+          </Card>
+        </div>
+      )}
+
+      {tab === "routes" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {munRoutes.length === 0 && <EmptyState icon="🧭" title="لا جولات لهذه البلدية" />}
+          {[...munRoutes].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 40).map((r) => (
+            <div key={r.id} onClick={() => onOpenRoute && onOpenRoute(r.id)} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, cursor: onOpenRoute ? "pointer" : "default", flexWrap: "wrap" }}>
+              <span><b style={{ color: C.text }}>{r.routeName}</b> · {r.binIds?.length || 0} حاوية · {r.estimatedDistanceKm} كم</span>
+              <span style={{ color: C.muted }}>{ROUTE_STATUS_LABELS[r.status] || r.status}{r.driverName ? ` · ${r.driverName}` : ""}{r.status === "in_progress" ? ` · ${routeProgress(r).collected}/${routeProgress(r).total}` : ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === "incidents" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {munIncidents.length === 0 && <EmptyState icon="✅" title="لا بلاغات ميدانية لهذه البلدية" />}
+          {munIncidents.map((inc) => { const t = INCIDENT_TYPES[inc.type] || { label: inc.type, icon: "❓" }; return (
+            <div key={inc.id} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px", fontSize: 12, borderRight: `3px solid ${inc.status === "open" ? C.danger : C.dim}` }}><b style={{ color: C.text }}>{t.icon} {t.label}</b> · {inc.driverName} · {inc.routeName} · {inc.status === "open" ? "مفتوح" : inc.status === "reviewed" ? "تمت المراجعة" : "محلول"}</div>
+          ); })}
+        </div>
+      )}
+
+      {tab === "kpi" && s && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+            {[["أحياء", s.neighborhoods.length, C.info], ["حاويات", s.bins, C.text], ["متصلة بالمحاكي", s.connectedPct != null ? `${s.connectedPct}%` : "—", C.accent], ["حرجة الآن", s.critical, C.danger], ["تحتاج متابعة", s.warning, C.warning], ["بلا بيانات", s.noData, C.dim], ["في المناوبة", s.driversOnShift, C.info], ["متاحون", s.driversAvailable, C.accent], ["مركبات نشطة", s.vehiclesActive, C.purple], ["جولات جارية", s.routesActive, C.info], ["مقترحة / معتمدة", `${s.routesSuggested} / ${s.routesApproved}`, C.warning], ["بلاغات مفتوحة", s.incidentsOpen, s.incidentsOpen ? C.danger : C.dim]].map(([l, v, c]) => (
+              <div key={l} style={{ background: C.card, border: `1px solid ${c}30`, borderRadius: 12, padding: "12px 14px" }}><div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 11, color: C.muted }}>{l}</div></div>
+            ))}
+          </div>
+          <ImpactCard impact={impact} compact accent={m.color} />
+        </div>
+      )}
+    </div>
+  );
+};
+
+const MunicipalitiesPage = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], profiles = [], vehicles = [], incidents = [], loggedInUser, onOpenRoute, onViewBins, onAddToRoute, initialMunicipalityId = null }) => {
+  const scope = scopeFor(loggedInUser);
+  const [selected, setSelected] = useState(initialMunicipalityId || (scope.all ? null : scope.municipalityId));
+  const thermalFor = useMemo(() => makeThermalAlertFor(fireSensors), [fireSensors]);
+  const stats = useMemo(() => {
+    const groups = groupNeighborhoodsByName(neighborhoods, bins);
+    const now = currentTimeMs();
+    const binStateById = Object.fromEntries(bins.map((b) => [b.id, getBinMapState(b, { now })]));
+    return computeMunicipalityStats({ groups, neighborhoods, bins, binStateById, profiles, vehicles, routes, incidents, thermalFor, now });
+  }, [neighborhoods, bins, profiles, vehicles, routes, incidents, thermalFor]);
+  const common = { stats, neighborhoods, bins, fireSensors, recentReadings, routes, citizenReports, profiles, vehicles, incidents, loggedInUser, onOpenRoute, onViewBins, onAddToRoute };
+  if (selected) return <MunicipalityDashboard mid={selected} {...common} onBack={scope.all ? () => setSelected(null) : null} />;
+  const totals = Object.values(stats.byMunicipality).reduce((a, s) => ({ bins: a.bins + s.bins, critical: a.critical + s.critical, routesActive: a.routesActive + s.routesActive, assigned: a.assigned + s.neighborhoods.length }), { bins: 0, critical: 0, routesActive: 0, assigned: 0 });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div>
+        <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>البلديات والنطاقات التشغيلية — أمانة منطقة القصيم ← بريدة</div>
+        <div style={{ fontSize: 12, color: C.dim, marginTop: 2 }}>ست بلديات فرعية (المصدر: أمانة منطقة القصيم). {totals.assigned} حي مُسند · {totals.bins} حاوية · {totals.critical} حرجة · {totals.routesActive} جولة جارية{stats.unassigned.length ? ` · ${stats.unassigned.length} حي بلا تبعية: ${stats.unassigned.map((g) => g.name).join("، ")}` : ""}</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))", gap: 12 }}>
+        {MUNICIPALITIES.map((m) => <MunicipalityCard key={m.id} s={stats.byMunicipality[m.id]} onOpen={setSelected} />)}
+      </div>
+      <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.8 }}>
+        الأسماء والهواتف والمساحات من صفحة البلديات الفرعية والتقرير السنوي 2024 لأمانة منطقة القصيم (رسمي). تبعية الأحياء قراءة بصرية لخرائط النطاق الرسمية (غير متحقق منها) قابلة للتعديل من مدير المنصة مع حفظ السجل. مؤشرات الحاويات من المحاكي التجريبي.
+      </div>
+    </div>
+  );
+};
+
+const MapPage = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], profiles = [], loading, onViewBins, onAddToRoute, onOpenRoute, initialSelectedKey = null }) => {
   if (loading) return <EmptyState icon="⏳" title="جاري تحميل الخريطة…" />;
   if (neighborhoods.length === 0) {
     return <EmptyState icon="🗺️" title="لا توجد أحياء مسجلة بعد" desc="شغّل ترحيل البيانات من صفحة الإعدادات لإنشاء الأحياء والحاويات من بيانات المحطات القديمة." />;
@@ -1449,7 +1720,7 @@ const MapPage = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadin
         <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>الخريطة التشغيلية لمدينة بريدة</div>
         <div style={{ fontSize: 12, color: C.dim, marginTop: 2 }}>حالة الأحياء والحاويات الذكية لحظيًا — اضغط على حي لعرض الجولة المرتبطة به على الخريطة.</div>
       </div>
-      <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} height={620} onViewBins={onViewBins} onAddToRoute={onAddToRoute} onOpenRoute={onOpenRoute} initialSelectedKey={initialSelectedKey} />
+      <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={profiles} height={620} onViewBins={onViewBins} onAddToRoute={onAddToRoute} onOpenRoute={onOpenRoute} initialSelectedKey={initialSelectedKey} />
     </div>
   );
 };
@@ -2262,7 +2533,7 @@ const BinsPage = ({ neighborhoods = [], bins = [], routes = [], fireSensors = []
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: isStale ? C.warning : C.muted, marginBottom: 4 }}>
                   {b.connectivity === "online" ? <Wifi size={12} /> : <WifiOff size={12} />}
-                  {STATE_LABELS[b.connectivity]}
+                  {sensorStateLabel(b, b.connectivity)}
                   {isStale && <span>— {getReadingAgeLabel(b.lastReadingAt)} (قديمة)</span>}
                   {!isStale && <span>· {getReadingAgeLabel(b.lastReadingAt)}</span>}
                 </div>
@@ -4287,6 +4558,8 @@ const ApiKeyCard = () => {
 
 const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggleAutoSync }) => {
   const [demoBinId, setDemoBinId] = useState("");
+  const [munSeedBusy, setMunSeedBusy] = useState(false);
+  const [munSeedMsg, setMunSeedMsg] = useState("");
 
   // ── Live ESP32 simulator: streams one reading every few seconds to a bin so
   // the panel watches fill rise → alert → suggestion → driver notice, live.
@@ -4617,6 +4890,35 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
             لا يعتمد ولا يرسل أي مركبة تلقائيًا — الاعتماد يبقى قرارًا بشريًا.
           </div>
           <Toggle value={autoSyncRoutes} onChange={(v) => onToggleAutoSync && onToggleAutoSync(v)} />
+        </div>
+      </Card>
+
+      {can(loggedInUser?.role, "municipalities.manage") && (
+        <Card title="🏛️ البلديات الفرعية وتبعية الأحياء" icon={<Landmark size={16} color="#94a3b8" />}>
+          <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 10px" }}>
+            يكتب البلديات الست (الأسماء والهواتف والمساحات من المصادر الرسمية) ويسند كل حي بلا تبعية إلى بلديته وفق القراءة البصرية لخرائط النطاق الرسمية (موسومة «غير متحقق منها»)، ثم ينسخ معرّف البلدية على الحاويات والجولات والمركبات والسائقين والبلاغات لتفعيل عزل البيانات. لا يستبدل أي تبعية حُددت يدويًا.
+          </p>
+          <button disabled={munSeedBusy} onClick={async () => { setMunSeedBusy(true); try { const r = await seedMunicipalitiesAndBackfill({ municipalities: MUNICIPALITIES, defaultAssignmentFor, municipalityForNeighborhood, provenance: DATA_PROVENANCE }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); setMunSeedMsg(`✅ ${r.municipalities} بلديات · ${r.neighborhoodsAssigned} حي أُسند · ${r.bins} حاوية · ${r.routes} جولة · ${r.vehicles} مركبة · ${r.profiles} سائق · ${r.incidents} بلاغ${r.unassignedNeighborhoods.length ? ` · بلا تبعية: ${r.unassignedNeighborhoods.join("، ")}` : ""}`); } catch (e) { setMunSeedMsg("❌ " + (e?.message || e)); } finally { setMunSeedBusy(false); } }} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #06b6d4, #0e7490)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{munSeedBusy ? "جاري التهيئة…" : "🏛️ تهيئة البلديات وتوزيع الأحياء"}</button>
+          {munSeedMsg && <div style={{ fontSize: 12, color: C.text, marginTop: 8 }}>{munSeedMsg}</div>}
+        </Card>
+      )}
+
+      <Card title="📚 مصادر البيانات وحالة كل مصدر" icon={<FileText size={16} color="#94a3b8" />}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+          {[
+            ["البلديات الفرعية (الأسماء، الهواتف، خرائط النطاق)", "أمانة منطقة القصيم — صفحة البلديات الفرعية", "رسمي", C.accent, DATA_PROVENANCE.sources[0].url],
+            ["مساحات البلديات وإحصاءات النظافة 2024", "التقرير السنوي لأمانة منطقة القصيم 2024", "رسمي", C.accent, DATA_PROVENANCE.sources[2].url],
+            ["أسماء أحياء بريدة (130 حيًا)", OFFICIAL_NAMES_SOURCE.source, "رسمي", C.accent, OFFICIAL_NAMES_SOURCE.url],
+            ["حدود الأحياء (13 مضلعًا)", "OpenStreetMap", "مفتوح", C.info, "https://www.openstreetmap.org/"],
+            ["حدود البلديات", "خرائط PDF مصوّرة فقط (UTM 38N) — لا ملفات متجهة؛ النطاقات المرسومة تشغيلية تجريبية", "غير متحقق", C.warning, null],
+            ["تبعية الأحياء للبلديات", NEIGHBORHOOD_ASSIGNMENT_PROVENANCE.method, "غير متحقق", C.warning, null],
+            ["بيانات الحاويات والقراءات", "مولّد/محاكي تجريبي — كل قراءة موسومة SIMULATED ومنفصلة عن sensor_readings", "تجريبي", C.purple, null],
+          ].map(([what, src, status, color, url]) => (
+            <div key={what} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", background: C.bg, borderRadius: 8, padding: "8px 12px", flexWrap: "wrap" }}>
+              <div><b style={{ color: C.text }}>{what}</b><div style={{ color: C.muted, fontSize: 11 }}>{url ? <a href={url} target="_blank" rel="noreferrer" style={{ color: C.info }}>{src}</a> : src}</div></div>
+              <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 10, background: color + "20", color }}>{status}</span>
+            </div>
+          ))}
         </div>
       </Card>
 
@@ -5243,6 +5545,267 @@ const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents
   );
 };
 
+// ======================== DEMO SIMULATION CONTROL (Phase 3/4) ========================
+const SIM_TAB_ID = (() => { try { let id = sessionStorage.getItem("swm_sim_tab"); if (!id) { id = "tab-" + Math.random().toString(36).slice(2, 10); sessionStorage.setItem("swm_sim_tab", id); } return id; } catch { return "tab-" + Math.random().toString(36).slice(2, 10); } })();
+
+const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedInUser }) => {
+  const [sim, setSim] = useState(undefined); // undefined = loading, null = not installed
+  const [cfg, setCfg] = useState({ ...DEFAULT_SIM_CONFIG });
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const [evMun, setEvMun] = useState("");
+  const [evBin, setEvBin] = useState("");
+  const [tickLog, setTickLog] = useState([]);
+  const canInstall = can(loggedInUser?.role, "municipalities.manage"); // platform admin: install/reset/start/stop
+  const canControl = can(loggedInUser?.role, "simulation.control");
+  const scope = scopeFor(loggedInUser);
+  const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
+  const simBins = bins.filter((b) => b.simulated && (!evMun || b.municipalityId === evMun));
+
+  useEffect(() => subscribeSimState((s) => { setSim(s); if (s?.config) setCfg((c) => ({ ...c, ...s.config })); }), []);
+
+  // Leader tick loop: the tab that pressed start ticks; another tab takes over when the leader is stale.
+  const tickingRef = useRef(false);
+  useEffect(() => {
+    if (!sim || sim.status !== "running" || !canControl) return;
+    const interval = realIntervalMs(sim.config, sim.speed);
+    const id = setInterval(async () => {
+      if (tickingRef.current) return;
+      const stale = !sim.lastTickAt || Date.now() - new Date(sim.lastTickAt).getTime() > 3 * interval;
+      if (sim.leader !== SIM_TAB_ID && !stale) return;
+      if (sim.leader !== SIM_TAB_ID) await setSimulationStatus("running", { leader: SIM_TAB_ID });
+      tickingRef.current = true;
+      try { const r = await tickSimulation(); if (r) setTickLog((l) => [{ at: new Date().toLocaleTimeString("ar-SA"), ...r }, ...l].slice(0, 12)); }
+      catch (e) { console.error("[sim-tick]", e); setMsg("❌ " + (e?.message || e)); }
+      finally { tickingRef.current = false; }
+    }, interval);
+    return () => clearInterval(id);
+  }, [sim, canControl]);
+
+  const run = async (label, fn) => { setBusy(label); setMsg(""); try { const r = await fn(); if (r) setMsg(r); } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); } };
+  const install = () => run("install", async () => {
+    if (!window.confirm("سيُحذف المشهد التجريبي السابق (الصفوف الموسومة demo فقط) ويُبنى مشهد المحاكاة بنفس الـseed. البيانات الحقيقية لا تُمس. متابعة؟")) return "";
+    const r = await installSimulation(cfg, { neighborhoods, featuresByKey: FEATURE_BY_KEY, actor, withHistory: true, vehicleIds: vehicles.filter((v) => v.demo).map((v) => v.id) });
+    return `✅ ثُبّت المشهد: ${r.bins} حاوية (${r.summary.online} متصلة بالمحاكي · ${r.summary.offline} منقطعة · ${r.summary.fault} معطلة · ${r.summary.critical} حرجة · ${r.summary.thermal} تنبيه حراري) · حُذف ${r.cleaned} صف تجريبي سابق · ${r.historyRoutes} جولة تاريخية${r.warnings.length ? " · " + r.warnings.join("، ") : ""}`;
+  });
+  const fire = (type) => run(type, async () => { const r = await fireSimulationEvent(type, evBin ? { binId: evBin } : { municipalityId: evMun || scope.municipalityId || null }, actor); return `${SIM_EVENTS[type].icon} ${SIM_EVENTS[type].label} → ${r.bin.name}`; });
+  const summary = sim?.summary;
+  const num = (k, label, min, max) => (
+    <label style={{ fontSize: 11, color: C.muted }}>{label}<input type="number" min={min} max={max} value={cfg[k]} disabled={!canInstall} onChange={(e) => setCfg({ ...cfg, [k]: Number(e.target.value) })} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT, boxSizing: "border-box" }} /></label>
+  );
+  const btn = (label, onClick, color, disabled = false) => <button disabled={disabled || !!busy} onClick={onClick} style={{ padding: "9px 14px", borderRadius: 10, border: `1px solid ${color}`, background: color + "20", color, fontWeight: 700, fontSize: 12, cursor: disabled ? "not-allowed" : "pointer", fontFamily: ARABIC_FONT, opacity: disabled ? 0.5 : 1 }}>{busy === label ? "…" : label}</button>;
+
+  if (!canControl) return <EmptyState icon="🔒" title="غير مصرح" />;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div>
+        <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>🧪 محاكي مستشعرات IoT — بيئة العرض</div>
+        <div style={{ fontSize: 12, color: C.dim }}>سيناريو حتمي (seed ثابت): إعادة الضبط تعيد المشهد نفسه. كل قراءة تُكتب في simulated_readings بمصدر SIMULATED ولا تلمس قراءات الأجهزة الحقيقية، ولا يعمل المحرك إلا على حاويات موسومة simulated.</div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 1fr) minmax(320px, 1.3fr)", gap: 14 }}>
+        <Card title="⚙️ إعدادات السيناريو (تجريبية، قابلة للتعديل)" icon={<SettingsIcon size={16} color="#94a3b8" />}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <label style={{ fontSize: 11, color: C.muted, gridColumn: "1 / -1" }}>Seed<input value={cfg.seed} disabled={!canInstall} onChange={(e) => setCfg({ ...cfg, seed: e.target.value })} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: "monospace", direction: "ltr", boxSizing: "border-box" }} /></label>
+            {num("totalBins", "عدد الحاويات", 10, 1000)}
+            {num("offlineSensors", "مستشعرات منقطعة", 0, 200)}
+            {num("faultSensors", "مستشعرات معطلة", 0, 200)}
+            {num("thermalAlerts", "تنبيهات حرارية", 0, 50)}
+            {num("tickMinutes", "دقائق محاكاة لكل نبضة", 1, 120)}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+            {btn(sim ? "🔁 إعادة ضبط (نفس الـseed)" : "📦 تثبيت المشهد", install, C.purple, !canInstall)}
+          </div>
+          {!canInstall && <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>تثبيت/إعادة ضبط المشهد من صلاحية مدير المنصة؛ يمكنك توليد الأحداث داخل بلديتك.</div>}
+          {msg && <div style={{ fontSize: 12, color: C.text, marginTop: 8, lineHeight: 1.7 }}>{msg}</div>}
+        </Card>
+
+        <Card title="🎛️ التحكم في التشغيل" icon={<Gauge size={16} color="#94a3b8" />}>
+          {sim === undefined ? <div style={{ color: C.dim, fontSize: 12 }}>جاري التحميل…</div> : !sim ? <EmptyState icon="📦" title="لم يُثبَّت مشهد المحاكاة بعد" desc="اضغط «تثبيت المشهد» لتوليد الحاويات والمستشعرات الافتراضية داخل مضلعات الأحياء." /> : (
+            <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, marginBottom: 8 }}>
+                {[["الحالة", sim.status === "running" ? "▶️ يعمل" : "⏸ متوقف", sim.status === "running" ? C.accent : C.warning], ["الساعة المحاكاة", new Date(sim.clock).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }), C.text], ["النبضات", sim.tick, C.text], ["السرعة", `${sim.speed}×`, C.info],
+                  ["حاويات", summary?.total ?? "—", C.text], ["متصلة بالمحاكي", summary?.online ?? "—", C.accent], ["منقطعة / معطلة", `${summary?.offline ?? 0} / ${summary?.fault ?? 0}`, C.dim], ["حرجة / متابعة", `${summary?.critical ?? 0} / ${summary?.warning ?? 0}`, C.danger], ["تنبيه حراري", summary?.thermal ?? 0, C.warning]].map(([l, v, c]) => (
+                  <div key={l} style={{ background: C.bg, borderRadius: 8, padding: "6px 10px" }}><div style={{ fontSize: 15, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 10.5 }}>{l}</div></div>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                {sim.status !== "running" ? btn("▶️ بدء", () => run("▶️ بدء", async () => { await setSimulationStatus("running", { speed: sim.speed, leader: SIM_TAB_ID }); return "▶️ بدأ التشغيل — هذه النافذة تقود النبضات"; }), C.accent, !canInstall)
+                  : btn("⏹ إيقاف", () => run("⏹ إيقاف", async () => { await setSimulationStatus("stopped"); return "⏹ أُوقف التشغيل"; }), C.danger, !canInstall)}
+                <span>تسريع الزمن:</span>
+                {[1, 5, 20, 60].map((sp) => <button key={sp} disabled={!canInstall} onClick={() => setSimulationStatus(sim.status, { speed: sp, leader: sim.leader })} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${sim.speed === sp ? C.info : C.border}`, background: sim.speed === sp ? C.info + "25" : "transparent", color: sim.speed === sp ? C.info : C.muted, fontSize: 11.5, cursor: "pointer", fontFamily: ARABIC_FONT }}>{sp}×</button>)}
+                <span style={{ fontSize: 10.5, color: C.dim }}>نبضة كل {Math.round(realIntervalMs(sim.config, sim.speed) / 1000)} ث حقيقية = {sim.config.tickMinutes} دقيقة محاكاة{sim.leader === SIM_TAB_ID ? " · هذه النافذة القائدة" : sim.leader ? " · نافذة أخرى تقود" : ""}</span>
+              </div>
+              {tickLog.length > 0 && <div style={{ marginTop: 8, fontSize: 11, fontFamily: "monospace", background: C.bg, borderRadius: 8, padding: 8, maxHeight: 110, overflowY: "auto", direction: "ltr", textAlign: "left" }}>{tickLog.map((t, i) => <div key={i}>{t.at} tick#{t.tick} clock={new Date(t.clock).toISOString().slice(11, 16)} critical={t.summary.critical} warning={t.summary.warning} emptied={t.emptied}</div>)}</div>}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {sim && (
+        <Card title="⚡ توليد أحداث للعرض" icon={<Sparkles size={16} color="#94a3b8" />}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10, fontSize: 12 }}>
+            <span style={{ color: C.muted }}>النطاق:</span>
+            <select value={evMun} disabled={!scope.all} onChange={(e) => { setEvMun(e.target.value); setEvBin(""); }} style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>
+              <option value="">{scope.all ? "كل المدينة (اختيار حتمي)" : municipalityById(scope.municipalityId)?.shortAr || "بلديتي"}</option>
+              {scope.all && MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.shortAr}</option>)}
+            </select>
+            <select value={evBin} onChange={(e) => setEvBin(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT, maxWidth: 320 }}>
+              <option value="">حاوية محددة (اختياري)…</option>
+              {simBins.map((b) => <option key={b.id} value={b.id}>{b.name} — {b.lastFillLevelPercent}% · {sensorStateLabel(b, b.sensorConnectivity || "online")}</option>)}
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {Object.entries(SIM_EVENTS).map(([k, e]) => <span key={k}>{btn(`${e.icon} ${e.label}`, () => fire(k), k === "critical_fill" ? C.danger : k === "heat_spike" ? C.warning : k === "emptied" ? C.accent : C.info)}</span>)}
+          </div>
+          {(sim.events || []).length > 0 && (
+            <div style={{ marginTop: 10, maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+              {[...sim.events].reverse().slice(0, 20).map((e, i) => <div key={i} style={{ fontSize: 11.5, color: C.muted, background: C.bg, borderRadius: 6, padding: "5px 10px" }}>{SIM_EVENTS[e.type]?.icon} {e.label} — <b style={{ color: C.text }}>{e.binName}</b> · {new Date(e.at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })} (زمن المحاكاة)</div>)}
+            </div>
+          )}
+          <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8, lineHeight: 1.7 }}>كل حدث يكتب قراءة SIMULATED جديدة فتتحدث الحاوية فورًا في لوحة التحكم والخريطة ومحرك الأولوية والتنبؤ واقتراح الجولات. تأكيد السائق تفريغَ حاوية محاكاة يولّد قراءة تفريغ في النبضة التالية — حدث التفريغ (collection_events) وقراءة المستشعر صفان منفصلان.</div>
+        </Card>
+      )}
+    </div>
+  );
+};
+
+// ======================== DEMONSTRATION MODE (Phase 5) ========================
+COLLECTIONS.DEMO_SESSIONS = "demo_sessions";
+const DEMO_SESSION_REF = () => doc(db, COLLECTIONS.DEMO_SESSIONS, "current");
+
+const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles = [], vehicles = [], recentReadings = [], fireSensors = [], citizenReports = [], loggedInUser, onNavigate }) => {
+  const [session, setSession] = useState(undefined);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const [pickMid, setPickMid] = useState(DEFAULT_DEMO_MUNICIPALITY);
+  const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
+  const canRun = can(loggedInUser?.role, "simulation.control");
+  useEffect(() => onSnapshot(DEMO_SESSION_REF(), (snap) => setSession(snap.exists() ? snap.data() : null), () => setSession(null)), []);
+  const evaluation = useMemo(() => evaluateDemo(session, { bins, routes, profiles, readings: recentReadings }), [session, bins, routes, profiles, recentReadings]);
+  const { index, doneByKey, newlyPassed } = useMemo(() => nextStepIndex(session, evaluation), [session, evaluation]);
+  // Persist newly passed observe-steps so completion survives later data changes and page refreshes.
+  useEffect(() => {
+    if (!session || newlyPassed.length === 0) return;
+    setDoc(DEMO_SESSION_REF(), { completedKeys: [...new Set([...(session.completedKeys || []), ...newlyPassed])], updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+  }, [newlyPassed.join("|"), session]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const patch = (data) => setDoc(DEMO_SESSION_REF(), { ...data, updatedAt: new Date().toISOString() }, { merge: true });
+  const run = (label, fn) => async () => { setBusy(label); setMsg(""); try { const r = await fn(); if (r) setMsg(r); } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); } };
+  const mid = session?.municipalityId || null;
+  const munNeighborhoods = neighborhoods.filter((n) => municipalityForNeighborhood(n) === mid);
+  const munKeys = munNeighborhoods.map((n) => normalizeNeighborhoodName(n.name));
+
+  const actions = {
+    start: run("start", async () => { await setDoc(DEMO_SESSION_REF(), { startedAt: new Date().toISOString(), startedBy: actor.uid, completedKeys: [], firedEvents: 0 }); return "بدأت الجلسة"; }),
+    city: run("city", async () => { await patch({ visitedCity: true }); onNavigate && onNavigate("municipalities"); return ""; }),
+    pick: run("pick", async () => { await patch({ municipalityId: pickMid }); onNavigate && onNavigate("municipalities", { municipalityId: pickMid }); return `اختيرت ${municipalityById(pickMid)?.nameAr}`; }),
+    fill: run("fill", async () => {
+      const names = [];
+      for (let i = 0; i < 3; i++) { const r = await fireSimulationEvent("critical_fill", { municipalityId: mid }, actor); names.push(r.bin.name); }
+      await patch({ firedEvents: (session?.firedEvents || 0) + 3 });
+      return `🔴 امتلاء حرج: ${names.join("، ")}`;
+    }),
+    route: run("route", async () => {
+      const ctx = makeBinContext(fireSensors, citizenReports, neighborhoods);
+      const scored = bins.map((bin) => ({ bin, priority: getBinPriority(bin, null, [], ctx.forBin(bin)) }));
+      const open = routes.filter((r) => ["suggested", "approved", "in_progress"].includes(r.status));
+      const plan = reconcileRecommendations(neighborhoods, scored, open);
+      await applyRouteReconciliation(plan, { municipalityIdFor: (nid) => municipalityForNeighborhood(neighborhoods.find((n) => n.id === nid)) });
+      // pick the municipality's strongest suggestion (fresh read: the listener may lag a tick)
+      const snap = await getDocs(query(collection(db, COLLECTIONS.COLLECTION_ROUTES), where("municipalityId", "==", mid)));
+      const cands = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((r) => r.status === "suggested").sort((a, b) => (b.totalPriorityScore || 0) - (a.totalPriorityScore || 0));
+      if (!cands.length) throw new Error("لم تُقترح جولة في هذه البلدية — ولّد أحداث امتلاء أولًا");
+      const r = cands[0];
+      // optimize order (haversine matrix; OSRM table when reachable)
+      const stopsPos = routeStopPositions(r, bins, neighborhoods).map((p) => ({ binId: p.binId, binName: p.binName, lat: p.pos[0], lng: p.pos[1], priorityTier: p.priorityTier, priorityScore: p.priorityScore, fillLevelPercent: p.bin.lastFillLevelPercent ?? null, wasteLiters: Math.round((Number(p.bin.capacityLiters) || 1100) * (Number(p.bin.lastFillLevelPercent) || 0) / 100) }));
+      const veh = vehicles.find((v) => v.municipalityId === mid && v.status === "available") || vehicles.find((v) => v.status === "available") || null;
+      const start = veh?.depotLat != null ? { lat: veh.depotLat, lng: veh.depotLng } : DEFAULT_DEPOT;
+      const matrix = await fetchRoadMatrix([start, ...stopsPos]).catch(() => null);
+      const opt = optimizeRoute({ start, stops: stopsPos, capacityLiters: Number(veh?.capacityLiters) || null, matrix: matrix || undefined });
+      if (opt.ok) {
+        const served = opt.orderedStops.filter((o) => o.type === "stop").map((o, i) => ({ order: i + 1, binId: o.binId, binName: o.binName, priorityTier: o.priorityTier, priorityScore: o.priorityScore ?? null, hasCoords: true, lat: o.lat, lng: o.lng, fillLevelPercent: o.fillLevelPercent ?? null, arrivalMin: o.arrivalMin ?? null, deferred: false }));
+        const deferred = opt.deferredStops.map((d, i) => ({ order: served.length + i + 1, binId: d.binId, binName: d.binName, priorityTier: d.priorityTier, priorityScore: d.priorityScore ?? null, hasCoords: true, lat: d.lat, lng: d.lng, fillLevelPercent: d.fillLevelPercent ?? null, deferred: true }));
+        await updateRoute(r.id, { orderedStops: [...served, ...deferred], binIds: [...served, ...deferred].map((o) => o.binId), estimatedDistanceKm: opt.totalDistanceKm, estimatedWasteLiters: opt.estimatedWasteLiters, optimization: { at: new Date().toISOString(), by: actor.uid, matrixSource: opt.matrixSource, confidence: opt.confidence, improvementPct: opt.objective.improvementPct, totalDurationMin: opt.totalDurationMin, trips: opt.trips, constraints: opt.constraints, deferredBinIds: deferred.map((d) => d.binId) } });
+      }
+      await patch({ routeId: r.id, routeName: r.routeName });
+      return `🧭 ${r.routeName} — ${r.binIds?.length || 0} حاوية${opt.ok ? ` · مُحسّنة (${opt.matrixSource === "osrm" ? "طرق فعلية" : "تقدير"}, ${opt.totalDistanceKm} كم, ~${opt.totalDurationMin} د)` : ""}`;
+    }),
+    driver: run("driver", async () => {
+      const route = routes.find((r) => r.id === session?.routeId); if (!route) throw new Error("لا جولة مختارة");
+      // Make sure a demo driver of this municipality is ready: vehicle, coverage, on shift.
+      let prof = profiles.find((p) => p.municipalityId === mid && p.demo) || profiles.find((p) => p.municipalityId === mid) || profiles[0];
+      if (!prof) throw new Error("لا يوجد ملف سائق — أنشئ حسابات العرض (scripts/createDemoAccounts.mjs) وهيّئ ملف السائق");
+      const veh = vehicles.find((v) => v.id === prof.vehicleId) || vehicles.find((v) => v.municipalityId === mid && v.status === "available") || vehicles.find((v) => v.status === "available");
+      if (!prof.vehicleId && veh) await assignVehicleToDriver({ driverId: prof.uid, driverName: prof.fullName, vehicleId: veh.id, vehicleNumber: veh.vehicleNumber, start: new Date().toISOString(), end: null }, actor, "تهيئة سيناريو العرض");
+      await updateDriverProfile(prof.uid, { neighborhoodKeys: munKeys, shiftStatus: "on_shift", availability: "available", locationSharing: true, accountStatus: "active" }, prof, actor, "تهيئة سيناريو العرض");
+      const fresh = { ...prof, vehicleId: prof.vehicleId || veh?.id || null, neighborhoodKeys: munKeys, shiftStatus: "on_shift", availability: "available", accountStatus: "active" };
+      const nName = neighborhoods.find((n) => (route.neighborhoodIds || []).includes(n.id))?.name || "";
+      const stopsPos = routeStopPositions(route, bins, neighborhoods).map((p) => ({ ...p, lat: p.pos[0], lng: p.pos[1] }));
+      const rec = rankDriverCandidates({ ...route, orderedStops: stopsPos }, { profiles: [fresh, ...profiles.filter((p) => p.uid !== fresh.uid)], vehicles, routes, neighborhoodName: nName, defaultOrigin: DEFAULT_DEPOT });
+      if (!rec.recommended) throw new Error("لم يُرشَّح سائق: " + rec.warnings.join("، "));
+      await patch({ driverId: rec.recommended.driverId, recommendedDriverName: rec.recommended.driverName, recommendedVehicleId: rec.recommended.vehicleId, recommendation: { reason: rec.recommended.reason, totalKm: rec.recommended.totalKm, totalMin: rec.recommended.totalMin, confidence: rec.recommended.confidence } });
+      return `🧑‍✈️ المرشح: ${rec.recommended.driverName} — ${rec.recommended.vehicleNumber} · ${rec.recommended.reason}`;
+    }),
+    approve: run("approve", async () => {
+      const route = routes.find((r) => r.id === session?.routeId); if (!route || !session?.driverId) throw new Error("أكمل الخطوتين السابقتين");
+      await approveAndAssignRoute(route.id, actor.uid, { driverId: session.driverId, driverName: session.recommendedDriverName, vehicleId: session.recommendedVehicleId }, null);
+      await writeAuditLog("route_assigned", actor.uid, actor.name, { routeId: route.id, routeName: route.routeName, driverId: session.driverId, vehicleId: session.recommendedVehicleId, demoScenario: true });
+      await patch({ criticalBefore: evaluation.critical, routeCriticalBefore: bins.filter((b) => (route.binIds || []).includes(b.id) && Number(b.lastFillLevelPercent) >= 85 && Number(b.lastFillLevelPercent) <= 100).length, approvedAt: new Date().toISOString() });
+      return `✅ اعتُمدت ${route.routeName} وأُسندت إلى ${session.recommendedDriverName} — تظهر الآن في حساب السائق`;
+    }),
+    reset: run("reset", async () => {
+      if (!window.confirm("إعادة السيناريو من البداية: تُحذف الجلسة ويُعاد تثبيت مشهد المحاكاة بنفس الـseed (الصفوف التجريبية فقط). متابعة؟")) return "";
+      const r = await resetSimulation({ neighborhoods, featuresByKey: FEATURE_BY_KEY, actor, withHistory: true, vehicleIds: vehicles.filter((v) => v.demo).map((v) => v.id) });
+      await setDoc(DEMO_SESSION_REF(), { startedAt: new Date().toISOString(), startedBy: actor.uid, completedKeys: [], firedEvents: 0, resetAt: new Date().toISOString() });
+      return `🔁 أُعيد المشهد (${r.bins} حاوية) وبدأت جلسة جديدة`;
+    }),
+  };
+  const actionFor = (key) => ({ city: actions.city, pick: actions.pick, fill: actions.fill, route: actions.route, driver: actions.driver, approve: actions.approve })[key];
+
+  if (!canRun) return <EmptyState icon="🔒" title="غير مصرح" />;
+  if (session === undefined) return <EmptyState icon="⏳" title="جاري التحميل…" />;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>🎬 وضع العرض — سيناريو لجنة التحكيم</div>
+          <div style={{ fontSize: 12, color: C.dim }}>12 خطوة من المدينة إلى تحديث المؤشرات. الخطوات الإجرائية تُنفَّذ بزر؛ خطوات السائق تُكتشف تلقائيًا من البيانات الحية. الحالة محفوظة في قاعدة البيانات فلا تضيع عند تحديث الصفحة.</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {!session && <button disabled={!!busy} onClick={actions.start} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>▶️ بدء الجلسة</button>}
+          {session && can(loggedInUser?.role, "municipalities.manage") && <button disabled={!!busy} onClick={actions.reset} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🔁 إعادة من البداية</button>}
+        </div>
+      </div>
+      {msg && <div style={{ fontSize: 12, color: C.text, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>{msg}</div>}
+      {session && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {DEMO_STEPS.map((st, i) => {
+            const done = doneByKey[st.key]; const current = i === index;
+            const ev = evaluation[st.key];
+            const act = actionFor(st.key);
+            return (
+              <div key={st.key} style={{ display: "flex", gap: 12, alignItems: "center", background: current ? C.info + "12" : C.card, border: `1px solid ${done ? C.accent + "60" : current ? C.info : C.border}`, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
+                <div style={{ width: 28, height: 28, borderRadius: "50%", background: done ? C.accent : current ? C.info : C.bg, color: done || current ? "#07231A" : C.dim, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13 }}>{done ? "✓" : i + 1}</div>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>{st.title}</div>
+                  <div style={{ fontSize: 11.5, color: C.muted }}>{ev?.detail || st.hint}{st.kind === "observe" && !done ? " · يُكتشف تلقائيًا" : ""}</div>
+                </div>
+                {st.key === "pick" && !done && (
+                  <select value={pickMid} onChange={(e) => setPickMid(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>{MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.nameAr}</option>)}</select>
+                )}
+                {act && (current || (done && st.key === "city")) && <button disabled={!!busy || (!current && !done)} onClick={act} style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === st.key ? "…" : st.kind === "nav" ? "افتح" : "نفّذ"}</button>}
+                {st.key === "inbox" && current && <span style={{ fontSize: 11.5, color: C.warning }}>📱 سجّل دخول السائق ({profiles.find((p) => p.uid === session.driverId)?.email || "حساب السائق"}) على جهاز ثانٍ، ابدأ المناوبة ثم الجولة.</span>}
+              </div>
+            );
+          })}
+          {index >= DEMO_STEPS.length && <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}60`, borderRadius: 12, padding: 14, fontSize: 13, color: C.accent, fontWeight: 700 }}>🎉 اكتمل السيناريو — {evaluation.indicators.detail}. يمكنك الإعادة من البداية.</div>}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ======================== DRIVERS & FLEET (Phase 1) ========================
 const NEIGHBORHOOD_KEYS = buraidahNeighborhoodsGeo.features.map((f) => f.properties.baseName);
 const inputSt = { width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: ARABIC_FONT, boxSizing: "border-box" };
@@ -5512,7 +6075,7 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
     try {
       const open = routes.filter((r) => ["suggested", "approved", "in_progress"].includes(r.status));
       const plan = reconcileRecommendations(neighborhoods, scoredBinsLive, open);
-      const result = await applyRouteReconciliation(plan);
+      const result = await applyRouteReconciliation(plan, { municipalityIdFor: (nid) => municipalityForNeighborhood(neighborhoods.find((n) => n.id === nid)) });
       await writeAuditLog("routes_generated", loggedInUser?.uid, loggedInUser?.name, { created: result.created, updated: result.updated, withdrawn: result.withdrawn, unchanged: plan.unchanged.length });
       if (result.created + result.updated + result.withdrawn === 0) {
         setGenerateMsg(plan.unchanged.length > 0 ? "الجولات المقترحة محدّثة بالفعل — لا تغييرات." : "لا توجد حاويات مؤهلة للجمع حاليًا — لا جولات مقترحة.");
@@ -5578,7 +6141,7 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
             <button
               disabled={!newVehicleNumber.trim()}
               onClick={async () => {
-                await addVehicle({ vehicleNumber: newVehicleNumber.trim(), capacityLiters: 6000 });
+                await addVehicle({ vehicleNumber: newVehicleNumber.trim(), capacityLiters: 6000, municipalityId: scopeFor(loggedInUser).municipalityId || null });
                 await writeAuditLog("vehicle_added", loggedInUser?.uid, loggedInUser?.name, { vehicleNumber: newVehicleNumber.trim() });
                 setNewVehicleNumber("");
               }}
@@ -6405,7 +6968,7 @@ const AIAssistant = ({ role, stations = [], alerts = [], userData = {}, myReques
   // Build system context from real data
   const buildSystemPrompt = () => {
     const now = new Date().toLocaleString("ar-SA");
-    if (role === "employee" || role === "executive") {
+    if (isMgmtRole(role)) {
       const critical  = stations.filter(s => getStatus(s.fillLevel) === "حرج");
       const warning   = stations.filter(s => getStatus(s.fillLevel) === "تحذير");
       const normal    = stations.filter(s => getStatus(s.fillLevel) === "طبيعي");
@@ -6497,11 +7060,11 @@ ${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distS
     }
   };
 
-  const greeting = role === "employee" || role === "executive"
+  const greeting = isMgmtRole(role)
     ? "مرحباً! أنا مساعدك الذكي. اسألني عن حالة الأحياء، التنبيهات، أوامر الجولات، أو أي شيء آخر."
     : "أهلاً! أنا مساعدك في بوابة الأفراد. اسألني عن طلباتك أو وضع حيّك.";
 
-  const suggestions = role === "employee" || role === "executive"
+  const suggestions = isMgmtRole(role)
     ? ["أي حي يحتاج جمعًا الآن؟", "لخص التنبيهات النشطة", "ما وضع الأحياء الحرجة؟"]
     : ["وش حالة طلباتي؟", "متى يجي الشفط لحينا؟", "كيف أرفع بلاغ؟"];
 
@@ -6541,7 +7104,7 @@ ${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distS
           <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#6d28d9,#4c1d95)", borderRadius: "20px 20px 0 0" }}>
             <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>🤖 المساعد الذكي</div>
             <div style={{ fontSize: 11, color: "#c4b5fd", marginTop: 2 }}>
-              {role === "employee" || role === "executive" ? "مساعد الموظف — يقرأ بيانات النظام" : "مساعد الأفراد — بوابة بريدة"}
+              {isMgmtRole(role) ? "مساعد الموظف — يقرأ بيانات النظام" : "مساعد الأفراد — بوابة بريدة"}
             </div>
           </div>
 
@@ -7029,6 +7592,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
 
   return (
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", padding: 16 }}>
+      <div style={{ margin: "-16px -16px 12px", borderRadius: "0 0 12px 12px", overflow: "hidden" }}><DemoEnvBanner /></div>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -7305,6 +7869,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
 
   return (
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+      <DemoEnvBanner />
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
       {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
 
@@ -7863,17 +8428,24 @@ function SmartWasteManagement() {
   // 🏘️ الأحياء والحاويات الذكية — المصدر الرئيسي الجديد للواجهة التشغيلية
   // (stations/containers أعلاه يبقى مؤقتًا كمصدر fallback داخلي لحين اكتمال
   // نقل كل الصفحات إليها؛ لا يُحذف من Firestore في هذه المرحلة)
-  const { neighborhoods, loading: loadingNeighborhoods } = useNeighborhoods();
-  const { bins, loading: loadingBins } = useBins();
-  const { readings: recentReadings } = useRecentReadings();
-  const { vehicles, loading: loadingVehicles } = useVehicles();
+  // Data scope (mirrors firestore.rules): platform admin → everything; manager/employee/driver with a
+  // municipality → only that municipality's docs (server-side where-filter + rules).
+  const scope = useMemo(() => scopeFor(userData), [userData]);
+  const scopeMid = scope.all ? null : scope.municipalityId;
   const isDriverAccount = userData?.role === "driver";
-  const { routes, loading: loadingRoutes } = useCollectionRoutes(!isDriverAccount);
-  const { events: collectionEvents } = useCollectionEvents();
+  const isStaffAccount = !!userData && isStaffRole(userData.role);
+  const { neighborhoods, loading: loadingNeighborhoods } = useNeighborhoods({ municipalityId: scopeMid });
+  const { bins, loading: loadingBins } = useBins({ municipalityId: scopeMid });
+  const { readings: recentReadings } = useRecentReadings();
+  const { vehicles, loading: loadingVehicles } = useVehicles({ municipalityId: scopeMid });
+  const { routes, loading: loadingRoutes } = useCollectionRoutes(!isDriverAccount, scopeMid);
+  const { events: collectionEvents } = useCollectionEvents({ municipalityId: scopeMid });
   const { auditLog } = useAuditLog(!isDriverAccount);
-  const { profiles: driverProfiles } = useDriverProfiles(!isDriverAccount && userData?.role !== "citizen");
-  const { incidents: routeIncidents } = useRouteIncidents(!isDriverAccount && userData?.role !== "citizen");
-  const { assignments: vehicleAssignments } = useDriverVehicleAssignments(!isDriverAccount && userData?.role !== "citizen");
+  const { profiles: driverProfiles } = useDriverProfiles(isStaffAccount, scopeMid);
+  const { incidents: routeIncidents } = useRouteIncidents(isStaffAccount, scopeMid);
+  const { assignments: vehicleAssignments } = useDriverVehicleAssignments(isStaffAccount, scopeMid);
+  const { municipalities: municipalityDocs } = useMunicipalities(); // eslint-disable-line no-unused-vars -- used by the municipalities page (Phase 2)
+  const municipalityIdFor = useCallback((nid) => municipalityForNeighborhood(neighborhoods.find((n) => n.id === nid)), [neighborhoods]);
   const { data: _citizenReportsCol } = useCollection(COLLECTIONS.CITIZEN_REPORTS);
   const citizenReports = useMemo(() => _citizenReportsCol || [], [_citizenReportsCol]);
 
@@ -7897,6 +8469,7 @@ function SmartWasteManagement() {
   const [routeInitialId, setRouteInitialId] = useState(null);
   const goToRoute = (routeId) => { setRouteInitialId(routeId); setPage("control"); };
   const [mapInitialKey, setMapInitialKey] = useState(null);
+  const [municipalityInitialId, setMunicipalityInitialId] = useState(null);
   const goToMapNeighborhood = (key) => { setMapInitialKey(key); setPage("map"); };
 
   // ── Analytics من Firestore (مع fallback للبيانات الافتراضية) ──────
@@ -7937,7 +8510,7 @@ function SmartWasteManagement() {
   })), [realAlerts]);
 
   useEffect(() => {
-    if (!autoSyncRoutes || loadingRoutes || loadingBins || bins.length === 0 || !userData || userData.role === "citizen") return;
+    if (!autoSyncRoutes || loadingRoutes || loadingBins || bins.length === 0 || !userData || !isStaffRole(userData.role)) return; // never from driver/citizen accounts
     const t = setTimeout(async () => {
       if (syncingRef.current) return;
       const ctx = makeBinContext(fireSensors, citizenReports, neighborhoods);
@@ -7949,17 +8522,18 @@ function SmartWasteManagement() {
       if (plan.toCreate.length + plan.toUpdate.length + plan.toWithdraw.length === 0) return;
       syncingRef.current = true;
       try {
-        const result = await applyRouteReconciliation(plan);
+        const result = await applyRouteReconciliation(plan, { municipalityIdFor });
         await writeAuditLog("routes_auto_synced", "system", "النظام (مزامنة تلقائية)", { ...result, triggeredBy: userData.fullName || "" });
       } catch (e) { console.error("[routes-auto-sync]", e); }
       finally { syncingRef.current = false; }
     }, 6000);
     return () => clearTimeout(t);
-  }, [autoSyncRoutes, bins, neighborhoods, routes, recentReadings, fireSensors, citizenReports, loadingRoutes, loadingBins, userData]);
+  }, [autoSyncRoutes, bins, neighborhoods, routes, recentReadings, fireSensors, citizenReports, loadingRoutes, loadingBins, userData, municipalityIdFor]);
 
   const lastAlertSyncRef = useRef(0);
   useEffect(() => {
     if (bins.length === 0 && neighborhoods.length === 0) return;
+    if (!userData || !isStaffRole(userData.role)) return; // alerts are written by staff sessions only (rules deny drivers/citizens)
     // Light client-side throttle — avoid re-syncing on every snapshot tick
     // when several collections update within the same second.
     const now = Date.now();
@@ -7974,7 +8548,7 @@ function SmartWasteManagement() {
     }));
     const candidates = generateAlertCandidates(scored, scoredNeighborhoods);
     syncAlertsFromCandidates(candidates).catch((e) => console.error("[alerts-sync]", e));
-  }, [bins, neighborhoods, fireSensors, citizenReports]);
+  }, [bins, neighborhoods, fireSensors, citizenReports, userData]);
 
   // Browser notifications for the operations staff: new critical alerts + new suggested routes.
   const staffNotifItems = useMemo(() => [
@@ -8023,6 +8597,7 @@ function SmartWasteManagement() {
     roleTitle: userData.roleAr || ROLE_TITLES[userData.role] || "مواطن",
     district: userData.district || "حي الخليج",
     avatar: ROLE_AVATARS[userData.role] || "🏠",
+    municipalityId: userData.municipalityId || null,
   } : null;
 
   if (!loggedInUser) return null;
@@ -8037,10 +8612,8 @@ function SmartWasteManagement() {
   }
 
   // Executive portal
-  if (loggedInUser.role === "executive") {
-    return <ExecDashboard user={loggedInUser} onLogout={handleLogout} stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData}
-      neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} collectionEvents={collectionEvents} auditLog={auditLog} vehicles={vehicles} recentReadings={recentReadings} />;
-  }
+  // PLATFORM_ADMIN (executive) uses the full operations shell; the decision-maker portal is a page inside it ("بوابة متخذي القرار").
+
 
   // Driver / field portal (§24/§25) — scoped to the driver's currently
   // assigned route only, never the full operational dashboard.
@@ -8057,7 +8630,8 @@ function SmartWasteManagement() {
   const navItems = [
     { key: "dashboard", label: "لوحة التحكم",       icon: <LayoutDashboard size={20} /> },
     { key: "map",       label: "الخريطة التشغيلية",  icon: <MapGlyph size={20} /> },
-    { key: "neighborhoods", label: "الأحياء",         icon: <Home size={20} /> },
+    { key: "municipalities", label: "البلديات والنطاقات", icon: <Landmark size={20} /> },
+    ...(loggedInUser.role === "executive" ? [{ key: "neighborhoods", label: "الأحياء (كل المدينة)", icon: <Home size={20} /> }] : []),
     { key: "bins",      label: "الحاويات الذكية",     icon: <Trash2 size={20} /> },
     { key: "control",   label: "إدارة الجولات",       icon: <RouteIcon size={20} /> },
     { key: "drivers",   label: "السائقون والأسطول",    icon: <Truck size={20} /> },
@@ -8067,11 +8641,15 @@ function SmartWasteManagement() {
     { key: "predictions", label: "التنبؤات",          icon: <Sparkles size={20} /> },
     { key: "reports",   label: "التقارير",             icon: <ClipboardList size={20} /> },
     { key: "audit",     label: "سجل العمليات",         icon: <FileText size={20} /> },
+    { key: "simulation", label: "المحاكاة (عرض)",       icon: <Gauge size={20} /> },
+    { key: "demo",      label: "سيناريو العرض",         icon: <Sparkles size={20} /> },
     { key: "settings",  label: "الإعدادات",            icon: <SettingsIcon size={20} /> },
+    ...(loggedInUser.role === "executive" ? [{ key: "exec", label: "بوابة متخذي القرار", icon: <Crown size={20} /> }] : []),
   ];
 
   return (
-    <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", overflow: "hidden" }}>
+    <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", overflow: "hidden", paddingTop: 26 }}>
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 10000 }}><DemoEnvBanner /></div>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
       <SessionTimeout onLogout={handleLogout} timeoutMin={30} countdownSec={10} />
 
@@ -8266,7 +8844,8 @@ function SmartWasteManagement() {
 
         <div style={{ flex: 1, overflow: "auto", padding: isMobile ? 12 : 24 }}>
           {page === "dashboard"  && <DashboardPage weeklyData={weeklyData} monthlyTrend={monthlyTrend} alerts={alerts} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} loadingNeighborhoods={loadingNeighborhoods} loadingBins={loadingBins} onViewBins={goToBins} onViewRoutes={() => setPage("control")} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
-          {page === "map"         && <MapPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods || loadingBins} onViewBins={goToBins} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} initialSelectedKey={mapInitialKey} />}
+          {page === "map"         && <MapPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} loading={loadingNeighborhoods || loadingBins} onViewBins={goToBins} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} initialSelectedKey={mapInitialKey} />}
+          {page === "municipalities" && <MunicipalitiesPage key={municipalityInitialId || "all"} initialMunicipalityId={municipalityInitialId} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} loggedInUser={loggedInUser} onOpenRoute={(id) => { setRouteInitialId(id); setPage("control"); }} onViewBins={(nid) => { setBinsNeighborhoodFilter(nid); setPage("bins"); }} onAddToRoute={(b) => { setRouteDraftBinId(b.id); setPage("control"); }} />}
           {page === "neighborhoods" && <NeighborhoodsPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods} onViewBins={goToBins} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
           {page === "bins"        && <BinsPage neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} loading={loadingBins} initialNeighborhoodId={binsNeighborhoodFilter} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} />}
           {page === "control"    && <RouteManagementPage neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} vehicles={vehicles} routes={routes} driverProfiles={driverProfiles} loadingVehicles={loadingVehicles} loadingRoutes={loadingRoutes} loggedInUser={loggedInUser} draftBinId={routeDraftBinId} onConsumeDraftBin={() => setRouteDraftBinId(null)} initialRouteId={routeInitialId} onConsumeInitialRoute={() => setRouteInitialId(null)} onShowOnMap={goToMapNeighborhood} />}
@@ -8274,6 +8853,10 @@ function SmartWasteManagement() {
           {page === "fire"       && <FireAlertPage stations={stations} fireSensors={fireSensors} fireTempHistory={fireTempHistory} fireWeekly={fireWeeklyData} />}
           {page === "predictions" && <PredictionsPage stations={stations} neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} />}
           {page === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} bins={bins} neighborhoods={neighborhoods} routes={routes} collectionEvents={collectionEvents} vehicles={vehicles} auditLog={auditLog} fireSensors={fireSensors} citizenReports={citizenReports} />}
+          {page === "demo"       && <DemoScenarioPage neighborhoods={neighborhoods} bins={bins} routes={routes} profiles={driverProfiles} vehicles={vehicles} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onNavigate={(pg, extra) => { if (extra?.municipalityId) setMunicipalityInitialId(extra.municipalityId); setPage(pg); }} />}
+          {page === "simulation" && <SimulationPage neighborhoods={neighborhoods} bins={bins} vehicles={vehicles} loggedInUser={loggedInUser} />}
+          {page === "exec"       && <ExecDashboard user={loggedInUser} onLogout={handleLogout} stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData}
+            neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} collectionEvents={collectionEvents} auditLog={auditLog} vehicles={vehicles} recentReadings={recentReadings} />}
           {page === "settings"   && <SettingsPage bins={bins} loggedInUser={loggedInUser} autoSyncRoutes={autoSyncRoutes} onToggleAutoSync={toggleAutoSync} />}
           {page === "fleet"      && <FleetMonitorPage profiles={driverProfiles} vehicles={vehicles} routes={routes} incidents={routeIncidents} bins={bins} neighborhoods={neighborhoods} loggedInUser={loggedInUser} />}
           {page === "drivers"    && <DriversPage profiles={driverProfiles} assignments={vehicleAssignments} vehicles={vehicles} loggedInUser={loggedInUser} />}
@@ -8360,7 +8943,7 @@ const AdminPanel = ({ onBack }) => {
   useEffect(() => { fetchUsers(); }, []);
 
   const updateUserRole = async (uid, newRole) => {
-    const roleArMap = { executive: "إدارة عليا", employee: "موظف", driver: "سائق ميداني", citizen: "مواطن" };
+    const roleArMap = { executive: "إدارة عليا", manager: "مدير بلدية", employee: "موظف", driver: "سائق ميداني", citizen: "مواطن" };
     const roleAr = roleArMap[newRole] || "مواطن";
     await updateDoc(doc(db, "users", uid), { role: newRole, roleAr, updatedAt: new Date().toISOString() });
     setActionMsg("✅ تم تغيير الدور بنجاح");
@@ -8530,8 +9113,15 @@ const AdminPanel = ({ onBack }) => {
                             <option value="citizen">مواطن</option>
                             <option value="employee">موظف</option>
                             <option value="driver">سائق ميداني</option>
+                            <option value="manager">مدير بلدية</option>
                             <option value="executive">إدارة عليا</option>
                           </select>
+                          {(u.role === "manager" || u.role === "employee" || u.role === "driver") && (
+                            <select value={u.municipalityId || ""} onChange={async (e) => { await setUserMunicipality(u.id, e.target.value || null, { uid: "admin" }); setActionMsg("✅ تم تحديث البلدية"); setTimeout(() => setActionMsg(""), 3000); fetchUsers(); }} title="البلدية الفرعية (نطاق البيانات)" style={{ padding:"4px 8px", borderRadius:6, border:`1px solid ${u.municipalityId ? "#1e293b" : "#f59e0b"}`, background:"#0a0e1a", color:"#f1f5f9", fontSize:10, fontFamily:F, cursor:"pointer" }}>
+                              <option value="">بلا بلدية (غير منطاق)</option>
+                              {MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.shortAr}</option>)}
+                            </select>
+                          )}
                           {u.status === "active" ? (
                             <button onClick={() => updateUserStatus(u.id, "suspended")} style={{ padding:"4px 10px", borderRadius:6, border:"1px solid #ef444440", background:"#ef444415", color:"#ef4444", cursor:"pointer", fontSize:10, fontWeight:600, fontFamily:F }}>تعطيل</button>
                           ) : u.status !== "pending" && (

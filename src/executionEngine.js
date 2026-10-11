@@ -77,6 +77,7 @@ export function buildConfirmation({ route, bin, user, position, now = new Date()
     id: collectionEventId(route.id, bin.id),
     binId: bin.id, routeId: route.id, vehicleId: route.vehicleId || null, operatorId: user.uid, driverId: user.uid, driverName: user.name || "",
     fillBefore: Number(bin.lastFillLevelPercent) || 0, // last MEASURED value — a label, not a new reading
+    demo: !!(bin.demo || bin.simulated),                // events on simulated bins are demo rows (cleanable); real ones are immutable
     fillAfter: null,                                    // unknown until the sensor reports again (never fabricated)
     source: "route", confirmedAt: now,
     confirmLocation: position?.lat != null ? { lat: position.lat, lng: position.lng, accuracyM: position.accuracy ?? null, source: position.source || "gps" } : null,

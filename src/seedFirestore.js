@@ -15,6 +15,9 @@
 import { collection, addDoc, getDocs, query, limit, doc, setDoc, getDoc, updateDoc, writeBatch, where } from "firebase/firestore";
 import { db } from "./firebase";
 import { COLLECTIONS, applyRouteReconciliation } from "./firestoreService";
+import { defaultAssignmentFor } from "./municipalities";
+/** Municipality of a neighborhood doc: an explicit admin value wins, else the provenance-tagged file default. */
+const municipalityIdForNeighborhoodDoc = (nDoc) => nDoc?.municipalityId || defaultAssignmentFor(nDoc?.name)?.municipalityId || null;
 import { normalizeNeighborhoodName } from "./config";
 import { getBinPriority, pointInPolygon, polygonCentroid, reconcileRecommendations } from "./decisionEngine";
 import buraidahNeighborhoodsGeo from "./buraidahNeighborhoods.geo.json";
@@ -624,10 +627,10 @@ const CITY_SPECS = [
 const DEPOT = { lat: 26.3340, lng: 43.9720, label: "المستودع الرئيسي — بريدة (موقع افتراضي للعرض)" };
 
 const DEMO_VEHICLES = [
-  { vehicleNumber: "مركبة جمع 1", status: "available",   capacityLiters: 6000, driverName: "سائق تجريبي" },
-  { vehicleNumber: "مركبة جمع 2", status: "available",   capacityLiters: 6000, driverName: null },
-  { vehicleNumber: "مركبة جمع 3", status: "maintenance", capacityLiters: 5000, driverName: null },
-  { vehicleNumber: "مركبة جمع 4", status: "available",   capacityLiters: 8000, driverName: null },
+  { vehicleNumber: "مركبة جمع 1", status: "available",   capacityLiters: 6000, driverName: "سائق تجريبي", municipalityId: "east" },
+  { vehicleNumber: "مركبة جمع 2", status: "available",   capacityLiters: 6000, driverName: null, municipalityId: "north" },
+  { vehicleNumber: "مركبة جمع 3", status: "maintenance", capacityLiters: 5000, driverName: null, municipalityId: "dirah" },
+  { vehicleNumber: "مركبة جمع 4", status: "available",   capacityLiters: 8000, driverName: null, municipalityId: "south" },
 ];
 
 function expandKind(kind, rand, baseName, index) {
@@ -656,14 +659,14 @@ async function deleteDocsInBatches(refs) {
 }
 
 /** Step 1 — remove the previous demo set (any version). Legacy/migrated docs and human-approved routes are never touched. */
-async function removePreviousDemoData() {
+export async function removePreviousDemoData() {
   const deletedBinIds = new Set();
   let deleted = 0;
 
   const demoBins = await getDocs(query(collection(db, COLLECTIONS.BINS), where("demo", "==", true)));
   demoBins.docs.forEach((d) => deletedBinIds.add(d.id));
 
-  for (const col of [COLLECTIONS.BINS, COLLECTIONS.IOT_DEVICES, COLLECTIONS.SENSOR_READINGS]) {
+  for (const col of [COLLECTIONS.BINS, COLLECTIONS.IOT_DEVICES, COLLECTIONS.SENSOR_READINGS, COLLECTIONS.SIMULATED_READINGS]) {
     const snap = await getDocs(query(collection(db, col), where("demo", "==", true)));
     await deleteDocsInBatches(snap.docs.map((d) => d.ref));
     deleted += snap.size;
@@ -687,7 +690,8 @@ async function removePreviousDemoData() {
   deleted += danglingRoutes.length;
 
   const eventsSnap = await getDocs(collection(db, COLLECTIONS.COLLECTION_EVENTS));
-  const danglingEvents = eventsSnap.docs.filter((d) => deletedBinIds.has(d.data().binId) || d.data().demo === true);
+  // Only demo-flagged rows are ever deleted (rules enforce it too); a real event that references a removed demo bin stays as history.
+  const danglingEvents = eventsSnap.docs.filter((d) => d.data().demo === true && (deletedBinIds.has(d.data().binId) || true));
   await deleteDocsInBatches(danglingEvents.map((d) => d.ref));
   deleted += danglingEvents.length;
 
@@ -790,7 +794,7 @@ export async function seedCityDemoData() {
 
       const binRef = doc(collection(db, COLLECTIONS.BINS));
       const bin = {
-        name: s.label, neighborhoodId, lat: pos.lat, lng: pos.lng,
+        name: s.label, neighborhoodId, municipalityId: municipalityIdForNeighborhoodDoc({ name: `حي ${spec.baseName}` }), lat: pos.lat, lng: pos.lng,
         wasteType: ["مختلط", "عضوية", "بلاستيك", "ورق"][i % 4], capacityLiters: i % 5 === 0 ? 2400 : 1100,
         deviceId, status: "normal",
         lastFillLevelPercent: s.fill, lastTemperatureCelsius: s.temp, lastReadingAt,
@@ -819,7 +823,7 @@ export async function seedCityDemoData() {
             timestamp: hoursAgoIso(h.hoursAgo), receivedAt: hoursAgoIso(h.hoursAgo),
             demo: true, _demoSeedVersion: DEMO_SEED_VERSION,
           };
-          batch.set(doc(collection(db, COLLECTIONS.SENSOR_READINGS)), reading);
+          batch.set(doc(collection(db, COLLECTIONS.SIMULATED_READINGS)), { ...reading, source: "SIMULATED" });
           readings.push(reading);
           readingsCreated += 1;
         }
@@ -880,7 +884,7 @@ export async function seedCityDemoData() {
   const openSnap = await getDocs(query(collection(db, COLLECTIONS.COLLECTION_ROUTES), where("status", "in", ["suggested", "approved", "in_progress"])));
   const openRoutes = openSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
   const plan = reconcileRecommendations(neighborhoodDocs, scored, openRoutes);
-  const routeResult = await applyRouteReconciliation(plan, { demo: true, _demoSeedVersion: DEMO_SEED_VERSION });
+  const routeResult = await applyRouteReconciliation(plan, { demo: true, _demoSeedVersion: DEMO_SEED_VERSION, municipalityIdFor: (nid) => municipalityIdForNeighborhoodDoc(neighborhoodDocs.find((n) => n.id === nid)) });
 
   console.log(`[city-seed] cleaned ${cleanup.deleted} old docs, merged ${merged} duplicate neighborhoods, created ${neighborhoodsCreated} missing neighborhoods, ${binsCreated} bins, ${readingsCreated} readings, ${DEMO_VEHICLES.length} vehicles, ${routeResult.created} suggested routes, ${history.routes} completed routes, ${reportsCreated} citizen reports ✓`);
   return {
@@ -896,7 +900,7 @@ export async function seedCityDemoData() {
  * enough for per-vehicle/per-driver performance, on-time rates and the
  * approval→start response time to mean something. All tagged demo:true.
  */
-async function seedFleetHistory(seededBins, neighborhoodDocs, vehicleIds) {
+export async function seedFleetHistory(seededBins, neighborhoodDocs, vehicleIds) {
   if (vehicleIds.length === 0 || seededBins.length === 0) return { routes: 0 };
   const rand = rngFor("fleet-history");
   const drivers = [
@@ -924,7 +928,7 @@ async function seedFleetHistory(seededBins, neighborhoodDocs, vehicleIds) {
 
       const routeRef = await addDoc(collection(db, COLLECTIONS.COLLECTION_ROUTES), {
         routeName: `جولة ${neighborhoodDocs.find((n) => n.id === nid)?.name || "حي"} — ${day} يوم مضى`,
-        neighborhoodIds: [nid], binIds: nBins.map((b) => b.id),
+        neighborhoodIds: [nid], municipalityId: municipalityIdForNeighborhoodDoc(neighborhoodDocs.find((n) => n.id === nid)), binIds: nBins.map((b) => b.id),
         orderedStops: nBins.map((b, i) => ({ order: i + 1, binId: b.id, binName: b.name, priorityTier: i === 0 ? "critical" : "high", priorityScore: 80 - i * 6, hasCoords: true })),
         priorityTier: "high", totalPriorityScore: 70 * nBins.length, estimatedDistanceKm: plannedKm, estimatedWasteLiters: nBins.length * 900,
         reasons: ["جولة تاريخية للعرض"], status: "completed", manualBinIds: [],

@@ -303,7 +303,7 @@ export function recommendRoutes(neighborhoods = [], scoredBins = []) {
       routeName: `جولة مقترحة - ${neighborhood?.name || "حي غير معروف"}`,
       neighborhoodIds: [neighborhoodId],
       binIds: finalOrder.map((i) => i.bin.id),
-      orderedStops: finalOrder.map((i, idx) => ({ order: idx + 1, binId: i.bin.id, binName: i.bin.name, priorityTier: i.priority.tier, priorityScore: i.priority.score, hasCoords: i.bin.lat != null && i.bin.lng != null })),
+      orderedStops: finalOrder.map((i, idx) => ({ order: idx + 1, binId: i.bin.id, binName: i.bin.name, priorityTier: i.priority.tier, priorityScore: i.priority.score, hasCoords: i.bin.lat != null && i.bin.lng != null, lat: i.bin.lat ?? null, lng: i.bin.lng ?? null, fillLevelPercent: i.bin.lastFillLevelPercent ?? null })),
       priorityTier: scoreToTier(Math.round(totalPriorityScore / finalOrder.length)),
       totalPriorityScore,
       estimatedDistanceKm: Math.round(estimatedDistanceKm * 10) / 10,
@@ -586,9 +586,20 @@ export function reconcileRecommendations(neighborhoods = [], scoredBins = [], op
     const binIds = [...rec.binIds, ...manualStops.map((s) => s.binId)];
 
     if (sameIdSet(existing.binIds || [], binIds)) { unchanged.push(existing.id); continue; }
+    // An operator-optimized order (routeOptimizer) is preserved: still-eligible stops keep their order,
+    // newly eligible bins are appended, and the optimization is flagged stale so the UI offers a re-run.
+    let orderedStops = [...rec.orderedStops, ...manualStops];
+    let optimization;
+    if (existing.optimization && Array.isArray(existing.orderedStops)) {
+      const keep = existing.orderedStops.filter((s) => binIds.includes(s.binId));
+      const keptIds = new Set(keep.map((s) => s.binId));
+      const appended = orderedStops.filter((s) => !keptIds.has(s.binId));
+      orderedStops = [...keep, ...appended].map((s, i) => ({ ...s, order: i + 1 }));
+      optimization = { ...existing.optimization, stale: true, staleReason: appended.length ? `${appended.length} حاوية أُضيفت بعد التحسين` : "تغيّرت الحاويات بعد التحسين" };
+    }
     toUpdate.push({
       id: existing.id,
-      data: { ...rec, binIds, orderedStops: [...rec.orderedStops, ...manualStops], manualBinIds: manualStops.map((s) => s.binId), regeneratedAt: new Date().toISOString() },
+      data: { ...rec, binIds: orderedStops.map((s) => s.binId), orderedStops, manualBinIds: manualStops.map((s) => s.binId), regeneratedAt: new Date().toISOString(), ...(optimization ? { optimization } : {}) },
     });
   }
 
