@@ -3,7 +3,7 @@
 // ملف واحد كامل مع Firebase Auth + Firestore + Role-based Routing
 // ============================================================
 //
-// ⚠️ قبل التشغيل:
+// قبل التشغيل:
 // 1. npm install firebase recharts
 // 2. غيّر بيانات firebaseConfig بالأسفل ببيانات مشروعك
 // 3. فعّل Email/Password في Firebase Auth
@@ -31,6 +31,9 @@ import {
  Radar as RadarIcon, Waypoints, UserCheck, ArrowLeftRight, ChartColumn, Building2, ArrowLeft, LogIn,
 } from "lucide-react";
 
+import {
+  Activity as LuActivity, Ambulance as LuAmbulance, ArrowDown as LuArrowDown, ArrowLeft as LuArrowLeft, ArrowRight as LuArrowRight, ArrowUp as LuArrowUp, ArrowUpLeft as LuArrowUpLeft, ArrowUpRight as LuArrowUpRight, Ban as LuBan, Bell as LuBell, BookOpen as LuBookOpen, Brush as LuBrush, Building2 as LuBuilding2, Calculator as LuCalculator, Calendar as LuCalendar, CalendarDays as LuCalendarDays, ChartBar as LuChartBar, CircleCheck as LuCircleCheck, CircleHelp as LuCircleHelp, CircleStop as LuCircleStop, CircleX as LuCircleX, ClipboardList as LuClipboardList, Clock as LuClock, CloudRain as LuCloudRain, Coins as LuCoins, Compass as LuCompass, Construction as LuConstruction, CreditCard as LuCreditCard, Crosshair as LuCrosshair, Droplets as LuDroplets, Factory as LuFactory, FilePen as LuFilePen, FileText as LuFileText, Flag as LuFlag, Flame as LuFlame, FlaskConical as LuFlaskConical, Footprints as LuFootprints, Fuel as LuFuel, Hand as LuHand, Handshake as LuHandshake, HardHat as LuHardHat, Hourglass as LuHourglass, House as LuHouse, Info as LuInfo, Key as LuKey, Landmark as LuLandmark, LifeBuoy as LuLifeBuoy, Lightbulb as LuLightbulb, Lock as LuLock, Map as LuMap, MapPin as LuMapPin, Maximize as LuMaximize, Megaphone as LuMegaphone, Menu as LuMenu, MessageSquare as LuMessageSquare, MessageSquareText as LuMessageSquareText, Moon as LuMoon, OctagonX as LuOctagonX, Package as LuPackage, Pause as LuPause, Phone as LuPhone, Pin as LuPin, Printer as LuPrinter, Radio as LuRadio, Recycle as LuRecycle, RefreshCw as LuRefreshCw, Repeat as LuRepeat, Route as LuRoute, Save as LuSave, Scale as LuScale, ScrollText as LuScrollText, Search as LuSearch, Send as LuSend, Settings as LuSettings, ShieldAlert as LuShieldAlert, ShieldCheck as LuShieldCheck, ShoppingCart as LuShoppingCart, Signal as LuSignal, Siren as LuSiren, SlidersHorizontal as LuSlidersHorizontal, Smartphone as LuSmartphone, Snowflake as LuSnowflake, Sprout as LuSprout, Sun as LuSun, Thermometer as LuThermometer, Timer as LuTimer, TrafficCone as LuTrafficCone, Trash2 as LuTrash2, TrendingUp as LuTrendingUp, TriangleAlert as LuTriangleAlert, Truck as LuTruck, Undo2 as LuUndo2, User as LuUser, UserRound as LuUserRound, Users as LuUsers, Volume2 as LuVolume2, VolumeX as LuVolumeX, WifiOff as LuWifiOff, Wind as LuWind, Wrench as LuWrench, X as LuX, Zap as LuZap,
+} from "lucide-react"; // emoji-free UI icons (see UiIcon)
 import { MapContainer, TileLayer, GeoJSON, CircleMarker, Polyline, Polygon, Popup, Marker, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -215,8 +218,8 @@ const THEMES = {
     accent: "#2f9e5f", warning: "#c77700", danger: "#d12f2f", info: "#1f5fbf", purple: "#6d4bd6",
     text: "#1e2b24", muted: "#55665d", dim: "#7e8c85",
     brand: "#0b3d2e", brandSoft: "#13553f", onBrand: "#ffffff", brandText: "#dbeee4",
-    g1: "linear-gradient(135deg, #2f9e5f, #1c7a46)", g2: "linear-gradient(135deg, #1f5fbf, #174a93)",
-    g3: "linear-gradient(135deg, #c77700, #9a5c00)", g4: "linear-gradient(135deg, #6d4bd6, #5235a8)",
+    g1: "#2f9e5f", g2: "#1f5fbf",
+    g3: "#c77700", g4: "#6d4bd6",
   },
   dark: {
     name: "dark",
@@ -224,17 +227,17 @@ const THEMES = {
     accent: "#10b981", warning: "#f59e0b", danger: "#ef4444", info: "#3b82f6", purple: "#8b5cf6",
     text: "#f1f5f9", muted: "#94a3b8", dim: "#64748b",
     brand: "#0b3d2e", brandSoft: "#13553f", onBrand: "#ffffff", brandText: "#dbeee4",
-    g1: "linear-gradient(135deg, #10b981, #059669)", g2: "linear-gradient(135deg, #3b82f6, #1d4ed8)",
-    g3: "linear-gradient(135deg, #f59e0b, #d97706)", g4: "linear-gradient(135deg, #8b5cf6, #6d28d9)",
+    g1: "#10b981", g2: "#3b82f6",
+    g3: "#f59e0b", g4: "#8b5cf6",
   },
 };
 const THEME_NAME = (() => { try { return localStorage.getItem("swm_theme") === "dark" ? "dark" : "light"; } catch { return "light"; } })();
 const C = THEMES[THEME_NAME];
 const setTheme = (name) => { try { localStorage.setItem("swm_theme", name); } catch { /* ignore */ } window.location.reload(); };
-const BRAND = { ar: "منصة الإدارة الذكية للنفايات البلدية", en: "Smart Waste MIS", city: "بريدة — منطقة القصيم", engine: "العقل التشغيلي للمدينة", engineEn: "Smart Municipal Waste Intelligence Engine",
+const BRAND = { ar: "منصة الإدارة الذكية للنفايات البلدية", en: "Smart Waste MIS", city: "بريدة — منطقة القصيم", engine: "محرك القرارات التشغيلية", engineEn: "Municipal Waste Operations Decision Engine",
   description: "منصة ذكية لإدارة النفايات البلدية، تجمع بين التنبؤ الاستباقي بامتلاء الحاويات، والتحسين الآلي لجولات الجمع، والتوزيع الذكي للموارد بين البلديات، مع محاكاة أثر القرارات قبل تنفيذها وقياس نتائجها الفعلية." };
 // ============================================================
-// 🔐 AUTH CONTEXT
+// AUTH CONTEXT
 // ============================================================
 const AuthContext = createContext(null);
 const useAuth = () => useContext(AuthContext);
@@ -289,7 +292,7 @@ const AuthProvider = ({ children }) => {
       setUserData(userDocData);
       return { success: true, pending: needsApproval };
     } catch (error) {
-      console.error("❌ خطأ:", error.code, error.message);
+      console.error("خطأ:", error.code, error.message);
       const msgs = {
         "auth/email-already-in-use": "البريد الإلكتروني مستخدم بالفعل",
         "auth/weak-password": "كلمة المرور ضعيفة - 6 أحرف على الأقل",
@@ -384,7 +387,7 @@ const AuthProvider = ({ children }) => {
 };
 
 // ============================================================
-// 🔑 AUTH PAGE (LOGIN + REGISTER)
+// AUTH PAGE (LOGIN + REGISTER)
 // ============================================================
 const DISTRICTS = ["حي الخليج","حي الفايزية","حي الإسكان","حي الريان","حي السالمية","حي الحمر","حي المنتزه","حي الأفق","حي النقع","حي الضاحي","حي الهلالية","حي البصيرة"];
 const ROLES_LIST = [
@@ -778,7 +781,7 @@ const AccountSettingsModal = ({ onClose }) => {
     if (!fullName.trim()) { setProfileError("الاسم مطلوب"); return; }
     setProfileLoading(true);
     const result = await updateUserProfile({ fullName: fullName.trim(), phone: phone.trim(), district });
-    if (result.success) { setProfileMsg("✅ تم تحديث البيانات بنجاح"); setTimeout(() => setProfileMsg(""), 3000); }
+    if (result.success) { setProfileMsg("تم تحديث البيانات بنجاح"); setTimeout(() => setProfileMsg(""), 3000); }
     else setProfileError(result.error);
     setProfileLoading(false);
   };
@@ -791,7 +794,7 @@ const AccountSettingsModal = ({ onClose }) => {
     if (currentPass === newPass) { setPassError("كلمة المرور الجديدة يجب أن تكون مختلفة"); return; }
     setPassLoading(true);
     const result = await changePassword(currentPass, newPass);
-    if (result.success) { setPassMsg("✅ تم تغيير كلمة المرور بنجاح"); setCurrentPass(""); setNewPass(""); setConfirmPass(""); setTimeout(() => setPassMsg(""), 3000); }
+    if (result.success) { setPassMsg("تم تغيير كلمة المرور بنجاح"); setCurrentPass(""); setNewPass(""); setConfirmPass(""); setTimeout(() => setPassMsg(""), 3000); }
     else setPassError(result.error);
     setPassLoading(false);
   };
@@ -804,7 +807,7 @@ const AccountSettingsModal = ({ onClose }) => {
       <div onClick={e => e.stopPropagation()} style={{ width:"100%", maxWidth:500, maxHeight:"90vh", overflow:"auto", padding:"0", background:C.card, borderRadius:20, border:"1px solid #1e293b" }}>
         {/* Header */}
         <div style={{ padding:"24px 28px 0", textAlign:"center" }}>
-          <div style={{ width:60, height:60, borderRadius:16, background:`${r.color}15`, border:`2px solid ${r.color}30`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:30, margin:"0 auto 12px" }}>{r.icon}</div>
+          <div style={{ width:60, height:60, borderRadius:16, background:`${r.color}15`, border:`2px solid ${r.color}30`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:30, margin:"0 auto 12px" }}>{ico(r.icon)}</div>
           <h3 style={{ fontSize:18, fontWeight:900, color:C.text, margin:"0 0 4px" }}>إعدادات الحساب</h3>
           <p style={{ fontSize:12, color:C.dim, margin:0 }}>{userData?.email}</p>
           <span style={{ display:"inline-block", marginTop:8, padding:"3px 12px", borderRadius:20, fontSize:11, fontWeight:600, background:`${r.color}20`, color:r.color }}>{r.label}</span>
@@ -812,7 +815,7 @@ const AccountSettingsModal = ({ onClose }) => {
 
         {/* Tabs */}
         <div style={{ display:"flex", gap:0, margin:"20px 28px 0", background:C.bg, borderRadius:12, padding:4 }}>
-          {[{ key:"profile", label:"👤 البيانات الشخصية" }, { key:"password", label:"🔐 كلمة المرور" }].map(tab => (
+          {[{ key:"profile", label:"البيانات الشخصية" }, { key:"password", label:"كلمة المرور" }].map(tab => (
             <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
               flex:1, padding:"10px 0", borderRadius:10, border:"none",
               background: activeTab === tab.key ? C.accent : "transparent",
@@ -827,7 +830,7 @@ const AccountSettingsModal = ({ onClose }) => {
           {activeTab === "profile" && (
             <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
               {profileMsg && <div style={{ fontSize:12, color:C.accent, background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{profileMsg}</div>}
-              {profileError && <div style={{ fontSize:12, color:C.danger, background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {profileError}</div>}
+              {profileError && <div style={{ fontSize:12, color:C.danger, background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>{profileError}</div>}
 
               <div>
                 <label style={{ fontSize:12, color:C.muted, marginBottom:6, display:"block" }}>الاسم الكامل *</label>
@@ -857,7 +860,7 @@ const AccountSettingsModal = ({ onClose }) => {
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))", gap:12 }}>
                 <div style={{ background:C.bg, borderRadius:10, padding:12 }}>
                   <div style={{ fontSize:10, color:C.dim }}>نوع الحساب</div>
-                  <div style={{ fontSize:14, fontWeight:700, color:r.color, marginTop:4 }}>{r.icon} {r.label}</div>
+                  <div style={{ fontSize:14, fontWeight:700, color:r.color, marginTop:4 }}>{ico(r.icon)} {r.label}</div>
                 </div>
                 <div style={{ background:C.bg, borderRadius:10, padding:12 }}>
                   <div style={{ fontSize:10, color:C.dim }}>تاريخ التسجيل</div>
@@ -866,7 +869,7 @@ const AccountSettingsModal = ({ onClose }) => {
               </div>
 
               <div style={{ display:"flex", gap:10, marginTop:4 }}>
-                <button onClick={handleProfileSave} disabled={profileLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:profileLoading?C.dim:"linear-gradient(135deg,#10b981,#059669)", color:"#fff", fontSize:14, fontWeight:700, cursor:profileLoading?"not-allowed":"pointer", fontFamily:F }}>{profileLoading ? "جاري الحفظ..." : "💾 حفظ التغييرات"}</button>
+                <button onClick={handleProfileSave} disabled={profileLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:profileLoading?C.dim:"#10b981", color:"#fff", fontSize:14, fontWeight:700, cursor:profileLoading?"not-allowed":"pointer", fontFamily:F }}>{profileLoading ? "جاري الحفظ..." : "حفظ التغييرات"}</button>
                 <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:C.muted, cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
               </div>
             </div>
@@ -876,7 +879,7 @@ const AccountSettingsModal = ({ onClose }) => {
           {activeTab === "password" && (
             <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
               {passMsg && <div style={{ fontSize:12, color:C.accent, background:"#10b98115", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #10b98130" }}>{passMsg}</div>}
-              {passError && <div style={{ fontSize:12, color:C.danger, background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>⚠️ {passError}</div>}
+              {passError && <div style={{ fontSize:12, color:C.danger, background:"#ef444415", padding:"10px 14px", borderRadius:10, textAlign:"center", border:"1px solid #ef444430" }}>{passError}</div>}
 
               <div>
                 <label style={{ fontSize:12, color:C.muted, marginBottom:6, display:"block" }}>كلمة المرور الحالية</label>
@@ -892,13 +895,13 @@ const AccountSettingsModal = ({ onClose }) => {
               </div>
 
               <div style={{ background:C.bg, borderRadius:10, padding:12, fontSize:11, color:C.dim, lineHeight:1.8 }}>
-                💡 <strong style={{ color:C.muted }}>شروط كلمة المرور:</strong><br/>
+                <strong style={{ color:C.muted }}>شروط كلمة المرور:</strong><br/>
                 • يجب أن تكون 6 أحرف على الأقل<br/>
                 • يجب أن تكون مختلفة عن الحالية
               </div>
 
               <div style={{ display:"flex", gap:10, marginTop:4 }}>
-                <button onClick={handlePassChange} disabled={passLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:passLoading?C.dim:"linear-gradient(135deg,#f59e0b,#d97706)", color:"#000", fontSize:14, fontWeight:700, cursor:passLoading?"not-allowed":"pointer", fontFamily:F }}>{passLoading ? "جاري التغيير..." : "🔐 تغيير كلمة المرور"}</button>
+                <button onClick={handlePassChange} disabled={passLoading} style={{ flex:1, padding:12, borderRadius:10, border:"none", background:passLoading?C.dim:"#f59e0b", color:"#000", fontSize:14, fontWeight:700, cursor:passLoading?"not-allowed":"pointer", fontFamily:F }}>{passLoading ? "جاري التغيير..." : "تغيير كلمة المرور"}</button>
                 <button onClick={onClose} style={{ padding:"12px 20px", borderRadius:10, border:"1px solid #1e293b", background:"transparent", color:C.muted, cursor:"pointer", fontSize:13, fontFamily:F }}>إغلاق</button>
               </div>
             </div>
@@ -913,19 +916,19 @@ const AccountSettingsModal = ({ onClose }) => {
 const ChangePasswordModal = AccountSettingsModal;
 
 // ============================================================
-// ⏳ LOADING SCREEN
+// LOADING SCREEN
 // ============================================================
 const LoadingScreen = () => (
   <div dir="rtl" style={{ minHeight:"100vh", background:C.bg, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", fontFamily:"'Noto Kufi Arabic',sans-serif", gap:20 }}>
     <style>{"@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}} @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}"}</style>
-    <div style={{fontSize:48,animation:"spin 2s linear infinite"}}>♻️</div>
+    <div style={{fontSize:48,animation:"spin 2s linear infinite"}}><UiIcon e="♻️" size={38} /></div>
     <div style={{fontSize:16,fontWeight:700,color:C.text,animation:"pulse 1.5s ease infinite"}}>جاري التحميل...</div>
     <div style={{fontSize:12,color:C.dim}}>نظام إدارة النفايات الذكي - بريدة</div>
   </div>
 );
 
 // ============================================================
-// 🏭 DASHBOARD + ALL PAGES (3000+ lines)
+// DASHBOARD + ALL PAGES (3000+ lines)
 // ============================================================
 const ARABIC_FONT = "'Noto Kufi Arabic', 'Segoe UI', Tahoma, sans-serif";
 
@@ -1019,6 +1022,143 @@ const CircularGauge = ({ value, size = 80, strokeWidth = 6, color }) => {
 };
 
 // Flat metric card (no decorative gradients): the icon sits on a neutral tile; `gradient` is kept for API compatibility only.
+/** One SVG icon set for the whole UI. Engines and stored data still carry short emoji keys (icon: "🔥");
+ *  they are rendered here as lucide icons — never as emoji. Coloured status dots render as a plain dot. */
+const UI_ICONS = {
+  "✅": LuCircleCheck,
+  "⚠": LuTriangleAlert,
+  "🧭": LuCompass,
+  "🚛": LuTruck,
+  "🚚": LuTruck,
+  "⏳": LuHourglass,
+  "📍": LuMapPin,
+  "❌": LuCircleX,
+  "🔥": LuFlame,
+  "🏛": LuLandmark,
+  "🗺": LuMap,
+  "🤖": LuMessageSquareText,
+  "🗑": LuTrash2,
+  "📦": LuPackage,
+  "📝": LuFilePen,
+  "🔄": LuRefreshCw,
+  "🏘": LuBuilding2,
+  "🏠": LuHouse,
+  "🚧": LuConstruction,
+  "🔒": LuLock,
+  "🔐": LuLock,
+  "👷": LuHardHat,
+  "📊": LuChartBar,
+  "📈": LuTrendingUp,
+  "📋": LuClipboardList,
+  "💬": LuMessageSquare,
+  "⏹": LuCircleStop,
+  "👤": LuUser,
+  "💡": LuLightbulb,
+  "📣": LuMegaphone,
+  "📨": LuSend,
+  "🔔": LuBell,
+  "🎉": LuCircleCheck,
+  "🧪": LuFlaskConical,
+  "🕐": LuClock,
+  "⛔": LuBan,
+  "🔁": LuRepeat,
+  "📜": LuScrollText,
+  "⚙": LuSettings,
+  "🔮": LuTrendingUp,
+  "⚡": LuZap,
+  "📡": LuRadio,
+  "🚦": LuTrafficCone,
+  "🔑": LuKey,
+  "♻": LuRecycle,
+  "🏭": LuFactory,
+  "🧑‍✈": LuUserRound,
+  "❓": LuCircleHelp,
+  "🔎": LuSearch,
+  "🔍": LuSearch,
+  "💰": LuCoins,
+  "⏱": LuTimer,
+  "🌙": LuMoon,
+  "☀": LuSun,
+  "📚": LuBookOpen,
+  "ℹ": LuInfo,
+  "🌡": LuThermometer,
+  "⛽": LuFuel,
+  "💧": LuDroplets,
+  "📱": LuSmartphone,
+  "🚒": LuSiren,
+  "🚀": LuTrendingUp,
+  "🧠": LuActivity,
+  "🤝": LuHandshake,
+  "👑": LuShieldCheck,
+  "💾": LuSave,
+  "🆘": LuLifeBuoy,
+  "🌱": LuSprout,
+  "🐑": LuCalendarDays,
+  "🕋": LuCalendarDays,
+  "💳": LuCreditCard,
+  "🇸🇦": LuFlag,
+  "🏰": LuLandmark,
+  "🌧": LuCloudRain,
+  "🛒": LuShoppingCart,
+  "🎊": LuCalendarDays,
+  "📅": LuCalendar,
+  "💨": LuWind,
+  "❄": LuSnowflake,
+  "🛑": LuOctagonX,
+  "📞": LuPhone,
+  "🏃": LuFootprints,
+  "🚑": LuAmbulance,
+  "🚔": LuShieldAlert,
+  "🔧": LuWrench,
+  "📟": LuRadio,
+  "⬇": LuArrowDown,
+  "✨": LuLightbulb,
+  "🎮": LuSlidersHorizontal,
+  "📴": LuWifiOff,
+  "📵": LuWifiOff,
+  "🛣": LuRoute,
+  "🧮": LuCalculator,
+  "🛌": LuMoon,
+  "🎛": LuSlidersHorizontal,
+  "⏸": LuPause,
+  "🎬": LuClipboardList,
+  "👈": LuInfo,
+  "⚖": LuScale,
+  "🖨": LuPrinter,
+  "📌": LuPin,
+  "➤": LuSend,
+  "⬅": LuArrowLeft,
+  "➡": LuArrowRight,
+  "⬆": LuArrowUp,
+  "↖": LuArrowUpLeft,
+  "↗": LuArrowUpRight,
+  "↩": LuUndo2,
+  "🎯": LuCrosshair,
+  "⛶": LuMaximize,
+  "🔊": LuVolume2,
+  "🔇": LuVolumeX,
+  "📶": LuSignal,
+  "👋": LuHand,
+  "📄": LuFileText,
+  "☰": LuMenu,
+  "👥": LuUsers,
+  "✕": LuX,
+  "🧹": LuBrush,
+  "👔": LuUser,
+  "💼": LuUser,
+  "👩‍💼": LuUser,
+  "⏯": LuPause,
+};
+const UI_DOTS = { "🔴": "#dc2626", "🟠": "#ea580c", "🟡": "#ca8a04", "🟢": "#16a34a", "🔵": "#2563eb", "⚫": "#475569" };
+const UiIcon = ({ e, size = 16, color }) => {
+  const k = String(e || "").replace(/\uFE0F/g, "");
+  if (UI_DOTS[k]) return <span aria-hidden="true" style={{ display: "inline-block", width: Math.max(8, size * 0.6), height: Math.max(8, size * 0.6), borderRadius: "50%", background: UI_DOTS[k], verticalAlign: "middle", flexShrink: 0 }} />;
+  const Cmp = UI_ICONS[k];
+  return Cmp ? <Cmp size={size} strokeWidth={1.9} color={color} aria-hidden="true" style={{ verticalAlign: "-0.15em", flexShrink: 0 }} /> : null;
+};
+/** Renders an icon prop that may be an element or an emoji key. */
+const ico = (v, size = 16) => (typeof v === "string" ? <UiIcon e={v} size={size} /> : v);
+
 const StatCard = ({ title, value, unit, icon, trend }) => (
   <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
@@ -1026,7 +1166,7 @@ const StatCard = ({ title, value, unit, icon, trend }) => (
         <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 4 }}>{title}</div>
         <div style={{ fontSize: 24, fontWeight: 800, color: C.text }}>{value}{unit && <span style={{ fontSize: 13, color: C.muted }}> {unit}</span>}</div>
       </div>
-      <div style={{ width: 36, height: 36, borderRadius: 10, background: C.brand, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{icon}</div>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: C.brand, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{ico(icon, 18)}</div>
     </div>
     {trend !== undefined && (
       <div style={{ fontSize: 12, color: trend > 0 ? C.accent : C.danger, marginTop: 8 }}>{trend > 0 ? "▲" : "▼"} {Math.abs(trend)}% عن الشهر الماضي</div>
@@ -1051,7 +1191,7 @@ const StatusBadge = ({ status }) => {
 
 const Card = ({ children, title, icon, style: sx }) => (
   <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 18, ...sx }}>
-    {title && <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>{icon}{title}</div>}
+    {title && <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>{ico(icon)}{title}</div>}
     <div style={{ position: "relative", width: "100%" }}>{children}</div>
   </div>
 );
@@ -1091,14 +1231,14 @@ const StateBadge = ({ state }) => {
 
 /** §33 — every demo-tagged bin/neighborhood/route must carry a visible "تجريبي" marker, never blended silently with live data. */
 const DemoBadge = () => (
-  <span style={{ padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: "#8b5cf620", color: C.purple, border: "1px solid #8b5cf640", whiteSpace: "nowrap" }}>
+  <span title="بيانات تجريبية (محاكاة) — ليست قراءات أجهزة فعلية" style={{ padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "transparent", color: C.dim, border: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>
     تجريبي
   </span>
 );
 
 const EmptyState = ({ icon, title, desc }) => (
   <div style={{ textAlign: "center", padding: "40px 20px", color: C.dim }}>
-    <div style={{ fontSize: 34, marginBottom: 10, opacity: 0.6 }}>{icon}</div>
+    <div style={{ marginBottom: 10, opacity: 0.6 }}>{ico(icon, 30)}</div>
     <div style={{ fontSize: 14, fontWeight: 700, color: C.muted, marginBottom: 4 }}>{title}</div>
     {desc && <div style={{ fontSize: 12, color: C.dim }}>{desc}</div>}
   </div>
@@ -1137,6 +1277,19 @@ const Badge = ({ tone = "neutral", children, solid = false }) => {
   return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: solid ? c : c + "18", color: solid ? "#fff" : c, border: `1px solid ${c}40`, whiteSpace: "nowrap" }}>{children}</span>;
 };
 /** Every page answers: what is the situation? what needs my attention? what is the next action? */
+/** Situation summary as evenly spaced figures: value over label, separated by thin dividers. */
+const StatusStrip = ({ items }) => (
+  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "stretch", background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+    {items.filter(Boolean).map((it, i) => (
+      <div key={i} style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 2, padding: "7px 14px", borderInlineStart: i ? `1px solid ${C.border}` : "none", minWidth: it.node ? undefined : 84 }}>
+        {it.node || <>
+          <span style={{ fontSize: 15, fontWeight: 800, color: it.tone ? TONE[it.tone] : C.text, lineHeight: 1.3 }}>{it.value}</span>
+          <span style={{ fontSize: 11, color: C.muted }}>{it.label}</span>
+        </>}
+      </div>
+    ))}
+  </div>
+);
 const PageHeader = ({ title, status, attention, attentionTone = "warning", onAttention, actions, children }) => (
   <div style={{ display: "flex", flexDirection: "column", gap: SP.sm, marginBottom: SP.xs }}>
     {(title || actions) && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: SP.md, flexWrap: "wrap" }}>
@@ -1145,7 +1298,7 @@ const PageHeader = ({ title, status, attention, attentionTone = "warning", onAtt
     </div>}
     {(status || attention) && (
       <div style={{ display: "flex", gap: SP.sm, flexWrap: "wrap", fontSize: FS.body }}>
-        {status && <span style={{ color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "6px 10px" }}><b style={{ color: C.text }}>الوضع:</b> {status}</span>}
+        {Array.isArray(status) ? <StatusStrip items={status} /> : status && <span style={{ color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "6px 10px" }}><b style={{ color: C.text }}>الوضع:</b> {status}</span>}
         {attention && <span onClick={onAttention} role={onAttention ? "button" : undefined} style={{ color: TONE[attentionTone], background: TONE[attentionTone] + "12", border: `1px solid ${TONE[attentionTone]}40`, borderRadius: 10, padding: "6px 10px", cursor: onAttention ? "pointer" : "default", fontWeight: 700 }}>{attention}</span>}
       </div>
     )}
@@ -1340,10 +1493,10 @@ const OPEN_ROUTE_STATUSES_UI = ["suggested", "approved", "in_progress"];
  * — so thousands of markers stay cheap; Leaflet renders them on a canvas (preferCanvas).
  */
 const MAP_LAYERS = [
-  { key: "municipalities", label: "🏛️ البلديات" },
-  { key: "neighborhoods", label: "🏘️ الأحياء" },
-  { key: "bins", label: "🗑️ الحاويات" },
-  { key: "routes", label: "🚛 الجولات والمركبات" },
+  { key: "municipalities", label: "البلديات" },
+  { key: "neighborhoods", label: "الأحياء" },
+  { key: "bins", label: "الحاويات" },
+  { key: "routes", label: "الجولات والمركبات" },
 ];
 
 const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = [], fireSensors = [], recentReadings = [], routes: routesAll = [], citizenReports = [], profiles = [], municipalityFilter = null, initialLayer = "neighborhoods", height = 440, onViewBins, onAddToRoute, onOpenRoute, compact = false, initialSelectedKey = null }) => {
@@ -1475,7 +1628,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
 
       {!hasAnyGeo && neighborhoods.length > 0 && (
         <div style={{ marginBottom: 10, fontSize: 12, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 10, padding: "8px 12px" }}>
-          ⚠️ لا تتطابق أسماء الأحياء الحالية مع حدود الأحياء المتوفرة — الخريطة ستظهر بلا تلوين للأحياء حتى تُحدَّث الأسماء.
+          لا تتطابق أسماء الأحياء الحالية مع حدود الأحياء المتوفرة — الخريطة ستظهر بلا تلوين للأحياء حتى تُحدَّث الأسماء.
         </div>
       )}
 
@@ -1514,10 +1667,10 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                       متوسط الامتلاء: {n.avgFill != null ? `${n.avgFill}%` : "—"}{n.invalidCount > 0 && <span style={{ color: "#999", fontSize: 11 }}> (مستبعد {n.invalidCount})</span>}<br />
                       حرجة: <b style={{ color: MAP_STATE_COLORS.critical }}>{n.criticalCount}</b> · تحتاج تفريغًا: <b>{n.needsEmptyingCount}</b> · متابعة: {n.warningCount}<br />
                       غير متصلة/خلل: {n.offlineCount + n.faultCount} · بلا بيانات: {n.noDataCount}<br />
-                      {n.thermalAlert && <span style={{ color: C.danger }}>🔥 تنبيه حراري نشط<br /></span>}
-                      {n.citizenReportCount > 0 && <span style={{ color: "#b45309" }}>📣 {n.citizenReportCount} بلاغ مواطن مفتوح<br /></span>}
+                      {n.thermalAlert && <span style={{ color: C.danger }}>تنبيه حراري نشط<br /></span>}
+                      {n.citizenReportCount > 0 && <span style={{ color: "#b45309" }}>{n.citizenReportCount} بلاغ مواطن مفتوح<br /></span>}
                       {n.route ? (
-                        <span>🧭 {n.route.routeName} ({routeStatusNote(n.route)}) — {n.route.binIds?.length || 0} حاوية<br /></span>
+                        <span>{n.route.routeName} ({routeStatusNote(n.route)}) — {n.route.binIds?.length || 0} حاوية<br /></span>
                       ) : n.needsEmptyingCount > 0 ? (
                         <span style={{ color: "#b45309" }}>لا توجد جولة مقترحة بعد لهذا الحي<br /></span>
                       ) : null}
@@ -1543,7 +1696,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
             ))}
             {layer === "routes" && vehiclePositions.map(({ p, fresh }) => (
               <CircleMarker key={`veh-${p.uid}`} center={[p.lastLocation.lat, p.lastLocation.lng]} radius={11} pathOptions={{ color: "#fff", weight: 2, fillColor: fresh.state === "live" ? C.info : C.dim, fillOpacity: 0.95, dashArray: fresh.state === "live" ? null : "3 3" }}>
-                <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}><b>🚛 {p.fullName}</b><br />{fresh.state === "live" ? "موقع مباشر" : `آخر موقع قبل ${fresh.ageMin} د`}</div></Popup>
+                <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}><b>{p.fullName}</b><br />{fresh.state === "live" ? "موقع مباشر" : `آخر موقع قبل ${fresh.ageMin} د`}</div></Popup>
               </CircleMarker>
             ))}
             {showBins && visibleBins.map(({ bin: b, n, pos, approx, vs }) => {
@@ -1556,7 +1709,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                     <div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 13, minWidth: 190 }}>
                       <b>{b.name}</b>{approx && <span style={{ color: "#999", fontSize: 11 }}> (موقع تقريبي)</span>}<br />
                       الحي: {n?.name || "—"}<br />
-                      الحالة: <span style={{ color: vs.color, fontWeight: 700 }}>{MAP_STATE_LABELS[vs.state]}</span>{vs.hot && <span style={{ color: C.danger }}> · 🔥 حرارة مرتفعة</span>}<br />
+                      الحالة: <span style={{ color: vs.color, fontWeight: 700 }}>{MAP_STATE_LABELS[vs.state]}</span>{vs.hot && <span style={{ color: C.danger }}> · حرارة مرتفعة</span>}<br />
                       {vs.predicted ? (
                         <span>الامتلاء الآن: {vs.actualFill != null ? `${vs.actualFill}%` : "—"} ← <b style={{ color: C.info }}>متوقع {horizonLabel}: {vs.fill}%</b><br /></span>
                       ) : (
@@ -1565,7 +1718,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                       الحرارة: {b.lastTemperatureCelsius != null ? `${b.lastTemperatureCelsius}°` : "—"}<br />
                       حالة المستشعر: {sensorStateLabel(b, vs.connectivity)}<br />
                       آخر قراءة: {getReadingAgeLabel(b.lastReadingAt)}<br />
-                      {reports > 0 && <span style={{ color: "#b45309" }}>📣 {reports} بلاغ مواطن على هذه الحاوية<br /></span>}
+                      {reports > 0 && <span style={{ color: "#b45309" }}>{reports} بلاغ مواطن على هذه الحاوية<br /></span>}
                       الجولة: {inRoute ? `${inRoute.route.routeName} — التوقف #${inRoute.order} (${routeStatusNote(inRoute.route)})` : "خارج أي جولة حاليًا"}<br />
                       <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
                         {inRoute && onOpenRoute && (
@@ -1608,7 +1761,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                 </span>
               </div>
               {horizon > 0 && (
-                <div style={{ fontSize: 11, color: C.info, marginBottom: 6 }}>🔮 حالة متوقعة {horizonLabel} — {selectedStats.predictedCount} من {selectedStats.total} حاوية لها توقع موثوق</div>
+                <div style={{ fontSize: 11, color: C.info, marginBottom: 6 }}>حالة متوقعة {horizonLabel} — {selectedStats.predictedCount} من {selectedStats.total} حاوية لها توقع موثوق</div>
               )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 10px", fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
                 <div>عدد الحاويات: <b style={{ color: C.text }}>{selectedStats.total}</b></div>
@@ -1634,7 +1787,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
               <div style={{ marginTop: 12, padding: 10, borderRadius: 10, background: selectedStats.route ? C.info + "12" : C.card, border: `1px solid ${selectedStats.route ? C.info + "40" : C.border}` }}>
                 {selectedStats.route ? (
                   <>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: C.info, marginBottom: 4 }}>🧭 {selectedStats.route.routeName}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: C.info, marginBottom: 4 }}>{selectedStats.route.routeName}</div>
                     <div style={{ fontSize: 11, color: C.muted }}>
                       {ROUTE_STATUS_LABELS[selectedStats.route.status] || selectedStats.route.status} · {selectedStats.route.binIds?.length || 0} حاوية · {selectedRoad ? `${selectedRoad.distanceKm} كم طرق فعلية · ~${selectedRoad.durationMin} د` : `${selectedStats.route.estimatedDistanceKm} كم تقريبًا`}
                     </div>
@@ -1652,7 +1805,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                 ) : (
                   <div style={{ fontSize: 11.5, color: selectedStats.needsEmptyingCount > 0 ? C.warning : C.dim }}>
                     {selectedStats.needsEmptyingCount > 0
-                      ? "⚠️ حاويات تحتاج تفريغًا بلا جولة مقترحة بعد — ولّد الجولات من صفحة إدارة الجولات."
+                      ? "حاويات تحتاج تفريغًا بلا جولة مقترحة بعد — ولّد الجولات من صفحة إدارة الجولات."
                       : "لا توجد جولة مفتوحة لهذا الحي — الوضع ضمن المعدل الطبيعي."}
                   </div>
                 )}
@@ -1693,12 +1846,6 @@ const sensorStateLabel = (bin, connectivity) => {
 /** Wall-clock read used inside memos (kept out of the React-compiler purity check: the value is a snapshot, re-taken whenever inputs change). */
 const currentTimeMs = () => Date.now();
 
-const DemoEnvBanner = () => (
-  <div title="بيئة عرض تجريبية — بيانات المستشعرات محاكاة (مصدر كل قراءة: SIMULATED)" style={{ background: "linear-gradient(90deg, #7c3aed, #4c1d95)", color: "#fff", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "5px 12px", fontFamily: ARABIC_FONT, letterSpacing: 0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", height: 26, boxSizing: "border-box", lineHeight: "16px" }}>
-    🧪 بيئة عرض تجريبية — بيانات المستشعرات محاكاة (مصدر كل قراءة: SIMULATED) · التقسيم البلدي من مصادر رسمية، وحدود النطاقات تشغيلية تجريبية
-  </div>
-);
-
 const MUN_STATUS_LABEL = { normal: ["تشغيل طبيعي", C.accent], warning: ["يحتاج متابعة", C.warning], critical: ["تدخل عاجل", C.danger], no_data: ["لا بيانات", C.dim] };
 
 const MunicipalityCard = ({ s, onOpen }) => {
@@ -1721,7 +1868,7 @@ const MunicipalityCard = ({ s, onOpen }) => {
         {cell(s.routesActive, "جولات جارية", s.routesActive ? C.info : C.text)}
         {cell(s.routesSuggested, "مقترحة", s.routesSuggested ? C.warning : C.text)}
       </div>
-      {(s.thermal > 0 || s.incidentsOpen > 0) && <div style={{ fontSize: 11, color: C.warning, marginTop: 6 }}>{s.thermal > 0 ? `🔥 ${s.thermal} تنبيه حراري ` : ""}{s.incidentsOpen > 0 ? `🚧 ${s.incidentsOpen} بلاغ مفتوح` : ""}</div>}
+      {(s.thermal > 0 || s.incidentsOpen > 0) && <div style={{ fontSize: 11, color: C.warning, marginTop: 6 }}>{s.thermal > 0 ? `${s.thermal} تنبيه حراري ` : ""}{s.incidentsOpen > 0 ? `${s.incidentsOpen} بلاغ مفتوح` : ""}</div>}
     </div>
   );
 };
@@ -1748,7 +1895,7 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
   }, [munBins, munNeighborhoods, munRoutes, fireSensors, citizenReports]);
   const canOverride = can(loggedInUser?.role, "municipalities.manage");
   const [overrideBusy, setOverrideBusy] = useState("");
-  const tabs = [["map", "🗺️ الخريطة"], ["neighborhoods", "🏘️ الأحياء"], ["bins", "🗑️ الحاويات والمستشعرات"], ["fleet", "🚛 السائقون والمركبات"], ["routes", "🧭 الجولات"], ["incidents", "🚧 البلاغات"], ["kpi", "📊 مؤشرات الأداء"]];
+  const tabs = [["map", "الخريطة"], ["neighborhoods", "الأحياء"], ["bins", "الحاويات والمستشعرات"], ["fleet", "السائقون والمركبات"], ["routes", "الجولات"], ["incidents", "البلاغات"], ["kpi", "مؤشرات الأداء"]];
   const [label, color] = MUN_STATUS_LABEL[s?.status] || MUN_STATUS_LABEL.no_data;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1776,7 +1923,7 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
             return (
               <div key={n.id} style={{ background: C.card, border: `1px solid ${crit ? C.danger + "60" : C.border}`, borderRadius: 12, padding: 12, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", fontSize: 12 }}>
                 <div>
-                  <b style={{ color: C.text, fontSize: 14 }}>{n.name}</b> <span style={{ fontSize: 10.5, color: off.official ? C.accent : C.warning }}>{off.official ? `✓ اسم رسمي (واس${off.kind === "variant" ? `: ${off.match}` : ""})` : "⚠️ الاسم غير موجود في القائمة الرسمية"}</span>
+                  <b style={{ color: C.text, fontSize: 14 }}>{n.name}</b> <span style={{ fontSize: 10.5, color: off.official ? C.accent : C.warning }}>{off.official ? `✓ اسم رسمي (واس${off.kind === "variant" ? `: ${off.match}` : ""})` : "الاسم غير موجود في القائمة الرسمية"}</span>
                   <div style={{ color: C.muted, marginTop: 2 }}>{nb.length} حاوية · {crit} حرجة · التبعية: <b style={{ color: a.source === "admin_override" ? C.info : C.warning }}>{a.source === "admin_override" ? "استثناء تشغيلي معتمد" : `قراءة بصرية للخريطة الرسمية — ثقة ${{ high: "عالية", medium: "متوسطة", low: "منخفضة" }[a.confidence] || "—"} (غير متحقق)`}</b></div>
                   {a.evidence && <div style={{ color: C.dim, fontSize: 11 }}>{a.evidence}</div>}
                 </div>
@@ -1827,7 +1974,7 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {munIncidents.length === 0 && <EmptyState icon="✅" title="لا بلاغات ميدانية لهذه البلدية" />}
           {munIncidents.map((inc) => { const t = INCIDENT_TYPES[inc.type] || { label: inc.type, icon: "❓" }; return (
-            <div key={inc.id} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px", fontSize: 12, borderRight: `3px solid ${inc.status === "open" ? C.danger : C.dim}` }}><b style={{ color: C.text }}>{t.icon} {t.label}</b> · {inc.driverName} · {inc.routeName} · {inc.status === "open" ? "مفتوح" : inc.status === "reviewed" ? "تمت المراجعة" : "محلول"}</div>
+            <div key={inc.id} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px", fontSize: 12, borderRight: `3px solid ${inc.status === "open" ? C.danger : C.dim}` }}><b style={{ color: C.text }}>{ico(t.icon)} {t.label}</b> · {inc.driverName} · {inc.routeName} · {inc.status === "open" ? "مفتوح" : inc.status === "reviewed" ? "تمت المراجعة" : "محلول"}</div>
           ); })}
         </div>
       )}
@@ -1841,12 +1988,12 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
           </div>
           <ImpactCard impact={impact} compact accent={m.color} />
           {myPressure && (() => { const [lab, col] = PRESSURE_LABEL[myPressure.level]; const open = supportRequests.filter((r) => r.municipalityId === mid && r.status === "open"); return (
-            <Card title="🆘 الضغط التشغيلي وطلب الدعم من الأمانة" icon={<AlertTriangle size={16} color={C.muted} />}>
+            <Card title="الضغط التشغيلي وطلب الدعم من الأمانة" icon={<AlertTriangle size={16} color={C.muted} />}>
               <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>مؤشر الضغط الآن: <b style={{ color: col }}>{myPressure.index} ({lab})</b> — {myPressure.reasons.join(" · ")}</div>
               {supportMsg && <div style={{ fontSize: 12, color: C.text, marginTop: 6 }}>{supportMsg}</div>}
               {open.length > 0 && <div style={{ fontSize: 12, color: C.info, marginTop: 6 }}>طلب دعم مفتوح لدى الأمانة: {open.map((r) => r.need).join("، ")}</div>}
               {can(loggedInUser?.role, "support.request") && open.length === 0 && (
-                <button disabled={supportBusy} onClick={async () => { const need = window.prompt("ما المطلوب من الأمانة؟ (مثال: مركبة إضافية لمناوبة اليوم)", "مركبة إضافية مع سائق"); if (!need) return; setSupportBusy(true); try { await createSupportRequest({ municipalityId: mid, need, note: "", pressureIndex: myPressure.index, pressureLevel: myPressure.level, evidence: myPressure.reasons, critical: myPressure.critical, readyDrivers: myPressure.readyDrivers, usableVehicles: myPressure.usableVehicles }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); await writeAuditLog("support_request_created", loggedInUser?.uid, loggedInUser?.name, { municipalityId: mid, need, pressureIndex: myPressure.index }); setSupportMsg("📨 أُرسل طلب الدعم إلى الأمانة مع أدلة الضغط التشغيلي"); } catch (e) { setSupportMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setSupportBusy(false); } }} style={{ ...smallBtn(C.warning, true), color: "#fff", marginTop: 8 }}>📨 طلب دعم من الأمانة</button>
+                <button disabled={supportBusy} onClick={async () => { const need = window.prompt("ما المطلوب من الأمانة؟ (مثال: مركبة إضافية لمناوبة اليوم)", "مركبة إضافية مع سائق"); if (!need) return; setSupportBusy(true); try { await createSupportRequest({ municipalityId: mid, need, note: "", pressureIndex: myPressure.index, pressureLevel: myPressure.level, evidence: myPressure.reasons, critical: myPressure.critical, readyDrivers: myPressure.readyDrivers, usableVehicles: myPressure.usableVehicles }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); await writeAuditLog("support_request_created", loggedInUser?.uid, loggedInUser?.name, { municipalityId: mid, need, pressureIndex: myPressure.index }); setSupportMsg("أُرسل طلب الدعم إلى الأمانة مع أدلة الضغط التشغيلي"); } catch (e) { setSupportMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setSupportBusy(false); } }} style={{ ...smallBtn(C.warning, true), color: "#fff", marginTop: 8 }}>طلب دعم من الأمانة</button>
               )}
             </Card>
           ); })()}
@@ -1924,10 +2071,10 @@ function useBrowserNotifications(items, makeNotification, enabled = true) {
 const NotificationPermissionButton = ({ compact = false }) => {
   const [perm, setPerm] = useState(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
   if (perm === "unsupported") return null;
-  if (perm === "granted") return <span style={{ fontSize: 11, color: C.accent }}>🔔 الإشعارات مفعّلة</span>;
+  if (perm === "granted") return <span style={{ fontSize: 11, color: C.accent }}>الإشعارات مفعّلة</span>;
   return (
     <button onClick={() => Notification.requestPermission().then(setPerm)} style={{ padding: compact ? "4px 10px" : "6px 12px", borderRadius: 8, border: `1px solid ${C.info}`, background: C.info + "15", color: C.info, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT, fontWeight: 700 }}>
-      🔔 {perm === "denied" ? "الإشعارات محظورة من المتصفح" : "تفعيل إشعارات المتصفح"}
+      {perm === "denied" ? "الإشعارات محظورة من المتصفح" : "تفعيل إشعارات المتصفح"}
     </button>
   );
 };
@@ -1944,7 +2091,7 @@ const NeedsCollectionBanner = ({ ranked = [], onShowOnMap, onOpenRoute, onGoToRo
   if (ranked.length === 0) {
     return (
       <div style={{ background: C.accent + "12", border: `1px solid ${C.accent}40`, borderRadius: 14, padding: "12px 16px", fontSize: 13, color: C.accent, fontWeight: 600 }}>
-        ✅ لا توجد أحياء تحتاج جمعًا الآن — جميع الحاويات ضمن المعدل الطبيعي.
+        لا توجد أحياء تحتاج جمعًا الآن — جميع الحاويات ضمن المعدل الطبيعي.
       </div>
     );
   }
@@ -1972,13 +2119,13 @@ const NeedsCollectionBanner = ({ ranked = [], onShowOnMap, onOpenRoute, onGoToRo
               {r.criticalCount > 0 && <span style={{ color: C.danger, fontWeight: 700 }}>{r.criticalCount} حرجة · </span>}
               {r.highCount > 0 && <span style={{ color: STATUS_COLORS.high, fontWeight: 700 }}>{r.highCount} مرتفعة · </span>}
               {r.eligibleBins.length} مؤهلة للجمع من أصل {r.total}
-              {r.thermalAlert && <span style={{ color: C.danger }}> · 🔥 تنبيه حراري</span>}
+              {r.thermalAlert && <span style={{ color: C.danger }}> · تنبيه حراري</span>}
             </div>
             {r.distanceKm != null && (
-              <div style={{ fontSize: 11, color: C.info, marginTop: 2 }}>📍 يبعد {r.distanceKm} كم · ~{r.etaMinutes} دقيقة</div>
+              <div style={{ fontSize: 11, color: C.info, marginTop: 2 }}>يبعد {r.distanceKm} كم · ~{r.etaMinutes} دقيقة</div>
             )}
             <div style={{ fontSize: 11, color: r.openRoute ? C.info : C.warning, marginTop: 4 }}>
-              {r.openRoute ? `🧭 ${r.openRoute.routeName} — ${ROUTE_STATUS_LABELS[r.openRoute.status] || r.openRoute.status}` : noRouteLabel}
+              {r.openRoute ? `${r.openRoute.routeName} — ${ROUTE_STATUS_LABELS[r.openRoute.status] || r.openRoute.status}` : noRouteLabel}
             </div>
             {(onShowOnMap || (r.openRoute && onOpenRoute)) && (
               <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
@@ -2018,7 +2165,7 @@ const ImpactCard = ({ impact, compact = false, accent = C.accent }) => {
     { label: "فيضانات مُنعت (حاويات حرجة مغطاة بجولة)", value: impact.overflowsPrevented, unit: "حاوية", color: C.danger },
   ];
   return (
-    <Card title="💡 ماذا وفّرنا اليوم؟ — الجمع بالبيانات مقابل الجدول الثابت" icon={<Leaf size={16} color={C.muted} />}>
+    <Card title="ماذا وفّرنا اليوم؟ — الجمع بالبيانات مقابل الجدول الثابت" icon={<Leaf size={16} color={C.muted} />}>
       <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${compact ? 150 : 180}px, 1fr))`, gap: 10 }}>
         {tiles.map((t) => (
           <div key={t.label} style={{ background: C.bg, border: `1px solid ${t.color}30`, borderRadius: 12, padding: "12px 14px" }}>
@@ -2115,7 +2262,14 @@ const DashboardPage = ({ alerts = [], neighborhoods = [], bins = [], fireSensors
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: SP.lg }}>
       <PageHeader
-        status={<><b style={{ color: C.text }}>{scope.all ? "المدينة" : municipalityById(scope.municipalityId)?.shortAr || ""}</b> · {criticalBins.length} حاوية حرجة · {running.length} جولة جارية · {approved.length} معتمدة · {freeDrivers} سائق متاح · <DispatchModeBadge settings={dispatchSettings} /></>}
+        status={[
+          { value: scope.all ? "المدينة" : municipalityById(scope.municipalityId)?.shortAr || "", label: "النطاق" },
+          { value: criticalBins.length, label: "حاوية حرجة", tone: criticalBins.length ? "danger" : undefined },
+          { value: running.length, label: "جولة جارية" },
+          { value: approved.length, label: "جولة معتمدة" },
+          { value: freeDrivers, label: "سائق متاح", tone: freeDrivers ? undefined : "warning" },
+          { node: <DispatchModeBadge settings={dispatchSettings} /> },
+        ]}
         attention={attention.length ? `${attention.length} أمر يحتاج انتباهك` : "لا شيء عاجل"} attentionTone={attention.some((a) => a.tone === "danger") ? "danger" : attention.length ? "warning" : "ok"}
         actions={<><Btn variant="primary" onClick={() => go("control")}>الجولات والإسناد</Btn><Btn onClick={() => go("map")}>الخريطة</Btn></>} />
 
@@ -2179,7 +2333,7 @@ const DashboardPage = ({ alerts = [], neighborhoods = [], bins = [], fireSensors
       {alerts.length > 0 && (
         <Section title="سجل التنبيهات" count={alerts.length} collapsible defaultOpen={false}>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
-            {alerts.map((a) => <div key={a.id} style={{ fontSize: 12, color: C.muted, borderBottom: `1px solid ${C.border}`, padding: "6px 2px" }}><b style={{ color: C.text }}>{a.icon} {a.type}</b> · {a.time} — {a.message}</div>)}
+            {alerts.map((a) => <div key={a.id} style={{ fontSize: 12, color: C.muted, borderBottom: `1px solid ${C.border}`, padding: "6px 2px" }}><b style={{ color: C.text }}>{ico(a.icon)} {a.type}</b> · {a.time} — {a.message}</div>)}
           </div>
         </Section>
       )}
@@ -2280,7 +2434,7 @@ const NeighborhoodsPage = ({ neighborhoods = [], bins = [], fireSensors = [], ro
                 <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>{n.reasons[0]}</div>
               )}
               <div style={{ fontSize: 11, marginBottom: 10, padding: "6px 8px", borderRadius: 8, background: n.openRoute ? C.info + "12" : C.bg, color: n.openRoute ? C.info : ((n.criticalCount > 0 || n.highCount > 0) ? C.warning : C.dim), border: `1px solid ${n.openRoute ? C.info + "30" : C.border}` }}>
-                {n.openRoute ? `🧭 ${n.openRoute.routeName} — ${ROUTE_STATUS_LABELS[n.openRoute.status] || n.openRoute.status} · ${n.openRoute.binIds?.length || 0} حاوية` : ((n.criticalCount > 0 || n.highCount > 0) ? "⚠️ يحتاج جمعًا — لا توجد جولة مقترحة بعد" : "لا توجد جولة مفتوحة")}
+                {n.openRoute ? `${n.openRoute.routeName} — ${ROUTE_STATUS_LABELS[n.openRoute.status] || n.openRoute.status} · ${n.openRoute.binIds?.length || 0} حاوية` : ((n.criticalCount > 0 || n.highCount > 0) ? "يحتاج جمعًا — لا توجد جولة مقترحة بعد" : "لا توجد جولة مفتوحة")}
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => onViewBins && onViewBins(n.id)} style={{
@@ -2288,7 +2442,7 @@ const NeighborhoodsPage = ({ neighborhoods = [], bins = [], fireSensors = [], ro
                   color: C.text, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT,
                 }}>عرض الحاويات</button>
                 {onShowOnMap && (
-                  <button onClick={() => onShowOnMap(n.key)} style={{ padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🗺️</button>
+                  <button onClick={() => onShowOnMap(n.key)} style={{ padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}><UiIcon e="🗺️" size={14} /></button>
                 )}
                 {n.openRoute && onOpenRoute && (
                   <button onClick={() => onOpenRoute(n.openRoute.id)} style={{ padding: "9px 12px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>الجولة</button>
@@ -2333,7 +2487,7 @@ const BinDetailModal = ({ bin, neighborhood, onClose, onAddToRoute, openRoute = 
       <div onClick={(e) => e.stopPropagation()} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24, maxWidth: 460, width: "100%", maxHeight: "88vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div style={{ fontSize: 17, fontWeight: 800, color: C.text, display: "flex", alignItems: "center", gap: 8 }}>{bin.name} {bin.demo && <DemoBadge />}</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: C.dim, fontSize: 20, cursor: "pointer" }}>✕</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.dim, fontSize: 20, cursor: "pointer" }}><UiIcon e="✕" size={16} /></button>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
@@ -2355,7 +2509,7 @@ const BinDetailModal = ({ bin, neighborhood, onClose, onAddToRoute, openRoute = 
           <div>نسبة الامتلاء: <b style={{ color: C.text }}>{bin.lastFillLevelPercent != null ? `${bin.lastFillLevelPercent}%` : "—"}</b></div>
           <div>درجة الحرارة: <b style={{ color: C.text }}>{bin.lastTemperatureCelsius != null ? `${bin.lastTemperatureCelsius}°` : "—"}</b></div>
           <div>حالة المستشعر: <StateBadge state={priority.sensorHealth.connectivity} /> {priority.sensorHealth.status !== "healthy" && <span style={{ fontSize: 11, color: C.dim }}>({STATE_LABELS[priority.sensorHealth.status] || priority.sensorHealth.status})</span>}</div>
-          <div>Device ID: <span style={{ color: C.text }}>{bin.deviceId || "—"}</span></div>
+          <div>معرّف الجهاز: <span style={{ color: C.text }}>{bin.deviceId || "—"}</span></div>
           <div>البطارية: <span style={{ color: C.text }}>{bin.lastBatteryLevel != null ? `${bin.lastBatteryLevel}%` : "غير متوفرة"}</span></div>
           <div>الموقع: <span style={{ color: C.text }}>{bin.lat != null ? `${bin.lat.toFixed(4)}, ${bin.lng.toFixed(4)}` : "غير مُحدَّد بعد"}</span></div>
           <div>آخر قراءة: <span style={{ color: C.text }}>{getReadingAgeLabel(bin.lastReadingAt)}</span>{isStale && <span style={{ color: C.warning }}> — قراءة قديمة، لا تُعرض كقيمة حيّة</span>}</div>
@@ -2388,7 +2542,7 @@ const BinDetailModal = ({ bin, neighborhood, onClose, onAddToRoute, openRoute = 
         </div>
 
         <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: openRoute ? C.info + "12" : C.bg, border: `1px solid ${openRoute ? C.info + "40" : C.border}` }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: openRoute ? C.info : C.text, marginBottom: 4 }}>🧭 الجولة المرتبطة</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: openRoute ? C.info : C.text, marginBottom: 4 }}>الجولة المرتبطة</div>
           {openRoute ? (
             <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8 }}>
               {openRoute.routeName} — {ROUTE_STATUS_LABELS[openRoute.status] || openRoute.status}
@@ -2517,14 +2671,14 @@ const BinsPage = ({ neighborhoods = [], bins = [], routes = [], fireSensors = []
                   {isStale && <span>— {getReadingAgeLabel(b.lastReadingAt)} (قديمة)</span>}
                   {!isStale && <span>· {getReadingAgeLabel(b.lastReadingAt)}</span>}
                 </div>
-                <div style={{ fontSize: 11, color: C.dim }}>الأولوية: {STATE_LABELS[b.tier] || b.tier} ({b.priority.score}){b.reportCount > 0 && <span style={{ color: C.warning }}> · 📣 {b.reportCount} بلاغ مواطن</span>}</div>
+                <div style={{ fontSize: 11, color: C.dim }}>الأولوية: {STATE_LABELS[b.tier] || b.tier} ({b.priority.score}){b.reportCount > 0 && <span style={{ color: C.warning }}> · {b.reportCount} بلاغ مواطن</span>}</div>
                 {b.openRoute ? (
                   <div style={{ marginTop: 8, fontSize: 11, color: C.info, background: C.info + "12", border: `1px solid ${C.info}30`, borderRadius: 8, padding: "4px 8px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
-                    <span>🧭 {b.openRoute.routeName} — {ROUTE_STATUS_LABELS[b.openRoute.status] || b.openRoute.status}</span>
+                    <span>{b.openRoute.routeName} — {ROUTE_STATUS_LABELS[b.openRoute.status] || b.openRoute.status}</span>
                     {onOpenRoute && <button onClick={(e) => { e.stopPropagation(); onOpenRoute(b.openRoute.id); }} style={{ background: "none", border: "none", color: C.info, fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>فتح</button>}
                   </div>
                 ) : (b.tier === "critical" || b.tier === "high") && b.connectivity === "online" ? (
-                  <div style={{ marginTop: 8, fontSize: 11, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}30`, borderRadius: 8, padding: "4px 8px" }}>⚠️ مؤهلة للجمع — خارج أي جولة بعد</div>
+                  <div style={{ marginTop: 8, fontSize: 11, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}30`, borderRadius: 8, padding: "4px 8px" }}>مؤهلة للجمع — خارج أي جولة بعد</div>
                 ) : null}
               </div>
             );
@@ -2620,7 +2774,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {[{ key: "performance", label: "📊 تقرير الأداء" }, { key: "operations", label: "🧭 الجولات والتشغيل" }, { key: "fleet", label: "🚛 السائقون والمركبات" }, { key: "impact", label: "💡 الأثر والتوفير" }, { key: "waste", label: "♻️ تقرير النفايات · توضيحي" }, { key: "cost", label: "💰 تقرير التكاليف · توضيحي" }, { key: "environment", label: "🌱 التأثير البيئي · توضيحي" }].map((t) => (
+        {[{ key: "performance", label: "تقرير الأداء" }, { key: "operations", label: "الجولات والتشغيل" }, { key: "fleet", label: "السائقون والمركبات" }, { key: "impact", label: "الأثر والتوفير" }, { key: "waste", label: "تقرير النفايات · توضيحي" }, { key: "cost", label: "تقرير التكاليف · توضيحي" }, { key: "environment", label: "التأثير البيئي · توضيحي" }].map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             padding: "10px 20px", borderRadius: 10, border: `1px solid ${tab === t.key ? C.accent : C.border}`,
             background: tab === t.key ? C.accent + "15" : "transparent", color: tab === t.key ? C.accent : C.muted,
@@ -2687,12 +2841,12 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
         return (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 14 }}>
-              <StatCard title="جولات مقترحة" value={suggestedCount} icon={<RouteIcon size={20} color="#fff" />} gradient="linear-gradient(135deg, #3b82f6, #1d4ed8)" />
-              <StatCard title="جولات معتمدة" value={approvedCount} icon={<CheckCircle size={20} color="#fff" />} gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
-              <StatCard title="جولات نشطة" value={activeCount} icon={<Truck size={20} color="#fff" />} gradient="linear-gradient(135deg, #8b5cf6, #6d28d9)" />
-              <StatCard title="جولات مكتملة" value={completedCount} icon={<CheckCircle size={20} color="#fff" />} gradient="linear-gradient(135deg, #10b981, #059669)" />
-              <StatCard title="حاويات حرجة الآن" value={criticalBinCount} icon={<AlertTriangle size={20} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
-              <StatCard title="نسبة المستشعرات المتصلة" value={onlinePct ?? "—"} unit={onlinePct != null ? "%" : ""} icon={<Wifi size={20} color="#fff" />} gradient="linear-gradient(135deg, #06b6d4, #0891b2)" />
+              <StatCard title="جولات مقترحة" value={suggestedCount} icon={<RouteIcon size={20} color="#fff" />} gradient="#3b82f6" />
+              <StatCard title="جولات معتمدة" value={approvedCount} icon={<CheckCircle size={20} color="#fff" />} gradient="#f59e0b" />
+              <StatCard title="جولات نشطة" value={activeCount} icon={<Truck size={20} color="#fff" />} gradient="#8b5cf6" />
+              <StatCard title="جولات مكتملة" value={completedCount} icon={<CheckCircle size={20} color="#fff" />} gradient="#10b981" />
+              <StatCard title="حاويات حرجة الآن" value={criticalBinCount} icon={<AlertTriangle size={20} color="#fff" />} gradient="#ef4444" />
+              <StatCard title="نسبة المستشعرات المتصلة" value={onlinePct ?? "—"} unit={onlinePct != null ? "%" : ""} icon={<Wifi size={20} color="#fff" />} gradient="#06b6d4" />
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
@@ -2868,7 +3022,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
             {envMetrics.map((item, i) => (
               <div key={i} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 16, padding: 20, textAlign: "center" }}>
-                <div style={{ marginBottom: 8, display: "flex", justifyContent: "center", color: item.color }}>{item.icon}</div>
+                <div style={{ marginBottom: 8, display: "flex", justifyContent: "center", color: item.color }}>{ico(item.icon)}</div>
                 <div style={{ fontSize: 26, fontWeight: 800, color: item.color }}>{item.value}</div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginTop: 4 }}>{item.label}</div>
                 <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>{item.desc}</div>
@@ -3009,12 +3163,12 @@ const PredictionsLiveTab = ({ neighborhoods = [], bins = [], recentReadings = []
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-        <StatCard title="حاويات بتنبؤ متاح" value={soonList.length} icon={<TrendingUp size={22} color="#fff" />} gradient="linear-gradient(135deg, #3b82f6, #1d4ed8)" />
-        <StatCard title="بلا بيانات كافية للتنبؤ" value={noDataCount} icon={<AlertTriangle size={22} color="#fff" />} gradient="linear-gradient(135deg, #64748b, #475569)" />
-        <StatCard title="متوقع الامتلاء خلال 3 ساعات" value={soonList.filter((x) => x.priority.prediction.hoursToFull <= THRESHOLDS.predictedFullSoonHours).length} icon={<Clock size={22} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
+        <StatCard title="حاويات بتنبؤ متاح" value={soonList.length} icon={<TrendingUp size={22} color="#fff" />} gradient="#3b82f6" />
+        <StatCard title="بلا بيانات كافية للتنبؤ" value={noDataCount} icon={<AlertTriangle size={22} color="#fff" />} gradient="#64748b" />
+        <StatCard title="متوقع الامتلاء خلال 3 ساعات" value={soonList.filter((x) => x.priority.prediction.hoursToFull <= THRESHOLDS.predictedFullSoonHours).length} icon={<Clock size={22} color="#fff" />} gradient="#ef4444" />
       </div>
 
-      <Card title="🗺️ الخريطة المستقبلية" icon={<MapGlyph size={16} color={C.muted} />}>
+      <Card title="الخريطة المستقبلية" icon={<MapGlyph size={16} color={C.muted} />}>
         <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} height={360} compact />
       </Card>
 
@@ -3136,11 +3290,11 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
       {/* View Tabs */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {[
-          { key: "live", label: "🔴 تنبؤ الحاويات الحي" },
-          { key: "overview", label: "🔮 نظرة عامة" },
-          { key: "events", label: "📅 المناسبات والأحداث" },
-          { key: "forecast", label: "📈 التنبؤ 30 يوم" },
-          { key: "risk", label: "⚠️ تحليل المخاطر" },
+          { key: "live", label: "تنبؤ الحاويات الحي" },
+          { key: "overview", label: "نظرة عامة" },
+          { key: "events", label: "المناسبات والأحداث" },
+          { key: "forecast", label: "التنبؤ 30 يوم" },
+          { key: "risk", label: "تحليل المخاطر" },
         ].map(t => (
           <button key={t.key} onClick={() => setView(t.key)} style={{
             padding: "10px 20px", borderRadius: 10, border: `1px solid ${view === t.key ? C.warning : C.border}`,
@@ -3156,7 +3310,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
       )}
       {view !== "live" && (
         <div style={{ fontSize: 11, color: C.dim, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>
-          ℹ️ التبويبات التالية (نظرة عامة/المناسبات/التنبؤ 30 يوم/تحليل المخاطر) تعرض توقعات موسمية إجمالية لحجم النفايات على مستوى المدينة بالكامل، وما زالت مبنية على بيانات المحطات القديمة — منفصلة عن تبويب "تنبؤ الحاويات الحي" أعلاه الذي يعتمد على بيانات الحاويات الذكية الفعلية.
+          التبويبات التالية (نظرة عامة/المناسبات/التنبؤ 30 يوم/تحليل المخاطر) تعرض توقعات موسمية إجمالية لحجم النفايات على مستوى المدينة بالكامل، وما زالت مبنية على بيانات المحطات القديمة — منفصلة عن تبويب "تنبؤ الحاويات الحي" أعلاه الذي يعتمد على بيانات الحاويات الذكية الفعلية.
         </div>
       )}
 
@@ -3165,10 +3319,10 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {/* KPIs */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-            <StatCard title="إجمالي التوقعات السنوية" value={Math.round(totalPredicted / 1000)} unit="طن" icon={<Sparkles size={22} color="#fff" />} gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
-            <StatCard title="دقة التنبؤ" value={avgAccuracy} unit="%" icon={<Target size={22} color="#fff" />} gradient="linear-gradient(135deg, #10b981, #059669)" />
-            <StatCard title="ذروة متوقعة" value={peakMonth.month} icon={<BarChart2 size={22} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
-            <StatCard title="أحداث مؤثرة" value={EVENTS_DB.length} icon={<Calendar size={22} color="#fff" />} gradient="linear-gradient(135deg, #8b5cf6, #7c3aed)" />
+            <StatCard title="إجمالي التوقعات السنوية" value={Math.round(totalPredicted / 1000)} unit="طن" icon={<LuLightbulb size={22} color="#fff" />} gradient="#f59e0b" />
+            <StatCard title="دقة التنبؤ" value={avgAccuracy} unit="%" icon={<Target size={22} color="#fff" />} gradient="#10b981" />
+            <StatCard title="ذروة متوقعة" value={peakMonth.month} icon={<BarChart2 size={22} color="#fff" />} gradient="#ef4444" />
+            <StatCard title="أحداث مؤثرة" value={EVENTS_DB.length} icon={<Calendar size={22} color="#fff" />} gradient="#8b5cf6" />
           </div>
 
           {/* Annual Prediction vs Actual */}
@@ -3193,7 +3347,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
               <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
                 {upcomingEvents.map((e, i) => (
                   <div key={i} style={{ padding: "12px 14px", borderRadius: 12, background: C.bg, border: `1px solid ${e.color}30`, display: "flex", gap: 12, alignItems: "center" }}>
-                    <div style={{ width: 48, height: 48, borderRadius: 12, background: `${e.color}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0 }}>{e.icon}</div>
+                    <div style={{ width: 48, height: 48, borderRadius: 12, background: `${e.color}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0 }}>{ico(e.icon)}</div>
                     <div style={{ flex: 1 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{e.name}</span>
@@ -3256,7 +3410,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
               </button>
               <div style={{ background: C.card, border: `1px solid ${selectedEvent.color}40`, borderRadius: 16, padding: 24 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
-                  <div style={{ width: 64, height: 64, borderRadius: 16, background: `${selectedEvent.color}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36 }}>{selectedEvent.icon}</div>
+                  <div style={{ width: 64, height: 64, borderRadius: 16, background: `${selectedEvent.color}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36 }}>{ico(selectedEvent.icon)}</div>
                   <div>
                     <h2 style={{ fontSize: 22, fontWeight: 800, color: C.text, margin: 0 }}>{selectedEvent.name}</h2>
                     <span style={{ fontSize: 13, color: selectedEvent.color, fontWeight: 600 }}>{selectedEvent.type} • {selectedEvent.seasonTag}</span>
@@ -3272,7 +3426,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
                     { label: "الشهر", val: selectedEvent.recurring === "monthly" ? "شهري" : ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"][selectedEvent.month - 1], icon: <Calendar size={24} color={C.purple} />, color: C.purple },
                   ].map((item, i) => (
                     <div key={i} style={{ background: C.bg, borderRadius: 12, padding: 16, textAlign: "center" }}>
-                      <div style={{ marginBottom: 6, display: "flex", justifyContent: "center" }}>{item.icon}</div>
+                      <div style={{ marginBottom: 6, display: "flex", justifyContent: "center" }}>{ico(item.icon)}</div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: item.color }}>{item.val}</div>
                       <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>{item.label}</div>
                     </div>
@@ -3306,7 +3460,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
 
                 {/* Recommendations */}
                 <div style={{ marginTop: 16, background: `${selectedEvent.color}10`, border: `1px solid ${selectedEvent.color}30`, borderRadius: 12, padding: 18 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>💡 التوصيات التشغيلية</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>التوصيات التشغيلية</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {[
                       `زيادة عدد جولات الجمع بنسبة ${Math.round((selectedEvent.wasteMultiplier - 1) * 100)}% خلال فترة ${selectedEvent.name}`,
@@ -3336,7 +3490,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
                 >
                   <div style={{ position: "absolute", top: 0, left: 0, width: `${(e.wasteMultiplier / 3) * 100}%`, height: 3, background: e.color, borderRadius: "0 3px 3px 0" }} />
                   <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10 }}>
-                    <div style={{ width: 44, height: 44, borderRadius: 12, background: `${e.color}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>{e.icon}</div>
+                    <div style={{ width: 44, height: 44, borderRadius: 12, background: `${e.color}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>{ico(e.icon)}</div>
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{e.name}</div>
                       <div style={{ fontSize: 11, color: e.color, fontWeight: 600 }}>{e.type} • {e.seasonTag}</div>
@@ -3408,10 +3562,10 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
                   { label: "المتوسط المتوقع", val: `${Math.round(forecast30.reduce((a, d) => a + d.المتوقع, 0) / 30)} كجم/يوم`, icon: <BarChart2 size={20} color={C.info} />, color: C.info },
                   { label: "أيام فوق المعدل", val: `${forecast30.filter(d => d.المتوقع > 150).length} يوم`, icon: <AlertTriangle size={20} color={C.warning} />, color: C.warning },
                   { label: "أيام عطلة نهاية أسبوع", val: `${forecast30.filter(d => d.isWeekend).length} يوم`, icon: <Calendar size={20} color={C.purple} />, color: C.purple },
-                  { label: "أعلى معامل زيادة", val: `×${Math.max(...forecast30.map(d => d.multiplier)).toFixed(2)}`, icon: <Sparkles size={20} color="#ec4899" />, color: "#ec4899" },
+                  { label: "أعلى معامل زيادة", val: `×${Math.max(...forecast30.map(d => d.multiplier)).toFixed(2)}`, icon: <LuLightbulb size={20} color="#ec4899" />, color: "#ec4899" },
                 ].map((item, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: C.bg, borderRadius: 10 }}>
-                    <span style={{ display: "flex", alignItems: "center" }}>{item.icon}</span>
+                    <span style={{ display: "flex", alignItems: "center" }}>{ico(item.icon)}</span>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 11, color: C.dim }}>{item.label}</div>
                       <div style={{ fontSize: 14, fontWeight: 700, color: item.color }}>{item.val}</div>
@@ -3429,8 +3583,8 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ background: `${C.warning}10`, border: `1px solid ${C.warning}30`, borderRadius: 14, padding: 18 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-              <span style={{ fontSize: 24 }}>⚠️</span>
-              <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>تحليل المخاطر بناءً على الحدث القادم: <span style={{ color: C.warning }}>{upcomingEvents[0]?.name} {upcomingEvents[0]?.icon}</span></span>
+              <span style={{ fontSize: 24 }}><UiIcon e="⚠️" size={19} /></span>
+              <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>تحليل المخاطر بناءً على الحدث القادم: <span style={{ color: C.warning }}>{upcomingEvents[0]?.name} {ico(upcomingEvents[0]?.icon)}</span></span>
             </div>
             <p style={{ fontSize: 12, color: C.muted, margin: 0, lineHeight: 1.7 }}>
               يُتوقع زيادة بمعامل <strong style={{ color: C.warning }}>×{upcomingEvents[0]?.wasteMultiplier}</strong> في حجم النفايات خلال الفترة القادمة.
@@ -3491,7 +3645,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
                   { priority: "تنسيقي", action: "التنسيق مع البلدية لتوفير موارد إضافية مؤقتة", color: C.accent, icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.accent,flexShrink:0}} /> },
                 ].map((item, i) => (
                   <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", padding: "10px 12px", background: C.bg, borderRadius: 10, border: `1px solid ${item.color}20` }}>
-                    <div style={{ flexShrink: 0 }}>{item.icon}</div>
+                    <div style={{ flexShrink: 0 }}>{ico(item.icon)}</div>
                     <div>
                       <span style={{ fontSize: 10, fontWeight: 700, color: item.color, background: `${item.color}15`, padding: "1px 6px", borderRadius: 4 }}>{item.priority}</span>
                       <div style={{ fontSize: 12, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>{item.action}</div>
@@ -3666,7 +3820,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
   if (stations.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: "80px 0", color: C.dim }}>
-        <div style={{ fontSize: 48, marginBottom: 12 }}>🔥</div>
+        <div style={{ fontSize: 48, marginBottom: 12 }}><UiIcon e="🔥" size={38} /></div>
         <div style={{ fontSize: 16, fontWeight: 700, color: C.muted, marginBottom: 6 }}>جاري تحميل بيانات الأحياء...</div>
         <div style={{ fontSize: 13 }}>سيظهر نظام التنبيهات الحرارية بعد تحميل بيانات الأحياء</div>
       </div>
@@ -3678,11 +3832,11 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
       {/* Tabs */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {[
-          { key: "monitor", label: "🔥 المراقبة الحية" },
-          { key: "analysis", label: "📊 التحليل والإحصائيات" },
-          { key: "detail", label: "🏘️ تفاصيل الأحياء" },
-          { key: "simulation", label: "🧪 محاكاة الحريق" },
-          { key: "protocols", label: "📋 بروتوكولات الطوارئ" },
+          { key: "monitor", label: "المراقبة الحية" },
+          { key: "analysis", label: "التحليل والإحصائيات" },
+          { key: "detail", label: "تفاصيل الأحياء" },
+          { key: "simulation", label: "محاكاة الحريق" },
+          { key: "protocols", label: "بروتوكولات الطوارئ" },
         ].map(t => (
           <button key={t.key} onClick={() => setView(t.key)} style={{
             padding: "10px 20px", borderRadius: 10, border: `1px solid ${view === t.key ? C.danger : C.border}`,
@@ -3698,14 +3852,14 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
           {/* Alert Banner */}
           {highRisk.length > 0 && (
             <div style={{
-              background: "linear-gradient(135deg, #7f1d1d, #991b1b)", border: "1px solid #ef4444",
+              background: "#7f1d1d", border: "1px solid #ef4444",
               borderRadius: 14, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14,
               animation: "pulse 2s infinite",
             }}>
               <style>{`@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.85 } } @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }`}</style>
-              <div style={{ width: 50, height: 50, borderRadius: 14, background: "#ef444440", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, animation: "blink 1s infinite" }}>🔥</div>
+              <div style={{ width: 50, height: 50, borderRadius: 14, background: "#ef444440", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, animation: "blink 1s infinite" }}><UiIcon e="🔥" size={22} /></div>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: "#fca5a5" }}>⚠️ تنبيه حراري - {highRisk.length} حي في خطر عالٍ!</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#fca5a5" }}>تنبيه حراري - {highRisk.length} حي في خطر عالٍ!</div>
                 <div style={{ fontSize: 12, color: "#fecaca", marginTop: 4 }}>
                   {highRisk.map(s => s.district).join(" • ")} — يرجى اتخاذ إجراء فوري
                 </div>
@@ -3715,10 +3869,10 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
 
           {/* KPIs */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-            <StatCard title="متوسط الحرارة الداخلية" value={avgTemp} unit="°C" icon={<Thermometer size={22} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" trend={avgTemp > 45 ? 8.3 : -2.1} />
-            <StatCard title="أحياء عالية الخطورة" value={highRisk.length} icon={<Flame size={22} color="#fff" />} gradient="linear-gradient(135deg, #f97316, #ea580c)" />
-            <StatCard title="كشف دخان" value={smokeCount} unit="حي" icon={<Wind size={22} color="#fff" />} gradient="linear-gradient(135deg, #64748b, #475569)" />
-            <StatCard title="متوسط مستوى الغاز" value={avgGas} unit="%" icon={<Gauge size={22} color="#fff" />} gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
+            <StatCard title="متوسط الحرارة الداخلية" value={avgTemp} unit="°C" icon={<Thermometer size={22} color="#fff" />} gradient="#ef4444" trend={avgTemp > 45 ? 8.3 : -2.1} />
+            <StatCard title="أحياء عالية الخطورة" value={highRisk.length} icon={<Flame size={22} color="#fff" />} gradient="#f97316" />
+            <StatCard title="كشف دخان" value={smokeCount} unit="حي" icon={<Wind size={22} color="#fff" />} gradient="#64748b" />
+            <StatCard title="متوسط مستوى الغاز" value={avgGas} unit="%" icon={<Gauge size={22} color="#fff" />} gradient="#f59e0b" />
           </div>
 
           {/* Temperature Timeline + Risk Pie */}
@@ -3782,15 +3936,15 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                       {getRiskBadge(s.riskLevel)}
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 6, fontSize: 11 }}>
-                      <div style={{ color: C.dim }}>🌡️ داخلي: <span style={{ color: s.internalTemp > 55 ? C.danger : s.internalTemp > 40 ? C.warning : C.text, fontWeight: 600 }}>{s.internalTemp}°C</span></div>
-                      <div style={{ color: C.dim }}>⛽ غاز: <span style={{ color: s.gasLevel > 60 ? C.danger : C.text, fontWeight: 600 }}>{s.gasLevel}%</span></div>
-                      <div style={{ color: C.dim }}>💧 رطوبة: <span style={{ color: C.text, fontWeight: 600 }}>{s.humidity}%</span></div>
-                      <div style={{ color: C.dim }}>🗑️ امتلاء: <span style={{ color: C.text, fontWeight: 600 }}>{s.fillLevel}%</span></div>
+                      <div style={{ color: C.dim }}>داخلي: <span style={{ color: s.internalTemp > 55 ? C.danger : s.internalTemp > 40 ? C.warning : C.text, fontWeight: 600 }}>{s.internalTemp}°C</span></div>
+                      <div style={{ color: C.dim }}>غاز: <span style={{ color: s.gasLevel > 60 ? C.danger : C.text, fontWeight: 600 }}>{s.gasLevel}%</span></div>
+                      <div style={{ color: C.dim }}>رطوبة: <span style={{ color: C.text, fontWeight: 600 }}>{s.humidity}%</span></div>
+                      <div style={{ color: C.dim }}>امتلاء: <span style={{ color: C.text, fontWeight: 600 }}>{s.fillLevel}%</span></div>
                     </div>
                     <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                      {s.smokeDetected && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#ef444420", color: C.danger, fontWeight: 600 }}>💨 دخان</span>}
-                      {s.sparkDetected && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#f9731620", color: "#f97316", fontWeight: 600 }}>⚡ شرارة</span>}
-                      {s.hasFlammable && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#f59e0b20", color: C.warning, fontWeight: 600 }}>🔥 قابل للاشتعال</span>}
+                      {s.smokeDetected && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#ef444420", color: C.danger, fontWeight: 600 }}>دخان</span>}
+                      {s.sparkDetected && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#f9731620", color: "#f97316", fontWeight: 600 }}>شرارة</span>}
+                      {s.hasFlammable && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#f59e0b20", color: C.warning, fontWeight: 600 }}>قابل للاشتعال</span>}
                     </div>
                     {/* Risk bar */}
                     <div style={{ marginTop: 8 }}>
@@ -3872,7 +4026,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
               ].map((f, i) => (
                 <div key={i} style={{ background: C.bg, border: `1px solid ${f.color}25`, borderRadius: 12, padding: 16 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <span>{f.icon}</span>
+                    <span>{ico(f.icon)}</span>
                     <span style={{ fontSize: 11, fontWeight: 700, color: f.color, background: `${f.color}15`, padding: "2px 8px", borderRadius: 6 }}>وزن {f.weight}%</span>
                   </div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>{f.factor}</div>
@@ -3915,7 +4069,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                     { label: "آخر فحص", val: selectedStation.lastInspection, color: C.muted, icon: <Clock size={22} color={C.muted} /> },
                   ].map((item, i) => (
                     <div key={i} style={{ background: C.bg, borderRadius: 12, padding: 14, textAlign: "center" }}>
-                      <div style={{ marginBottom: 4, display: "flex", justifyContent: "center" }}>{item.icon}</div>
+                      <div style={{ marginBottom: 4, display: "flex", justifyContent: "center" }}>{ico(item.icon)}</div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: item.color }}>{item.val}</div>
                       <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>{item.label}</div>
                     </div>
@@ -3930,7 +4084,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                     { label: "نظام إطفاء تلقائي", active: selectedStation.autoSuppression, activeText: "مُفعّل", inactiveText: "غير مُفعّل", icon: <Droplets size={20} color={C.muted} /> },
                   ].map((item, i) => (
                     <div key={i} style={{ background: C.bg, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, border: `1px solid ${item.active && (i < 2) ? "#ef444440" : C.border}` }}>
-                      <span>{item.icon}</span>
+                      <span>{ico(item.icon)}</span>
                       <div>
                         <div style={{ fontSize: 10, color: C.dim }}>{item.label}</div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: item.active ? (i < 2 ? C.danger : C.accent) : (i < 2 ? C.accent : C.danger) }}>
@@ -3982,10 +4136,10 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                       <CircularGauge value={s.riskScore} color={rColor} size={80} />
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 4, fontSize: 11 }}>
-                      <div style={{ color: C.dim }}>🌡️ {s.internalTemp}°C</div>
-                      <div style={{ color: C.dim }}>⛽ {s.gasLevel}%</div>
-                      <div style={{ color: C.dim }}>💧 {s.humidity}%</div>
-                      <div style={{ color: C.dim }}>🗑️ {s.fillLevel}%</div>
+                      <div style={{ color: C.dim }}>{s.internalTemp}°C</div>
+                      <div style={{ color: C.dim }}>{s.gasLevel}%</div>
+                      <div style={{ color: C.dim }}>{s.humidity}%</div>
+                      <div style={{ color: C.dim }}>{s.fillLevel}%</div>
                     </div>
                   </div>
                 );
@@ -4007,7 +4161,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
               {/* Control Panel */}
               <div style={{ background: C.bg, borderRadius: 14, padding: 20 }}>
                 <div style={{ textAlign: "center", marginBottom: 20 }}>
-                  <div style={{ fontSize: 64, marginBottom: 8 }}>{simTemp > 75 ? "🔥" : simTemp > 55 ? "🟠" : simTemp > 40 ? "🟡" : "🟢"}</div>
+                  <div style={{ fontSize: 64, marginBottom: 8 }}>{simTemp > 75 ? <UiIcon e="🔥" size={44} /> : simTemp > 55 ? <UiIcon e="🟠" size={44} /> : simTemp > 40 ? <UiIcon e="🟡" size={44} /> : <UiIcon e="🟢" size={44} />}</div>
                   <div style={{ fontSize: 48, fontWeight: 900, color: getRiskColor(simLevel) }}>{simTemp}°C</div>
                   <div style={{ fontSize: 14, color: C.muted, marginTop: 4 }}>الحرارة الداخلية</div>
                 </div>
@@ -4031,7 +4185,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
 
               {/* Response Actions */}
               <div style={{ background: C.bg, borderRadius: 14, padding: 20 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>📋 الإجراءات المُفعّلة</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>الإجراءات المُفعّلة</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {[
                     { temp: 0, action: "المراقبة الروتينية", desc: "فحص دوري كل 6 ساعات", icon: "✅", color: C.accent },
@@ -4053,7 +4207,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                         border: `1px solid ${active ? step.color + "40" : C.border}`,
                         opacity: active ? 1 : 0.4, transition: "all 0.3s",
                       }}>
-                        <span style={{ fontSize: 18, filter: active ? "none" : "grayscale(1)" }}>{step.icon}</span>
+                        <span style={{ fontSize: 18, filter: active ? "none" : "grayscale(1)" }}>{ico(step.icon)}</span>
                         <div>
                           <div style={{ fontSize: 12, fontWeight: 600, color: active ? step.color : C.dim }}>{step.action}</div>
                           <div style={{ fontSize: 10, color: active ? C.muted : C.dim }}>{step.desc}</div>
@@ -4132,7 +4286,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                 <div key={i} style={{ background: C.bg, border: `1px solid ${protocol.color}30`, borderRadius: 14, padding: 18 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center" }}>{protocol.icon}</div>
+                      <div style={{ display: "flex", alignItems: "center" }}>{ico(protocol.icon)}</div>
                       <div>
                         <div style={{ fontSize: 14, fontWeight: 700, color: protocol.color }}>{protocol.level}</div>
                         <div style={{ fontSize: 11, color: C.dim }}>النطاق: {protocol.range}</div>
@@ -4164,7 +4318,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                 { name: "إدارة البلدية", phone: "940", icon: "🏛️", color: "#06b6d4", desc: "التنسيق الحكومي" },
               ].map((contact, i) => (
                 <div key={i} style={{ background: C.bg, border: `1px solid ${contact.color}25`, borderRadius: 12, padding: 16, display: "flex", gap: 12, alignItems: "center" }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 12, background: `${contact.color}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>{contact.icon}</div>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: `${contact.color}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>{ico(contact.icon)}</div>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{contact.name}</div>
                     <div style={{ fontSize: 16, fontWeight: 800, color: contact.color, direction: "ltr", textAlign: "right" }}>{contact.phone}</div>
@@ -4190,7 +4344,7 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
                 const eqColor = pct === 100 ? C.accent : pct > 75 ? C.warning : C.danger;
                 return (
                   <div key={i} style={{ background: C.bg, borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-                    <span>{eq.icon}</span>
+                    <span>{ico(eq.icon)}</span>
                     <div style={{ flex: 1 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
                         <span style={{ color: C.text, fontWeight: 600 }}>{eq.item}</span>
@@ -4285,7 +4439,7 @@ const RequestsManagementPage = ({ loggedInUser }) => {
           { label: "بلاغات معلّقة",     val: pendingReps,      icon: <AlertTriangle size={28} color={C.danger} />, color: C.danger },
         ].map((s, i) => (
           <div key={i} style={{ background: C.card, border: `1px solid ${s.color}30`, borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ display: "flex", alignItems: "center" }}>{s.icon}</span>
+            <span style={{ display: "flex", alignItems: "center" }}>{ico(s.icon)}</span>
             <div>
               <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.val}</div>
               <div style={{ fontSize: 11, color: C.muted }}>{s.label}</div>
@@ -4297,8 +4451,8 @@ const RequestsManagementPage = ({ loggedInUser }) => {
       {/* Tabs */}
       <div style={{ display: "flex", gap: 8 }}>
         {[
-          { key: "requests", label: `📝 طلبات الحاويات${pendingReqs > 0 ? ` (${pendingReqs} معلّق)` : ""}` },
-          { key: "reports",  label: `⚠️ البلاغات${pendingReps > 0 ? ` (${pendingReps} معلّق)` : ""}` },
+          { key: "requests", label: `طلبات الحاويات${pendingReqs > 0 ? ` (${pendingReqs} معلّق)` : ""}` },
+          { key: "reports",  label: `البلاغات${pendingReps > 0 ? ` (${pendingReps} معلّق)` : ""}` },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             padding: "9px 18px", borderRadius: 10, border: `1px solid ${tab === t.key ? C.accent : C.border}`,
@@ -4323,24 +4477,24 @@ const RequestsManagementPage = ({ loggedInUser }) => {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>📦 {r.binType}</span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{r.binType}</span>
                       <span style={{ fontSize: 10, color: C.dim, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{r.id.slice(0, 8)}</span>
                     </div>
-                    <div style={{ fontSize: 12, color: C.muted }}>👤 {r.userName} &nbsp;•&nbsp; 📍 {r.district}</div>
-                    <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>🏠 {r.address}</div>
-                    {r.notes && <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>📝 {r.notes}</div>}
+                    <div style={{ fontSize: 12, color: C.muted }}>{r.userName} &nbsp;•&nbsp; {r.district}</div>
+                    <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.address}</div>
+                    {r.notes && <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>{r.notes}</div>}
                   </div>
                   <span style={{ padding: "4px 12px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: sc + "20", color: sc, whiteSpace: "nowrap" }}>{r.status}</span>
                 </div>
 
                 <div style={{ fontSize: 10, color: C.dim, marginBottom: isOpen ? 12 : 0 }}>
-                  🕐 {r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}
+                  {r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}
                 </div>
 
                 {/* Response (already handled) */}
                 {!isOpen && r.response && (
                   <div style={{ fontSize: 12, color: C.muted, background: C.bg, padding: "8px 12px", borderRadius: 8, marginTop: 8 }}>
-                    💬 الرد: {r.response}
+                    الرد: {r.response}
                   </div>
                 )}
 
@@ -4359,14 +4513,14 @@ const RequestsManagementPage = ({ loggedInUser }) => {
                         onClick={() => handleRequestAction(r.id, "مقبول")}
                         style={{ flex: 1, padding: "9px", borderRadius: 8, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT }}
                       >
-                        {responding[r.id] ? "…" : "✅ قبول"}
+                        {responding[r.id] ? "…" : "قبول"}
                       </button>
                       <button
                         disabled={responding[r.id]}
                         onClick={() => handleRequestAction(r.id, "مرفوض")}
                         style={{ flex: 1, padding: "9px", borderRadius: 8, border: "none", background: C.danger, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT }}
                       >
-                        {responding[r.id] ? "…" : "❌ رفض"}
+                        {responding[r.id] ? "…" : "رفض"}
                       </button>
                     </div>
                   </div>
@@ -4390,22 +4544,22 @@ const RequestsManagementPage = ({ loggedInUser }) => {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>⚠️ {r.type}</span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{r.type}</span>
                       <span style={{ fontSize: 10, color: C.dim, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{r.id.slice(0, 8)}</span>
                     </div>
-                    <div style={{ fontSize: 12, color: C.muted }}>👤 {r.userName} &nbsp;•&nbsp; 📍 {r.location || r.district}</div>
+                    <div style={{ fontSize: 12, color: C.muted }}>{r.userName} &nbsp;•&nbsp; {r.location || r.district}</div>
                     {r.description && <div style={{ fontSize: 12, color: C.muted, marginTop: 4, background: C.bg, padding: "6px 10px", borderRadius: 8 }}>{r.description}</div>}
                   </div>
                   <span style={{ padding: "4px 12px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: sc + "20", color: sc, whiteSpace: "nowrap" }}>{r.status}</span>
                 </div>
 
                 <div style={{ fontSize: 10, color: C.dim, marginBottom: isOpen ? 12 : 0 }}>
-                  🕐 {r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}
+                  {r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}
                 </div>
 
                 {!isOpen && r.response && (
                   <div style={{ fontSize: 12, color: C.accent, background: C.accent + "10", padding: "8px 12px", borderRadius: 8, marginTop: 8 }}>
-                    💬 الرد: {r.response}
+                    الرد: {r.response}
                   </div>
                 )}
 
@@ -4423,21 +4577,21 @@ const RequestsManagementPage = ({ loggedInUser }) => {
                         onClick={() => handleReportAction(r.id, "تم الحل")}
                         style={{ flex: 1, padding: "9px", borderRadius: 8, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT }}
                       >
-                        {responding[r.id] ? "…" : "✅ تم الحل"}
+                        {responding[r.id] ? "…" : "تم الحل"}
                       </button>
                       <button
                         disabled={responding[r.id]}
                         onClick={() => handleReportAction(r.id, "قيد المعالجة - تحت المتابعة")}
                         style={{ flex: 1, padding: "9px", borderRadius: 8, border: `1px solid ${C.info}`, background: "transparent", color: C.info, fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT }}
                       >
-                        {responding[r.id] ? "…" : "🔄 تحت المتابعة"}
+                        {responding[r.id] ? "…" : "تحت المتابعة"}
                       </button>
                       <button
                         disabled={responding[r.id]}
                         onClick={() => handleReportAction(r.id, "مرفوض")}
                         style={{ flex: 1, padding: "9px", borderRadius: 8, border: "none", background: C.danger, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: ARABIC_FONT }}
                       >
-                        {responding[r.id] ? "…" : "❌ رفض"}
+                        {responding[r.id] ? "…" : "رفض"}
                       </button>
                     </div>
                   </div>
@@ -4464,10 +4618,10 @@ const ApiKeyCard = () => {
     })();
   }, []);
   return (
-    <Card title="🤖 المساعد الذكي">
+    <Card title="المساعد التشغيلي">
       <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.9 }}>
-        مفتاح مزود الذكاء الاصطناعي يُحفظ على الخادم فقط (متغير <code>GROQ_API_KEY</code>)، ولا يُخزَّن في المتصفح. يجيب المساعد من بيانات نطاقك فقط ولا يستطيع تنفيذ أي إجراء.
-        <div style={{ marginTop: 6, fontWeight: 700, color: enabled ? C.accent : C.warning }}>{enabled == null ? "جارٍ التحقق…" : enabled ? "المساعد مفعّل" : "المساعد غير مفعّل على الخادم"}</div>
+        يُدار المساعد من الخادم ولا تُحفظ أي مفاتيح في المتصفح. يجيب من بيانات نطاق المستخدم فقط، ولا ينفّذ أي إجراء.
+        <div style={{ marginTop: 6, fontWeight: 700, color: enabled ? C.accent : C.warning }}>{enabled == null ? "جارٍ التحقق…" : enabled ? "المساعد مفعّل" : "المساعد غير مفعّل"}</div>
       </div>
     </Card>
   );
@@ -4537,10 +4691,10 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
     setDemoMsg("");
     try {
       await fn();
-      setDemoMsg("✅ تم تطبيق الإجراء — راقب التغيير في لوحة التحكم/الخريطة.");
+      setDemoMsg("تم تطبيق الإجراء — راقب التغيير في لوحة التحكم/الخريطة.");
     } catch (e) {
       console.error("[demo-action]", e);
-      setDemoMsg("❌ حدث خطأ أثناء التنفيذ.");
+      setDemoMsg("حدث خطأ أثناء التنفيذ.");
     } finally {
       setDemoBusy(false);
     }
@@ -4610,7 +4764,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
       {adminTools && <DispatchSettingsCard loggedInUser={loggedInUser} />}
       {adminTools && (
         <Section title="مزامنة الاقتراحات من المتصفح (النمط القديم)" collapsible defaultOpen={false} hint="تعمل فقط حين يكون الإسناد التلقائي متوقفًا">
-      <Card title="🔄 مزامنة الجولات المقترحة تلقائيًا" icon={<RouteIcon size={16} color={C.muted} />}>
+      <Card title="مزامنة الجولات المقترحة تلقائيًا" icon={<RouteIcon size={16} color={C.muted} />}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
             عند التفعيل يعيد النظام حساب الجولات <b style={{ color: C.text }}>المقترحة</b> تلقائيًا كلما تغيرت حالة الحاويات (حاوية امتلأت → تُضاف للجولة، فُرّغت → تُسحب).
@@ -4625,15 +4779,15 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         <Section title="البلديات والبيانات والتكامل" collapsible defaultOpen={false} hint="تهيئة وترحيل ومصادر البيانات وأجهزة IoT والتصدير">
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {can(loggedInUser?.role, "municipalities.manage") && (
-        <Card title="🏛️ البلديات الفرعية وتبعية الأحياء" icon={<Landmark size={16} color={C.muted} />}>
+        <Card title="البلديات الفرعية وتبعية الأحياء" icon={<Landmark size={16} color={C.muted} />}>
           <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 10px" }}>
             يكتب البلديات الست (الأسماء والهواتف والمساحات من المصادر الرسمية) ويسند كل حي بلا تبعية إلى بلديته وفق القراءة البصرية لخرائط النطاق الرسمية (موسومة «غير متحقق منها»)، ثم ينسخ معرّف البلدية على الحاويات والجولات والمركبات والسائقين والبلاغات لتفعيل عزل البيانات. لا يستبدل أي تبعية حُددت يدويًا.
           </p>
-          <button disabled={munSeedBusy} onClick={async () => { setMunSeedBusy(true); try { const r = await seedMunicipalitiesAndBackfill({ municipalities: MUNICIPALITIES, defaultAssignmentFor, municipalityForNeighborhood, provenance: DATA_PROVENANCE }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); setMunSeedMsg(`✅ ${r.municipalities} بلديات · ${r.neighborhoodsAssigned} حي أُسند · ${r.bins} حاوية · ${r.routes} جولة · ${r.vehicles} مركبة · ${r.profiles} سائق · ${r.incidents} بلاغ${r.unassignedNeighborhoods.length ? ` · بلا تبعية: ${r.unassignedNeighborhoods.join("، ")}` : ""}`); } catch (e) { setMunSeedMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setMunSeedBusy(false); } }} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #06b6d4, #0e7490)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{munSeedBusy ? "جاري التهيئة…" : "🏛️ تهيئة البلديات وتوزيع الأحياء"}</button>
+          <button disabled={munSeedBusy} onClick={async () => { setMunSeedBusy(true); try { const r = await seedMunicipalitiesAndBackfill({ municipalities: MUNICIPALITIES, defaultAssignmentFor, municipalityForNeighborhood, provenance: DATA_PROVENANCE }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); setMunSeedMsg(`${r.municipalities} بلديات · ${r.neighborhoodsAssigned} حي أُسند · ${r.bins} حاوية · ${r.routes} جولة · ${r.vehicles} مركبة · ${r.profiles} سائق · ${r.incidents} بلاغ${r.unassignedNeighborhoods.length ? ` · بلا تبعية: ${r.unassignedNeighborhoods.join("، ")}` : ""}`); } catch (e) { setMunSeedMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setMunSeedBusy(false); } }} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: "#06b6d4", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{munSeedBusy ? "جاري التهيئة…" : "تهيئة البلديات وتوزيع الأحياء"}</button>
           {munSeedMsg && <div style={{ fontSize: 12, color: C.text, marginTop: 8 }}>{munSeedMsg}</div>}
         </Card>
       )}
-      <Card title="📚 مصادر البيانات وحالة كل مصدر" icon={<FileText size={16} color={C.muted} />}>
+      <Card title="مصادر البيانات وحالة كل مصدر" icon={<FileText size={16} color={C.muted} />}>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
           {[
             ["البلديات الفرعية (الأسماء، الهواتف، خرائط النطاق)", "أمانة منطقة القصيم — صفحة البلديات الفرعية", "رسمي", C.accent, DATA_PROVENANCE.sources[0].url],
@@ -4642,7 +4796,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
             ["حدود الأحياء (13 مضلعًا)", "OpenStreetMap", "مفتوح", C.info, "https://www.openstreetmap.org/"],
             ["حدود البلديات", "خرائط PDF مصوّرة فقط (UTM 38N) — لا ملفات متجهة؛ النطاقات المرسومة تشغيلية تجريبية", "غير متحقق", C.warning, null],
             ["تبعية الأحياء للبلديات", NEIGHBORHOOD_ASSIGNMENT_PROVENANCE.method, "غير متحقق", C.warning, null],
-            ["بيانات الحاويات والقراءات", "مولّد/محاكي تجريبي — كل قراءة موسومة SIMULATED ومنفصلة عن sensor_readings", "تجريبي", C.purple, null],
+            ["بيانات الحاويات والقراءات", "قراءات محاكاة — منفصلة عن قراءات الأجهزة الفعلية", "تجريبي", C.purple, null],
           ].map(([what, src, status, color, url]) => (
             <div key={what} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", background: C.bg, borderRadius: 8, padding: "8px 12px", flexWrap: "wrap" }}>
               <div><b style={{ color: C.text }}>{what}</b><div style={{ color: C.muted, fontSize: 11 }}>{url ? <a href={url} target="_blank" rel="noreferrer" style={{ color: C.info }}>{src}</a> : src}</div></div>
@@ -4652,14 +4806,14 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </div>
       </Card>
 
-      <Card title="🔐 أجهزة IoT ومفاتيح الدخول" icon={<KeyRound size={16} color={C.muted} />}>
+      <Card title="أجهزة IoT ومفاتيح الدخول" icon={<KeyRound size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 12px" }}>
           كل جهاز ESP32 يحتاج مفتاحًا خاصًا به يُرسل في ترويسة <code>x-device-key</code> إلى <code>/api/iot/readings</code>.
           المفتاح يُعرض مرة واحدة فقط هنا ويُخزَّن تجزئته (SHA-256) فقط؛ الجهاز لا يستطيع الكتابة إلا لحاويته. المفتاح التجريبي للمولّد مرفوض من الخادم.
         </p>
         {revealedKey && (
           <div style={{ background: C.warning + "15", border: `1px solid ${C.warning}60`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.warning, marginBottom: 6 }}>⚠️ انسخ المفتاح الآن — لن يُعرض مرة أخرى ({revealedKey.deviceId})</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.warning, marginBottom: 6 }}>انسخ المفتاح الآن — لن يُعرض مرة أخرى ({revealedKey.deviceId})</div>
             <code style={{ display: "block", fontSize: 11, color: C.text, background: C.bg, padding: 8, borderRadius: 8, wordBreak: "break-all", direction: "ltr", textAlign: "left" }}>{revealedKey.key}</code>
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
               <button onClick={() => navigator.clipboard?.writeText(revealedKey.key)} style={{ padding: "6px 12px", borderRadius: 8, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>نسخ</button>
@@ -4675,7 +4829,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
                 <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12, flexWrap: "wrap" }}>
                   <div>
                     <div style={{ color: C.text, fontWeight: 600 }}>{d.deviceId || d.label} {d.demo && <DemoBadge />} {d.disabled && <span style={{ color: C.danger, fontSize: 10 }}>(معطّل)</span>}</div>
-                    <div style={{ color: C.dim, fontSize: 11 }}>{bin?.name || "غير مرتبط بحاوية"} · {d.deviceKeyHash ? "🔑 مفتاح فعّال" : "⚠️ بلا مفتاح فعّال (مفتاح تجريبي فقط)"} · آخر اتصال: {getReadingAgeLabel(d.lastSeenAt)}</div>
+                    <div style={{ color: C.dim, fontSize: 11 }}>{bin?.name || "غير مرتبط بحاوية"} · {d.deviceKeyHash ? "مفتاح فعّال" : "بلا مفتاح فعّال (مفتاح تجريبي فقط)"} · آخر اتصال: {getReadingAgeLabel(d.lastSeenAt)}</div>
                   </div>
                   <div style={{ display: "flex", gap: 6 }}>
                     <button disabled={deviceBusy === d.id} onClick={async () => {
@@ -4698,7 +4852,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
           </div>
         )}
         <div style={{ fontSize: 11, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
-          ما يلزم لتشغيل الربط الحقيقي: ضبط <code>FIREBASE_SERVICE_ACCOUNT_JSON</code> و<code>IOT_INGEST_ENABLED=true</code> في بيئة Vercel، نشر <code>firestore.rules</code>، ثم تحميل <code>firmware/esp32_smart_bin</code> على الجهاز بمفتاحه.
+          يتطلب الربط بالأجهزة الفعلية تهيئة الخادم وتسجيل كل جهاز بمفتاحه، وفق دليل التشغيل الفني.
         </div>
       </Card>
 
@@ -4711,12 +4865,12 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </p>
         {exportStatus === "done" && (
           <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.accent }}>
-            ✅ تم تحميل الملف بنجاح — تحقق من مجلد التنزيلات.
+            تم تحميل الملف بنجاح — تحقق من مجلد التنزيلات.
           </div>
         )}
         {exportStatus === "error" && (
           <div style={{ background: C.danger + "15", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.danger }}>
-            ❌ حدث خطأ أثناء التصدير — تحقق من Console.
+            حدث خطأ أثناء التصدير — تحقق من Console.
           </div>
         )}
         <button
@@ -4733,13 +4887,13 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
           }}
           style={{
             padding: "11px 24px", borderRadius: 10, border: "none",
-            background: exportStatus === "running" ? C.border : "linear-gradient(135deg, #10b981, #059669)",
+            background: exportStatus === "running" ? C.border : "#10b981",
             color: exportStatus === "running" ? C.dim : "#fff",
             fontWeight: 700, cursor: exportStatus === "running" ? "not-allowed" : "pointer",
             fontSize: 13, fontFamily: ARABIC_FONT,
           }}
         >
-          {exportStatus === "running" ? "جاري التصدير…" : "⬇️ تحميل قاعدة البيانات Excel"}
+          {exportStatus === "running" ? "جاري التصدير…" : "تحميل قاعدة البيانات Excel"}
         </button>
       </Card>
       <Card title="تهيئة قاعدة البيانات" icon={<Database size={16} color={C.muted} />}>
@@ -4750,12 +4904,12 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </p>
         {seedStatus === "done" && (
           <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.accent }}>
-            ✅ تم إنشاء جميع المجموعات بنجاح — تحقق من Firebase Console.
+            تم إنشاء جميع المجموعات بنجاح — تحقق من Firebase Console.
           </div>
         )}
         {seedStatus === "error" && (
           <div style={{ background: C.danger + "15", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.danger }}>
-            ❌ حدث خطأ أثناء التهيئة — تحقق من Console.
+            حدث خطأ أثناء التهيئة — تحقق من Console.
           </div>
         )}
         <button
@@ -4778,7 +4932,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
             fontSize: 13, fontFamily: ARABIC_FONT,
           }}
         >
-          {seedStatus === "running" ? "جاري التهيئة…" : "🚀 تهيئة Collections الناقصة"}
+          {seedStatus === "running" ? "جاري التهيئة…" : "تهيئة Collections الناقصة"}
         </button>
       </Card>
 
@@ -4790,13 +4944,13 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </p>
         {migrateStatus === "done" && (
           <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.accent }}>
-            ✅ تم الترحيل — {migrateResult?.neighborhoodsCreated ?? 0} حي جديد، {migrateResult?.binsCreated ?? 0} حاوية جديدة،
+            تم الترحيل — {migrateResult?.neighborhoodsCreated ?? 0} حي جديد، {migrateResult?.binsCreated ?? 0} حاوية جديدة،
             {" "}{migrateResult?.binsSkipped ?? 0} حاوية تم تجاوزها (مرحّلة مسبقًا)، من أصل {migrateResult?.stationsRead ?? 0} محطة. تحقق من Firebase Console.
           </div>
         )}
         {migrateStatus === "error" && (
           <div style={{ background: C.danger + "15", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.danger }}>
-            ❌ حدث خطأ أثناء الترحيل — تحقق من Console.
+            حدث خطأ أثناء الترحيل — تحقق من Console.
           </div>
         )}
         <button
@@ -4825,7 +4979,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
             fontSize: 13, fontFamily: ARABIC_FONT,
           }}
         >
-          {migrateStatus === "running" ? "جاري الترحيل…" : "🔄 ترحيل المحطات إلى أحياء وحاويات ذكية"}
+          {migrateStatus === "running" ? "جاري الترحيل…" : "ترحيل المحطات إلى أحياء وحاويات ذكية"}
         </button>
       </Card>
           </div>
@@ -4834,7 +4988,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
       {adminTools && (
         <Section title="بيئة العرض التجريبية" collapsible defaultOpen={false} hint="بيانات محاكاة فقط — لا تُستخدم في بيئة الإنتاج">
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Card title="بيانات تجريبية للعرض — محاكاة مدينة كاملة (Demo)" icon={<Sparkles size={16} color={C.muted} />}>
+      <Card title="بيانات تجريبية — محاكاة مدينة كاملة" icon={<LuLightbulb size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
           يبني مشهد مدينة كاملًا: ~100 حاوية ذكية موزّعة داخل الحدود الحقيقية لأحياء بريدة الـ14
           (3 أحياء حرجة بتجمّعات حاويات شبه ممتلئة، أحياء بأولوية مرتفعة، تنبيهات حرارية، حي بأغلبية
@@ -4845,13 +4999,13 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </p>
         {demoSeedStatus === "done" && (
           <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.accent }}>
-            ✅ تم بناء المشهد — {demoSeedResult?.binsCreated ?? 0} حاوية، {demoSeedResult?.readingsCreated ?? 0} قراءة تاريخية، {demoSeedResult?.vehiclesCreated ?? 0} مركبات،
+            تم بناء المشهد — {demoSeedResult?.binsCreated ?? 0} حاوية، {demoSeedResult?.readingsCreated ?? 0} قراءة تاريخية، {demoSeedResult?.vehiclesCreated ?? 0} مركبات،
             {" "}{demoSeedResult?.routesCreated ?? 0} جولة مقترحة مرتبطة بالحاويات الممتلئة، دُمج {demoSeedResult?.neighborhoodsMerged ?? 0} حي مكرّر، وأُنشئ {demoSeedResult?.neighborhoodsCreated ?? 0} حي ناقص.
           </div>
         )}
         {demoSeedStatus === "error" && (
           <div style={{ background: C.danger + "15", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.danger }}>
-            ❌ حدث خطأ أثناء الإنشاء — تحقق من Console.
+            حدث خطأ أثناء الإنشاء — تحقق من Console.
           </div>
         )}
         <button
@@ -4871,17 +5025,17 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
           }}
           style={{
             padding: "11px 24px", borderRadius: 10, border: "none",
-            background: demoSeedStatus === "running" ? C.border : "linear-gradient(135deg, #8b5cf6, #6d28d9)",
+            background: demoSeedStatus === "running" ? C.border : "#8b5cf6",
             color: demoSeedStatus === "running" ? C.dim : "#fff",
             fontWeight: 700, cursor: demoSeedStatus === "running" ? "not-allowed" : "pointer",
             fontSize: 13, fontFamily: ARABIC_FONT,
           }}
         >
-          {demoSeedStatus === "running" ? "جاري بناء مشهد المدينة…" : "✨ بناء / إعادة ضبط مشهد المدينة التجريبي"}
+          {demoSeedStatus === "running" ? "جاري بناء مشهد المدينة…" : "بناء / إعادة ضبط مشهد المدينة التجريبي"}
         </button>
       </Card>
 
-      <Card title="🎮 وضع العرض التجريبي" icon={<Sparkles size={16} color={C.muted} />}>
+      <Card title="وضع العرض التجريبي" icon={<LuLightbulb size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 14px" }}>
           تحكّم مباشر بحالة أي حاوية لأغراض العرض أمام اللجنة — التغيير ينعكس فورًا على الأولوية،
           التنبيهات، الخريطة، والجولات المقترحة. كل قراءة تجريبية تُوسم demo:true ولا تُخلط بقراءات حقيقية.
@@ -4907,17 +5061,17 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
               </div>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetReading(demoBinId, demoFill, demoTemp))} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>📡 محاكاة قراءة جديدة</button>
-              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetOffline(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>📴 فصل المستشعر</button>
-              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetFault(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>⚠️ محاكاة خلل بالمستشعر</button>
-              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoReset(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.info}`, background: C.info + "15", color: C.info, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🔄 إعادة ضبط</button>
+              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetReading(demoBinId, demoFill, demoTemp))} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>محاكاة قراءة جديدة</button>
+              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetOffline(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>فصل المستشعر</button>
+              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetFault(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>محاكاة خلل بالمستشعر</button>
+              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoReset(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.info}`, background: C.info + "15", color: C.info, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>إعادة ضبط</button>
             </div>
-            {demoMsg && <div style={{ marginTop: 10, fontSize: 12, color: demoMsg.startsWith("✅") ? C.accent : demoMsg.startsWith("❌") ? C.danger : C.warning }}>{demoMsg}</div>}
+            {demoMsg && <div style={{ marginTop: 10, fontSize: 12, color: demoMsg.startsWith("تم") ? C.accent : demoMsg.startsWith("حدث خطأ") ? C.danger : C.warning }}>{demoMsg}</div>}
           </>
         )}
       </Card>
 
-      <Card title="📡 محاكي ESP32 حي — للعرض أمام اللجنة" icon={<Radio size={16} color={C.muted} />}>
+      <Card title="محاكي ESP32 حي — للعرض أمام اللجنة" icon={<Radio size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 12px" }}>
           يبث قراءة جديدة كل بضع ثوانٍ لحاوية واحدة فترتفع نسبة امتلائها تدريجيًا على الشاشة أمام اللجنة: شاهد اللون
           يتغير على الخريطة، التنبيه يظهر، الجولة المقترحة تتحدث تلقائيًا، والسائق يُنبَّه — كلها لحظيًا. كل قراءة تُوسم demo:true.
@@ -4933,12 +5087,12 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           {!simRunning ? (
-            <button disabled={!simBin} onClick={startSim} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: simBin ? "linear-gradient(135deg, #ef4444, #b91c1c)" : C.border, color: simBin ? "#fff" : C.dim, fontWeight: 700, fontSize: 13, cursor: simBin ? "pointer" : "not-allowed", fontFamily: ARABIC_FONT }}>▶️ ابدأ البث الحي</button>
+            <button disabled={!simBin} onClick={startSim} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: simBin ? "#ef4444" : C.border, color: simBin ? "#fff" : C.dim, fontWeight: 700, fontSize: 13, cursor: simBin ? "pointer" : "not-allowed", fontFamily: ARABIC_FONT }}>▶️ ابدأ البث الحي</button>
           ) : (
-            <button onClick={() => stopSim("manual")} style={{ padding: "10px 18px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>⏹ إيقاف</button>
+            <button onClick={() => stopSim("manual")} style={{ padding: "10px 18px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>إيقاف</button>
           )}
           {simRunning && <span style={{ fontSize: 12, color: C.accent }}>● يبث الآن — {simBin?.name}: {simState.current.fill}%</span>}
-          {simBin && !simRunning && <button onClick={() => demoReset(simBin.id)} style={{ padding: "10px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🔄 إعادة الحاوية إلى 20%</button>}
+          {simBin && !simRunning && <button onClick={() => demoReset(simBin.id)} style={{ padding: "10px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>إعادة الحاوية إلى 20%</button>}
         </div>
         {simLog.length > 0 && (
           <div style={{ marginTop: 10, fontSize: 11, color: C.muted, fontFamily: "monospace", background: C.bg, borderRadius: 8, padding: 8, maxHeight: 120, overflowY: "auto" }}>
@@ -5007,8 +5161,8 @@ const RouteMap = ({ stops, bins, neighborhoods }) => {
 const RoadRouteNote = ({ road, status }) => (
   <div style={{ fontSize: 10.5, color: road ? C.accent : C.dim, marginTop: 6 }}>
     {road
-      ? `🛣️ مسار طرق فعلي (OpenStreetMap/OSRM): ${road.distanceKm} كم · ~${road.durationMin} دقيقة قيادة`
-      : status === "loading" ? "⏳ جاري حساب مسار الطرق الفعلي…" : "⚠️ خدمة التوجيه غير متاحة الآن — المسار المعروض خط مستقيم بين التوقفات (تقريبي)."}
+      ? `مسار طرق فعلي (OpenStreetMap/OSRM): ${road.distanceKm} كم · ~${road.durationMin} دقيقة قيادة`
+      : status === "loading" ? "جاري حساب مسار الطرق الفعلي…" : "خدمة التوجيه غير متاحة الآن — المسار المعروض خط مستقيم بين التوقفات (تقريبي)."}
   </div>
 );
 
@@ -5169,12 +5323,12 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], d
       <div onClick={(e) => e.stopPropagation()} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 22, maxWidth: 560, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{route.routeName}</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: C.dim, fontSize: 20, cursor: "pointer" }}>✕</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.dim, fontSize: 20, cursor: "pointer" }}><UiIcon e="✕" size={16} /></button>
         </div>
 
         {route.dispatch?.auto && (
           <div style={{ background: C.accent + "10", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: C.text, lineHeight: 1.8 }}>
-            <b>🤖 أُسندت تلقائيًا</b> · {getReadingAgeLabel(route.dispatch.at)}{route.dispatch.urgent ? " · عاجلة" : ""}
+            <b>أُسندت تلقائيًا</b> · {getReadingAgeLabel(route.dispatch.at)}{route.dispatch.urgent ? " · عاجلة" : ""}
             <Disclosure summary="سبب الاختيار والبدائل"><div style={{ color: C.muted }}>{route.dispatch.reason}{route.dispatch.nearestOverridden ? <div>{route.dispatch.nearestOverridden}</div> : null}{(route.dispatch.alternatives || []).length > 0 && <div>البدائل: {route.dispatch.alternatives.map((a) => `${a.driverName} (${a.why})`).join(" · ")}</div>}{(route.dispatch.insertions || []).length > 0 && <div>إضافات لاحقة: {route.dispatch.insertions.length} حاوية</div>}{(route.dispatch.reassignments || []).length > 0 && <div>إعادة إسناد: {route.dispatch.reassignments.map((x) => x.reason).join(" · ")}</div>}</div></Disclosure>
           </div>
         )}
@@ -5183,7 +5337,7 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], d
           <span style={{ fontSize: 12, color: C.muted }}>{route.estimatedDistanceKm} كم تقريبًا · تقدير حجمي {route.estimatedWasteLiters} لتر · {ROUTE_STATUS_LABELS[route.status] || route.status}</span>
           {onShowOnMap && route.neighborhoodIds?.[0] && (() => {
             const n = neighborhoods.find((x) => x.id === route.neighborhoodIds[0]);
-            return n ? <button onClick={() => { onShowOnMap(normalizeNeighborhoodName(n.name)); onClose(); }} style={{ marginInlineStart: "auto", padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>🗺️ عرض على الخريطة التشغيلية</button> : null;
+            return n ? <button onClick={() => { onShowOnMap(normalizeNeighborhoodName(n.name)); onClose(); }} style={{ marginInlineStart: "auto", padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>عرض على الخريطة التشغيلية</button> : null;
           })()}
         </div>
 
@@ -5200,7 +5354,7 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], d
           {(route.status === "suggested" || route.status === "approved") && can(loggedInUser?.role, "routes.approve") && (
             <div style={{ marginBottom: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>🧮 تحسين ترتيب الزيارات {route.optimization && <span style={{ color: C.accent, fontWeight: 400 }}>· محسّنة ({route.optimization.matrixSource === "osrm" ? "طرق فعلية" : "تقديري"}، ثقة {CONFIDENCE_LABELS[route.optimization.confidence] || route.optimization.confidence})</span>}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>تحسين ترتيب الزيارات {route.optimization && <span style={{ color: C.accent, fontWeight: 400 }}>· محسّنة ({route.optimization.matrixSource === "osrm" ? "طرق فعلية" : "تقديري"}، ثقة {CONFIDENCE_LABELS[route.optimization.confidence] || route.optimization.confidence})</span>}</div>
                 <button disabled={optBusy} onClick={runOptimizer} style={{ padding: "7px 12px", borderRadius: 8, border: "none", background: C.purple, color: "#fff", fontWeight: 700, fontSize: 11.5, cursor: "pointer", fontFamily: ARABIC_FONT }}>{optBusy ? "جاري الحساب…" : route.optimization ? "إعادة الحساب" : "احسب الترتيب الأمثل"}</button>
               </div>
               <div style={{ fontSize: 10.5, color: C.dim, marginTop: 4 }}>بحث محلي (2-opt/Or-opt) على مصفوفة أزمنة الطرق من OSRM، بقيود السعة والأولوية ونقطة التفريغ إن وُجدت. الانطلاق من {chosen?.cand?.origin?.label || "مستودع المركبة"}.</div>
@@ -5220,7 +5374,7 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], d
                     <ul style={{ margin: "8px 0 0", paddingInlineStart: 18, color: C.warning, fontSize: 11.5 }}>{r.constraints.map((c, i) => <li key={i}>{c}</li>)}</ul>
                   )}
                   <div style={{ marginTop: 8, color: C.muted, fontSize: 11.5 }}>
-                    الترتيب المقترح: {r.orderedStops.map((o) => o.type === "dump" ? `🔄 ${o.label}` : `#${o.order} ${o.binName}${o.arrivalMin != null ? ` (${o.arrivalMin} د)` : ""}`).join(" ← ")}
+                    الترتيب المقترح: {r.orderedStops.map((o) => o.type === "dump" ? `${o.label}` : `#${o.order} ${o.binName}${o.arrivalMin != null ? ` (${o.arrivalMin} د)` : ""}`).join(" ← ")}
                     {r.deferredStops.length > 0 && <span style={{ color: C.warning }}> · مؤجَّلة: {r.deferredStops.map((d) => d.binName).join("، ")}</span>}
                   </div>
                   <div style={{ fontSize: 10.5, color: C.dim }}>الزمن = قيادة ({r.driveMin} د) + خدمة ({r.serviceMin} د بواقع {r.assumptions.minutesPerStop} د/حاوية){r.finishAt ? ` · الانتهاء المتوقع ${new Date(r.finishAt).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}` : ""}</div>
@@ -5258,9 +5412,9 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], d
 
         {(route.status === "suggested" || route.status === "approved") && driverProfiles.length > 0 && (
           <div style={{ marginTop: 14 }}>
-            <label style={{ fontSize: 12, fontWeight: 700, color: C.text, display: "block", marginBottom: 6 }}>🤖 توصية الإسناد — {routeNeighborhoodName || "الحي"} {legsStatus === "loading" && <span style={{ color: C.dim, fontWeight: 400 }}>· جاري حساب أزمنة الوصول عبر الطرق…</span>}</label>
+            <label style={{ fontSize: 12, fontWeight: 700, color: C.text, display: "block", marginBottom: 6 }}>توصية الإسناد — {routeNeighborhoodName || "الحي"} {legsStatus === "loading" && <span style={{ color: C.dim, fontWeight: 400 }}>· جاري حساب أزمنة الوصول عبر الطرق…</span>}</label>
             {ranking.warnings.map((w, i) => (
-              <div key={i} style={{ fontSize: 11.5, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>⚠️ {w}</div>
+              <div key={i} style={{ fontSize: 11.5, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>{w}</div>
             ))}
             {ranking.recommended && (() => { const r = ranking.recommended; const conf = { high: ["عالية", C.accent], medium: ["متوسطة", C.warning], low: ["منخفضة", C.dim] }[r.confidence]; return (
               <div style={{ background: C.accent + "10", border: `1px solid ${C.accent}50`, borderRadius: 10, padding: 12, marginBottom: 8, fontSize: 12, lineHeight: 1.9, color: C.text }}>
@@ -5274,7 +5428,7 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], d
                   <div>مدة الجولة: <b>{r.totalMin != null ? `~${r.totalMin} د` : "غير محسوبة"}</b> <span style={{ color: C.dim, fontSize: 10.5 }}>({r.travelSource === "osrm" ? "طرق فعلية" : "تقدير جوي"} + {ranking.assumptions.minutesPerStop} د/حاوية)</span></div>
                 </div>
                 <div style={{ color: C.accent, marginTop: 4 }}>سبب الترشيح: {r.reason}</div>
-                {r.nearestOverridden && <div style={{ color: C.muted, fontSize: 11.5 }}>ℹ️ لماذا ليس الأقرب؟ {r.nearestOverridden}</div>}
+                {r.nearestOverridden && <div style={{ color: C.muted, fontSize: 11.5 }}>لماذا ليس الأقرب؟ {r.nearestOverridden}</div>}
               </div>
             ); })()}
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -5283,7 +5437,7 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], d
                 return (
                   <button key={d.profile.uid} type="button" onClick={() => setDriverId(d.profile.uid)} style={{ textAlign: "right", padding: "8px 12px", borderRadius: 8, border: `1px solid ${active ? C.info : C.border}`, background: active ? C.info + "15" : C.bg, color: C.text, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT, lineHeight: 1.7 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                      <span>{d.eligible ? "✅" : "⚠️"} <b>{d.profile.fullName}</b> — {d.vehicle?.vehicleNumber || "بلا مركبة"}{c.verdict.eligible ? ` · تقييم ${c.score}/100` : ""}</span>
+                      <span>{d.eligible ? <UiIcon e="✅" size={16} /> : <UiIcon e="⚠️" size={16} />} <b>{d.profile.fullName}</b> — {d.vehicle?.vehicleNumber || "بلا مركبة"}{c.verdict.eligible ? ` · تقييم ${c.score}/100` : ""}</span>
                       <span style={{ color: C.muted }}>{c.approachMin != null ? `وصول ~${c.approachMin} د · ${c.approachKm} كم (${c.travelSource === "osrm" ? "طرق" : "جوي"})` : "زمن الوصول غير محسوب"}{c.remainingL != null ? ` · سعة متبقية ${c.remainingL} لتر` : ""}</span>
                     </div>
                     {!d.eligible && <div style={{ color: C.warning, fontSize: 11 }}>{d.reasons.join("، ")}</div>}
@@ -5295,7 +5449,7 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], d
             {chosen && (
               <div style={{ fontSize: 11.5, color: chosen.eligible ? C.accent : C.warning, marginTop: 6, lineHeight: 1.7 }}>
                 {chosen.eligible ? (effectiveDriverId === ranking.recommended?.driverId ? "سيُسند إلى السائق المقترح." : "اخترت سائقًا مؤهلًا غير المقترح — يُسجَّل في سجل العمليات مع تقييم التوصية.") : `إسناد استثنائي: ${chosen.reasons.join("، ")}`}
-                {routeConflicts.map((c, i) => <div key={i} style={{ color: C.danger }}>⛔ {c.message}</div>)}
+                {routeConflicts.map((c, i) => <div key={i} style={{ color: C.danger }}>{c.message}</div>)}
                 {!chosen.eligible && <input value={exceptionReason} onChange={(e) => setExceptionReason(e.target.value)} placeholder="مبرر الإسناد الاستثنائي (إلزامي)" style={{ width: "100%", marginTop: 6, padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.warning}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT, boxSizing: "border-box" }} />}
               </div>
             )}
@@ -5314,7 +5468,7 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], d
         {vehicleId && (
           <div style={{ marginTop: 12, background: preCheck.ready ? C.accent + "15" : C.warning + "15", border: `1px solid ${preCheck.ready ? C.accent : C.warning}40`, borderRadius: 10, padding: 12 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: preCheck.ready ? C.accent : C.warning, marginBottom: 4 }}>
-              {preCheck.ready ? "✅ جاهزة للتنفيذ" : "⚠️ تحتاج مراجعة"}
+              {preCheck.ready ? "جاهزة للتنفيذ" : "تحتاج مراجعة"}
             </div>
             {preCheck.issues.length > 0 && (
               <ul style={{ margin: 0, paddingInlineStart: 18, fontSize: 11.5, color: C.muted }}>
@@ -5385,7 +5539,7 @@ const AUDIT_ACTION_LABELS = {
   device_enabled: "تفعيل جهاز IoT",
   demo_simulation_started: "بدء محاكاة ESP32 حية",
   demo_simulation_stopped: "إيقاف محاكاة ESP32",
-  demo_action: "إجراء تجريبي (Demo)",
+  demo_action: "إجراء تجريبي",
 };
 
 // ======================== FLEET MONITOR (Phase 5) ========================
@@ -5421,7 +5575,7 @@ const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1.5fr) minmax(260px, 1fr)", gap: 16 }}>
-        <Card title="🗺️ مواقع المركبات (أثناء المناوبة فقط، بإذن السائق)" icon={<Truck size={16} color={C.muted} />}>
+        <Card title="مواقع المركبات (أثناء المناوبة فقط، بإذن السائق)" icon={<Truck size={16} color={C.muted} />}>
           <div style={{ height: 460, borderRadius: 12, overflow: "hidden", border: `1px solid ${C.border}` }}>
             <MapContainer center={BURAIDAH_CENTER} zoom={12} style={{ width: "100%", height: "100%" }} preferCanvas>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
@@ -5441,14 +5595,14 @@ const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents
         </Card>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title={sel ? `🚛 ${sel.p.fullName}` : "اختر مركبة من الخريطة"} icon={<Users size={16} color={C.muted} />}>
+          <Card title={sel ? `${sel.p.fullName}` : "اختر مركبة من الخريطة"} icon={<Users size={16} color={C.muted} />}>
             {!sel ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {onShift.length === 0 && <EmptyState icon="🛌" title="لا سائقين في المناوبة" />}
                 {onShift.map((p) => { const r = routeFor(p.uid); const f = locationFreshness(p.lastLocation, { now }); return (
                   <div key={p.uid} onClick={() => p.lastLocation && setSelectedUid(p.uid)} style={{ padding: "8px 10px", borderRadius: 8, background: C.bg, fontSize: 12, cursor: p.lastLocation ? "pointer" : "default" }}>
                     <b style={{ color: C.text }}>{p.fullName}</b> · {vehicleById.get(p.vehicleId)?.vehicleNumber || "بلا مركبة"} · {r ? `${r.routeName} (${ROUTE_STATUS_LABELS[r.status]})` : "بلا جولة"}
-                    <div style={{ color: f.state === "live" ? C.accent : f.state === "stale" ? C.warning : C.dim, fontSize: 11 }}>{f.state === "live" ? "📍 موقع مباشر" : f.state === "stale" ? `📍 آخر موقع قبل ${f.ageMin} د` : "📍 لا يشارك موقعه"}</div>
+                    <div style={{ color: f.state === "live" ? C.accent : f.state === "stale" ? C.warning : C.dim, fontSize: 11 }}>{f.state === "live" ? "موقع مباشر" : f.state === "stale" ? `آخر موقع قبل ${f.ageMin} د` : "لا يشارك موقعه"}</div>
                   </div>
                 ); })}
               </div>
@@ -5465,7 +5619,7 @@ const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents
             )}
           </Card>
 
-          <Card title={`🚧 البلاغات والعوائق (${openIncidents.length} مفتوح)`} icon={<AlertTriangle size={16} color={C.muted} />}>
+          <Card title={`البلاغات والعوائق (${openIncidents.length} مفتوح)`} icon={<AlertTriangle size={16} color={C.muted} />}>
             {incidents.length === 0 ? <EmptyState icon="✅" title="لا بلاغات" /> : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
                 {[...incidents].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 30).map((inc) => {
@@ -5475,7 +5629,7 @@ const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents
                   const stillSkipped = r && (r.skippedStops || []).some((s) => s.binId === inc.binId);
                   return (
                     <div key={inc.id} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px", fontSize: 12, borderRight: `3px solid ${inc.status === "open" ? C.danger : C.dim}` }}>
-                      <div><b style={{ color: C.text }}>{t.icon} {t.label}</b> · {inc.driverName} · {getReadingAgeLabel(inc.createdAt)}</div>
+                      <div><b style={{ color: C.text }}>{ico(t.icon)} {t.label}</b> · {inc.driverName} · {getReadingAgeLabel(inc.createdAt)}</div>
                       <div style={{ color: C.muted, fontSize: 11 }}>{inc.routeName}{bin ? ` · ${bin.name}` : ""}{inc.note ? ` · ${inc.note}` : ""} · {inc.status === "open" ? "مفتوح" : inc.status === "reviewed" ? "تمت المراجعة" : "محلول"}{inc.resolution ? ` — ${inc.resolution}` : ""}</div>
                       {inc.status === "open" && (
                         <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
@@ -5537,9 +5691,9 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
 
   const run = async (label, fn) => { setBusy(label); setMsg(""); try { const r = await fn(); if (r) setMsg(r); } catch (e) { setMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setBusy(""); } };
   const install = () => run("install", async () => {
-    if (!window.confirm("سيُحذف المشهد التجريبي السابق (الصفوف الموسومة demo فقط) ويُبنى مشهد المحاكاة بنفس الـseed. البيانات الحقيقية لا تُمس. متابعة؟")) return "";
+    if (!window.confirm("سيُحذف مشهد المحاكاة السابق (البيانات التجريبية فقط) ويُعاد بناؤه بالإعدادات نفسها. البيانات الفعلية لا تتأثر. متابعة؟")) return "";
     const r = await installSimulation(cfg, { neighborhoods, featuresByKey: FEATURE_BY_KEY, actor, withHistory: true, vehicleIds: vehicles.filter((v) => v.demo).map((v) => v.id) });
-    return `✅ ثُبّت المشهد: ${r.bins} حاوية (${r.summary.online} متصلة بالمحاكي · ${r.summary.offline} منقطعة · ${r.summary.fault} معطلة · ${r.summary.critical} حرجة · ${r.summary.thermal} تنبيه حراري) · حُذف ${r.cleaned} صف تجريبي سابق · ${r.historyRoutes} جولة تاريخية${r.warnings.length ? " · " + r.warnings.join("، ") : ""}`;
+    return `ثُبّت المشهد: ${r.bins} حاوية (${r.summary.online} متصلة بالمحاكي · ${r.summary.offline} منقطعة · ${r.summary.fault} معطلة · ${r.summary.critical} حرجة · ${r.summary.thermal} تنبيه حراري) · حُذف ${r.cleaned} صف تجريبي سابق · ${r.historyRoutes} جولة تاريخية${r.warnings.length ? " · " + r.warnings.join("، ") : ""}`;
   });
   const fire = (type) => run(type, async () => {
     const r = await fireSimulationEvent(type, evBin ? { binId: evBin } : { municipalityId: evMun || scope.municipalityId || null }, actor);
@@ -5549,7 +5703,7 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
     if (["critical_fill", "heat_spike"].includes(type) && evMid) {
       try { const d = await requestDispatchCycle({ municipalityId: evMid, trigger: "simulator_event" }); const t = d.municipalities?.[evMid]; dispatchNote = d.skipped ? "" : t ? ` · الإسناد التلقائي: ${d.mode === "auto" ? `${t.executed} قرار نُفّذ` : `${t.observed} توصية (مراقبة)`}${t.escalated ? `، ${t.escalated} مرفوعة` : ""}` : ""; } catch { dispatchNote = " · تعذر الاتصال بخادم الإسناد"; }
     }
-    return `${SIM_EVENTS[type].icon} ${SIM_EVENTS[type].label} → ${r.bin.name}${dispatchNote}`;
+    return `${SIM_EVENTS[type].label} → ${r.bin.name}${dispatchNote}`;
   });
   const summary = sim?.summary;
   const num = (k, label, min, max) => (
@@ -5561,14 +5715,14 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div>
-        <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>🧪 محاكي مستشعرات IoT — بيئة العرض</div>
-        <div style={{ fontSize: 12, color: C.dim }}>سيناريو حتمي (seed ثابت): إعادة الضبط تعيد المشهد نفسه. كل قراءة تُكتب في simulated_readings بمصدر SIMULATED ولا تلمس قراءات الأجهزة الحقيقية، ولا يعمل المحرك إلا على حاويات موسومة simulated.</div>
+        <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>محاكي مستشعرات IoT — بيئة العرض</div>
+        <div style={{ fontSize: 12, color: C.dim }}>مشهد قابل للتكرار: إعادة الضبط تعيد المشهد نفسه. قراءات المحاكاة تُحفظ منفصلة ومعلَّمة بأنها محاكاة، ولا تمس قراءات الأجهزة الفعلية، ولا تعمل المحاكاة إلا على الحاويات التجريبية.</div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 1fr) minmax(320px, 1.3fr)", gap: 14 }}>
-        <Card title="⚙️ إعدادات السيناريو (تجريبية، قابلة للتعديل)" icon={<SettingsIcon size={16} color={C.muted} />}>
+        <Card title="إعدادات السيناريو (تجريبية، قابلة للتعديل)" icon={<SettingsIcon size={16} color={C.muted} />}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <label style={{ fontSize: 11, color: C.muted, gridColumn: "1 / -1" }}>بذرة التوليد (تعيد المشهد نفسه)<input value={cfg.seed} disabled={!canInstall} onChange={(e) => setCfg({ ...cfg, seed: e.target.value })} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: "monospace", direction: "ltr", boxSizing: "border-box" }} /></label>
+            <label style={{ fontSize: 11, color: C.muted, gridColumn: "1 / -1" }}>رقم المشهد (يعيد المشهد نفسه)<input value={cfg.seed} disabled={!canInstall} onChange={(e) => setCfg({ ...cfg, seed: e.target.value })} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: "monospace", direction: "ltr", boxSizing: "border-box" }} /></label>
             {num("totalBins", "عدد الحاويات", 10, 1000)}
             {num("offlineSensors", "مستشعرات منقطعة", 0, 200)}
             {num("faultSensors", "مستشعرات معطلة", 0, 200)}
@@ -5576,24 +5730,24 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
             {num("tickMinutes", "دقائق محاكاة لكل نبضة", 1, 120)}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            {btn(sim ? "🔁 إعادة ضبط (نفس الـseed)" : "📦 تثبيت المشهد", install, C.purple, !canInstall)}
+            {btn(sim ? "إعادة ضبط المشهد" : "تثبيت المشهد", install, C.purple, !canInstall)}
           </div>
           {!canInstall && <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>تثبيت/إعادة ضبط المشهد من صلاحية مدير المنصة؛ يمكنك توليد الأحداث داخل بلديتك.</div>}
           {msg && <div style={{ fontSize: 12, color: C.text, marginTop: 8, lineHeight: 1.7 }}>{msg}</div>}
         </Card>
 
-        <Card title="🎛️ التحكم في التشغيل" icon={<Gauge size={16} color={C.muted} />}>
+        <Card title="التحكم في التشغيل" icon={<Gauge size={16} color={C.muted} />}>
           {sim === undefined ? <div style={{ color: C.dim, fontSize: 12 }}>جاري التحميل…</div> : !sim ? <EmptyState icon="📦" title="لم يُثبَّت مشهد المحاكاة بعد" desc="اضغط «تثبيت المشهد» لتوليد الحاويات والمستشعرات الافتراضية داخل مضلعات الأحياء." /> : (
             <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, marginBottom: 8 }}>
-                {[["الحالة", sim.status === "running" ? "▶️ يعمل" : "⏸ متوقف", sim.status === "running" ? C.accent : C.warning], ["الساعة المحاكاة", new Date(sim.clock).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }), C.text], ["النبضات", sim.tick, C.text], ["السرعة", `${sim.speed}×`, C.info],
+                {[["الحالة", sim.status === "running" ? "▶️ يعمل" : "متوقف", sim.status === "running" ? C.accent : C.warning], ["الساعة المحاكاة", new Date(sim.clock).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }), C.text], ["النبضات", sim.tick, C.text], ["السرعة", `${sim.speed}×`, C.info],
                   ["حاويات", summary?.total ?? "—", C.text], ["متصلة بالمحاكي", summary?.online ?? "—", C.accent], ["منقطعة / معطلة", `${summary?.offline ?? 0} / ${summary?.fault ?? 0}`, C.dim], ["حرجة / متابعة", `${summary?.critical ?? 0} / ${summary?.warning ?? 0}`, C.danger], ["تنبيه حراري", summary?.thermal ?? 0, C.warning]].map(([l, v, c]) => (
                   <div key={l} style={{ background: C.bg, borderRadius: 8, padding: "6px 10px" }}><div style={{ fontSize: 15, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 10.5 }}>{l}</div></div>
                 ))}
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 {sim.status !== "running" ? btn("▶️ بدء", () => run("▶️ بدء", async () => { await setSimulationStatus("running", { speed: sim.speed, leader: SIM_TAB_ID }); return "▶️ بدأ التشغيل — هذه النافذة تقود النبضات"; }), C.accent, !canInstall)
-                  : btn("⏹ إيقاف", () => run("⏹ إيقاف", async () => { await setSimulationStatus("stopped"); return "⏹ أُوقف التشغيل"; }), C.danger, !canInstall)}
+                  : btn("إيقاف", () => run("إيقاف", async () => { await setSimulationStatus("stopped"); return "أُوقف التشغيل"; }), C.danger, !canInstall)}
                 <span>تسريع الزمن:</span>
                 {[1, 5, 20, 60].map((sp) => <button key={sp} disabled={!canInstall} onClick={() => setSimulationStatus(sim.status, { speed: sp, leader: sim.leader })} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${sim.speed === sp ? C.info : C.border}`, background: sim.speed === sp ? C.info + "25" : "transparent", color: sim.speed === sp ? C.info : C.muted, fontSize: 11.5, cursor: "pointer", fontFamily: ARABIC_FONT }}>{sp}×</button>)}
                 <span style={{ fontSize: 10.5, color: C.dim }}>نبضة كل {Math.round(realIntervalMs(sim.config, sim.speed) / 1000)} ث حقيقية = {sim.config.tickMinutes} دقيقة محاكاة{sim.leader === SIM_TAB_ID ? " · هذه النافذة القائدة" : sim.leader ? " · نافذة أخرى تقود" : ""}</span>
@@ -5605,7 +5759,7 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
       </div>
 
       {sim && (
-        <Card title="⚡ توليد أحداث للعرض" icon={<Sparkles size={16} color={C.muted} />}>
+        <Card title="توليد أحداث للعرض" icon={<LuLightbulb size={16} color={C.muted} />}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10, fontSize: 12 }}>
             <span style={{ color: C.muted }}>النطاق:</span>
             <select value={evMun} disabled={!scope.all} onChange={(e) => { setEvMun(e.target.value); setEvBin(""); }} style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>
@@ -5618,14 +5772,14 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
             </select>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {Object.entries(SIM_EVENTS).map(([k, e]) => <span key={k}>{btn(`${e.icon} ${e.label}`, () => fire(k), k === "critical_fill" ? C.danger : k === "heat_spike" ? C.warning : k === "emptied" ? C.accent : C.info)}</span>)}
+            {Object.entries(SIM_EVENTS).map(([k, e]) => <span key={k}>{btn(`${e.label}`, () => fire(k), k === "critical_fill" ? C.danger : k === "heat_spike" ? C.warning : k === "emptied" ? C.accent : C.info)}</span>)}
           </div>
           {(sim.events || []).length > 0 && (
             <div style={{ marginTop: 10, maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
-              {[...sim.events].reverse().slice(0, 20).map((e, i) => <div key={i} style={{ fontSize: 11.5, color: C.muted, background: C.bg, borderRadius: 6, padding: "5px 10px" }}>{SIM_EVENTS[e.type]?.icon} {e.label} — <b style={{ color: C.text }}>{e.binName}</b> · {new Date(e.at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })} (زمن المحاكاة)</div>)}
+              {[...sim.events].reverse().slice(0, 20).map((e, i) => <div key={i} style={{ fontSize: 11.5, color: C.muted, background: C.bg, borderRadius: 6, padding: "5px 10px" }}>{ico(SIM_EVENTS[e.type]?.icon)} {e.label} — <b style={{ color: C.text }}>{e.binName}</b> · {new Date(e.at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })} (زمن المحاكاة)</div>)}
             </div>
           )}
-          <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8, lineHeight: 1.7 }}>كل حدث يكتب قراءة SIMULATED جديدة فتتحدث الحاوية فورًا في لوحة التحكم والخريطة ومحرك الأولوية والتنبؤ واقتراح الجولات. تأكيد السائق تفريغَ حاوية محاكاة يولّد قراءة تفريغ في النبضة التالية — حدث التفريغ (collection_events) وقراءة المستشعر صفان منفصلان.</div>
+          <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8, lineHeight: 1.7 }}>كل حدث يضيف قراءة محاكاة جديدة تظهر فورًا في لوحة التحكم والخريطة وترتيب الأولويات والتنبؤ واقتراح الجولات. عند تأكيد السائق تفريغ حاوية محاكاة تُسجَّل قراءة التفريغ في التحديث التالي، ويبقى سجل التفريغ منفصلًا عن قراءة المستشعر.</div>
         </Card>
       )}
     </div>
@@ -5675,7 +5829,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
       const plan = buildCollectionPlan({ municipalityId: mid, neighborhoods: munNeighborhoods, bins: munBins, profiles: profiles.filter((p) => p.municipalityId === mid), vehicles: vehicles.filter((v) => v.municipalityId === mid), routes: routes.filter((r) => r.municipalityId === mid), readingsByBin, contextFor: ctx.forBin, depot });
       const id = await saveOptimizationRun({ municipalityId: mid, summary: plan.summary, routes: plan.routes.map((r) => ({ neighborhoodId: r.neighborhoodId, routeName: r.routeName, stops: r.stops.length, deferred: r.deferredStops.length, distanceKm: r.distanceKm, durationMin: r.durationMin, matrixSource: r.matrixSource, driver: r.driver ? { driverId: r.driver.driverId, driverName: r.driver.driverName } : null })), constraints: plan.constraints, assumptions: plan.assumptions, applied: false, demoScenario: true, demo: munBins.some((b) => b.demo) }, actor);
       await patch({ planRunId: id });
-      return `🧠 خُطّطت ${plan.summary.routes} جولة لـ ${plan.summary.needCollection} حاوية · ${plan.summary.unassignedRoutes} بلا سائق · ${plan.summary.reductionPct != null ? `خفض مسافة ${plan.summary.reductionPct}% مقابل خط الأساس` : "لا مقارنة بخط الأساس"} (مسافات جوية — للطرق الفعلية: صفحة خطة الجمع الذكية)`;
+      return `خُطّطت ${plan.summary.routes} جولة لـ ${plan.summary.needCollection} حاوية · ${plan.summary.unassignedRoutes} بلا سائق · ${plan.summary.reductionPct != null ? `خفض مسافة ${plan.summary.reductionPct}% مقابل خط الأساس` : "لا مقارنة بخط الأساس"} (مسافات جوية — للطرق الفعلية: صفحة خطة الجمع الذكية)`;
     }),
     shortage: run("shortage", async () => {
       const munVehicles = vehicles.filter((v) => v.municipalityId === mid);
@@ -5689,24 +5843,24 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
       // In the demo scene the breakdown also happens "for real" — but only to a demo vehicle, never to a real fleet row.
       let liveNote = "لم يُغيَّر وضع المركبة الفعلية (ليست صفًا تجريبيًا)";
       if (target.demo && target.status !== "maintenance") { await setVehicleStatusWithHistory(target.id, target.status, "maintenance", actor, "سيناريو العرض: تعطل محاكى"); await patch({ brokenVehicleId: target.id }); liveNote = `وأُخرجت ${target.vehicleNumber} (تجريبية) من الخدمة في المشهد فارتفع ضغط البلدية فعليًا`; }
-      return `🧪 تعطل ${target.vehicleNumber}: ${r.recommendation} — غير مخدومة ${r.baseline.unserved} ← ${r.result.unserved} · ضغط ${r.baseline.pressure} ← ${r.result.pressure} (المحاكاة على نسخة معزولة؛ ${liveNote})`;
+      return `تعطل ${target.vehicleNumber}: ${r.recommendation} — غير مخدومة ${r.baseline.unserved} ← ${r.result.unserved} · ضغط ${r.baseline.pressure} ← ${r.result.pressure} (المحاكاة على نسخة معزولة؛ ${liveNote})`;
     }),
     recommend: run("recommend", async () => {
       const rec = city.transfersRec.recommendations.find((x) => x.toMunicipalityId === mid);
       if (!rec) { const p = city.pressures.find((x) => x.municipalityId === mid); const w = city.transfersRec.warnings.find((x) => x.startsWith(p?.name || "—")); throw new Error(w ? `لا نقل ممكن ضمن القيود: ${w}` : `ضغط ${p?.name || mid} الآن ${p?.index ?? "—"} (دون حد الدعم ${city.transfersRec.thresholds.shortageThreshold}) — ولّد أحداث امتلاء إضافية أو شغّل سيناريو النقص أولًا`); }
       const id = await proposeResourceTransfer(transferFromRecommendation(rec), actor);
       await writeAuditLog("transfer_proposed", actor.uid, actor.name, { transferId: id, from: rec.fromMunicipalityId, to: rec.toMunicipalityId, resource: rec.resourceLabel, demoScenario: true });
-      return `🤝 ${rec.reason}`;
+      return `${rec.reason}`;
     }),
-    transferApprove: run("transferApprove", async () => { const t = evaluation.transfer; if (!t || t.status !== "proposed") throw new Error("لا اقتراح نقل بانتظار الاعتماد"); await decideResourceTransfer(t, actor, "approved", "سيناريو العرض"); return `✅ اعتُمد نقل ${t.resourceLabel} — نفّذه لإعادة توطين المورد مؤقتًا`; }),
-    transferExecute: run("transferExecute", async () => { const t = evaluation.transfer; if (!t || t.status !== "approved") throw new Error("لا نقل معتمد بانتظار التنفيذ"); await executeResourceTransfer(t, actor); return `🚚 نُفّذ النقل: ${t.resourceLabel} يعمل الآن ضمن ${municipalityById(t.toMunicipalityId)?.shortAr} مؤقتًا (يُعاد من بوابة متخذي القرار)`; }),
+    transferApprove: run("transferApprove", async () => { const t = evaluation.transfer; if (!t || t.status !== "proposed") throw new Error("لا اقتراح نقل بانتظار الاعتماد"); await decideResourceTransfer(t, actor, "approved", "سيناريو العرض"); return `اعتُمد نقل ${t.resourceLabel} — نفّذه لإعادة توطين المورد مؤقتًا`; }),
+    transferExecute: run("transferExecute", async () => { const t = evaluation.transfer; if (!t || t.status !== "approved") throw new Error("لا نقل معتمد بانتظار التنفيذ"); await executeResourceTransfer(t, actor); return `نُفّذ النقل: ${t.resourceLabel} يعمل الآن ضمن ${municipalityById(t.toMunicipalityId)?.shortAr} مؤقتًا (يُعاد من بوابة متخذي القرار)`; }),
     pick: run("pick", async () => { await patch({ municipalityId: pickMid }); onNavigate && onNavigate("municipalities", { municipalityId: pickMid }); return `اختيرت ${municipalityById(pickMid)?.nameAr}`; }),
     fill: run("fill", async () => {
       const names = [];
       for (let i = 0; i < 3; i++) { const r = await fireSimulationEvent("critical_fill", { municipalityId: mid }, actor); names.push(r.bin.name); }
       requestDispatchCycle({ municipalityId: mid, trigger: "simulator_event" }).catch(() => {}); // server-side; a no-op while dispatch is off
       await patch({ firedEvents: (session?.firedEvents || 0) + 3 });
-      return `🔴 امتلاء حرج: ${names.join("، ")}`;
+      return `امتلاء حرج: ${names.join("، ")}`;
     }),
     route: run("route", async () => {
       const ctx = makeBinContext(fireSensors, citizenReports, neighborhoods);
@@ -5731,13 +5885,13 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
         await updateRoute(r.id, { orderedStops: [...served, ...deferred], binIds: [...served, ...deferred].map((o) => o.binId), estimatedDistanceKm: opt.totalDistanceKm, estimatedWasteLiters: opt.estimatedWasteLiters, optimization: { at: new Date().toISOString(), by: actor.uid, matrixSource: opt.matrixSource, confidence: opt.confidence, improvementPct: opt.objective.improvementPct, totalDurationMin: opt.totalDurationMin, trips: opt.trips, constraints: opt.constraints, deferredBinIds: deferred.map((d) => d.binId) } });
       }
       await patch({ routeId: r.id, routeName: r.routeName });
-      return `🧭 ${r.routeName} — ${r.binIds?.length || 0} حاوية${opt.ok ? ` · مُحسّنة (${opt.matrixSource === "osrm" ? "طرق فعلية" : "تقدير"}, ${opt.totalDistanceKm} كم, ~${opt.totalDurationMin} د)` : ""}`;
+      return `${r.routeName} — ${r.binIds?.length || 0} حاوية${opt.ok ? ` · مُحسّنة (${opt.matrixSource === "osrm" ? "طرق فعلية" : "تقدير"}, ${opt.totalDistanceKm} كم, ~${opt.totalDurationMin} د)` : ""}`;
     }),
     driver: run("driver", async () => {
       const route = routes.find((r) => r.id === session?.routeId); if (!route) throw new Error("لا جولة مختارة");
       // Make sure a demo driver of this municipality is ready: vehicle, coverage, on shift.
       let prof = profiles.find((p) => p.municipalityId === mid && p.demo) || profiles.find((p) => p.municipalityId === mid) || profiles[0];
-      if (!prof) throw new Error("لا يوجد ملف سائق — أنشئ حسابات العرض (scripts/createDemoAccounts.mjs) وهيّئ ملف السائق");
+      if (!prof) throw new Error("لا يوجد ملف سائق في هذه البلدية — أضف سائقًا من صفحة الأسطول أولًا");
       const veh = vehicles.find((v) => v.id === prof.vehicleId) || vehicles.find((v) => v.municipalityId === mid && v.status === "available") || vehicles.find((v) => v.status === "available");
       if (!prof.vehicleId && veh) await assignVehicleToDriver({ driverId: prof.uid, driverName: prof.fullName, vehicleId: veh.id, vehicleNumber: veh.vehicleNumber, start: new Date().toISOString(), end: null }, actor, "تهيئة سيناريو العرض");
       await updateDriverProfile(prof.uid, { neighborhoodKeys: munKeys, shiftStatus: "on_shift", availability: "available", locationSharing: true, accountStatus: "active" }, prof, actor, "تهيئة سيناريو العرض");
@@ -5747,21 +5901,21 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
       const rec = rankDriverCandidates({ ...route, orderedStops: stopsPos }, { profiles: [fresh, ...profiles.filter((p) => p.uid !== fresh.uid)], vehicles, routes, neighborhoodName: nName, defaultOrigin: DEFAULT_DEPOT });
       if (!rec.recommended) throw new Error("لم يُرشَّح سائق: " + rec.warnings.join("، "));
       await patch({ driverId: rec.recommended.driverId, recommendedDriverName: rec.recommended.driverName, recommendedVehicleId: rec.recommended.vehicleId, recommendation: { reason: rec.recommended.reason, totalKm: rec.recommended.totalKm, totalMin: rec.recommended.totalMin, confidence: rec.recommended.confidence } });
-      return `🧑‍✈️ المرشح: ${rec.recommended.driverName} — ${rec.recommended.vehicleNumber} · ${rec.recommended.reason}`;
+      return `المرشح: ${rec.recommended.driverName} — ${rec.recommended.vehicleNumber} · ${rec.recommended.reason}`;
     }),
     approve: run("approve", async () => {
       const route = routes.find((r) => r.id === session?.routeId); if (!route || !session?.driverId) throw new Error("أكمل الخطوتين السابقتين");
       await approveAndAssignRoute(route.id, actor.uid, { driverId: session.driverId, driverName: session.recommendedDriverName, vehicleId: session.recommendedVehicleId }, null);
       await writeAuditLog("route_assigned", actor.uid, actor.name, { routeId: route.id, routeName: route.routeName, driverId: session.driverId, vehicleId: session.recommendedVehicleId, demoScenario: true });
       await patch({ criticalBefore: evaluation.critical, routeCriticalBefore: bins.filter((b) => (route.binIds || []).includes(b.id) && Number(b.lastFillLevelPercent) >= 85 && Number(b.lastFillLevelPercent) <= 100).length, approvedAt: new Date().toISOString() });
-      return `✅ اعتُمدت ${route.routeName} وأُسندت إلى ${session.recommendedDriverName} — تظهر الآن في حساب السائق`;
+      return `اعتُمدت ${route.routeName} وأُسندت إلى ${session.recommendedDriverName} — تظهر الآن في حساب السائق`;
     }),
     reset: run("reset", async () => {
-      if (!window.confirm("إعادة السيناريو من البداية: تُحذف الجلسة ويُعاد تثبيت مشهد المحاكاة بنفس الـseed (الصفوف التجريبية فقط). متابعة؟")) return "";
+      if (!window.confirm("إعادة السيناريو من البداية: تُحذف الجلسة ويُعاد بناء مشهد المحاكاة (البيانات التجريبية فقط). متابعة؟")) return "";
       const r = await resetSimulation({ neighborhoods, featuresByKey: FEATURE_BY_KEY, actor, withHistory: true, vehicleIds: vehicles.filter((v) => v.demo).map((v) => v.id) });
       const closed = await withdrawOpenSupportRequests(actor, "أُغلق عند إعادة سيناريو العرض");
       await setDoc(DEMO_SESSION_REF(), { startedAt: new Date().toISOString(), startedBy: actor.uid, completedKeys: [], firedEvents: 0, resetAt: new Date().toISOString() });
-      return `🔁 أُعيد المشهد (${r.bins} حاوية)${closed ? ` · أُغلق ${closed} طلب دعم مفتوح` : ""} وبدأت جلسة جديدة`;
+      return `أُعيد المشهد (${r.bins} حاوية)${closed ? ` · أُغلق ${closed} طلب دعم مفتوح` : ""} وبدأت جلسة جديدة`;
     }),
   };
   const actionFor = (key) => ({ city: actions.city, amanah: actions.amanah, pick: actions.pick, fill: actions.fill, plan: actions.plan, route: actions.route, driver: actions.driver, approve: actions.approve, shortage: actions.shortage, ...(isAmanah ? { recommend: actions.recommend, transferApprove: actions.transferApprove, transferExecute: actions.transferExecute } : {}) })[key];
@@ -5772,12 +5926,12 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>🎬 وضع العرض — سيناريو لجنة التحكيم</div>
+          <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>سيناريو العرض التشغيلي</div>
           <div style={{ fontSize: 12, color: C.dim }}>{DEMO_STEPS.length} خطوة: الأمانة ← البلدية ← الموظف ← السائق ← نقص الموارد ← النقل بين البلديات ← مؤشرات المدينة. الخطوات الإجرائية تُنفَّذ بزر؛ خطوات السائق ومتخذ القرار بالبلدية تُكتشف تلقائيًا من البيانات الحية. الحالة محفوظة في قاعدة البيانات فلا تضيع عند تحديث الصفحة.</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {!session && <button disabled={!!busy} onClick={actions.start} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>▶️ بدء الجلسة</button>}
-          {session && can(loggedInUser?.role, "municipalities.manage") && <button disabled={!!busy} onClick={actions.reset} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🔁 إعادة من البداية</button>}
+          {session && can(loggedInUser?.role, "municipalities.manage") && <button disabled={!!busy} onClick={actions.reset} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>إعادة من البداية</button>}
         </div>
       </div>
       {msg && <div style={{ fontSize: 12, color: C.text, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>{msg}</div>}
@@ -5798,13 +5952,13 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
                   <select value={pickMid} onChange={(e) => setPickMid(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>{MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.nameAr}</option>)}</select>
                 )}
                 {act && (current || (done && st.key === "city")) && <button disabled={!!busy || (!current && !done)} onClick={act} style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === st.key ? "…" : st.kind === "nav" ? "افتح" : "نفّذ"}</button>}
-                {st.key === "support" && current && <span style={{ fontSize: 11.5, color: C.warning }}>🏛️ من حساب متخذ القرار بالبلدية ({mid ? `manager.${mid}@…` : ""}) في نافذة ثانية: البلديات والنطاقات → مؤشرات الأداء → «طلب دعم من الأمانة».</span>}
-                {["recommend", "transferApprove", "transferExecute"].includes(st.key) && current && !isAmanah && <span style={{ fontSize: 11.5, color: C.warning }}>🏛️ من حساب متخذ القرار بالأمانة: بوابة متخذي القرار → القيادة الاستراتيجية.</span>}
-                {st.key === "inbox" && current && <span style={{ fontSize: 11.5, color: C.warning }}>📱 سجّل دخول السائق ({profiles.find((p) => p.uid === session.driverId)?.email || "حساب السائق"}) على جهاز ثانٍ، ابدأ المناوبة ثم الجولة.</span>}
+                {st.key === "support" && current && <span style={{ fontSize: 11.5, color: C.warning }}>من حساب متخذ القرار بالبلدية ({mid ? `manager.${mid}@…` : ""}) في نافذة ثانية: البلديات والنطاقات → مؤشرات الأداء → «طلب دعم من الأمانة».</span>}
+                {["recommend", "transferApprove", "transferExecute"].includes(st.key) && current && !isAmanah && <span style={{ fontSize: 11.5, color: C.warning }}>من حساب متخذ القرار بالأمانة: بوابة متخذي القرار → القيادة الاستراتيجية.</span>}
+                {st.key === "inbox" && current && <span style={{ fontSize: 11.5, color: C.warning }}>سجّل دخول السائق ({profiles.find((p) => p.uid === session.driverId)?.email || "حساب السائق"}) على جهاز ثانٍ، ابدأ المناوبة ثم الجولة.</span>}
               </div>
             );
           })}
-          {index >= DEMO_STEPS.length && <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}60`, borderRadius: 12, padding: 14, fontSize: 13, color: C.accent, fontWeight: 700 }}>🎉 اكتمل السيناريو — {evaluation.indicators.detail}. يمكنك الإعادة من البداية.</div>}
+          {index >= DEMO_STEPS.length && <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}60`, borderRadius: 12, padding: 14, fontSize: 13, color: C.accent, fontWeight: 700 }}>اكتمل السيناريو — {evaluation.indicators.detail}. يمكنك الإعادة من البداية.</div>}
         </div>
       )}
     </div>
@@ -5845,7 +5999,7 @@ const SmartPlanPage = ({ neighborhoods = [], bins = [], profiles = [], vehicles 
       const p = buildCollectionPlan({ ...base, matrixByNeighborhood });
       setPlan(p);
       await saveOptimizationRun({ municipalityId: mid, summary: p.summary, constraints: p.constraints, routes: p.routes.map((r) => ({ neighborhoodId: r.neighborhoodId, neighborhoodName: r.neighborhoodName, stops: r.stops.length, deferred: r.deferredStops.length, distanceKm: r.distanceKm, durationMin: r.durationMin, matrixSource: r.matrixSource, driver: r.driver ? { driverId: r.driver.driverId, driverName: r.driver.driverName, vehicleNumber: r.driver.vehicleNumber } : null })), assumptions: p.assumptions, demo: munBins.some((b) => b.demo) }, actor);
-      setMsg(`✅ خُطّطت ${p.routes.length} جولة لـ ${p.summary.served} حاوية${p.summary.unassignedRoutes ? ` · ${p.summary.unassignedRoutes} بلا سائق` : ""}${p.summary.deferred ? ` · ${p.summary.deferred} مؤجلة` : ""}`);
+      setMsg(`خُطّطت ${p.routes.length} جولة لـ ${p.summary.served} حاوية${p.summary.unassignedRoutes ? ` · ${p.summary.unassignedRoutes} بلا سائق` : ""}${p.summary.deferred ? ` · ${p.summary.deferred} مؤجلة` : ""}`);
     } catch (e) { setMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setBusy(""); }
   };
 
@@ -5863,7 +6017,7 @@ const SmartPlanPage = ({ neighborhoods = [], bins = [], profiles = [], vehicles 
       });
       const res = await applyRouteReconciliation({ toCreate, toUpdate: [], toWithdraw }, { planner: true });
       await writeAuditLog("plan_applied", actor.uid, actor.name, { municipalityId: mid, created: res.created, withdrawn: res.withdrawn, served: plan.summary.served });
-      setMsg(`✅ أُنشئت ${res.created} جولة مقترحة من الخطة (سُحب ${res.withdrawn} اقتراح قديم) — اعتمد الإسناد المقترح لكل جولة`);
+      setMsg(`أُنشئت ${res.created} جولة مقترحة من الخطة (سُحب ${res.withdrawn} اقتراح قديم) — اعتمد الإسناد المقترح لكل جولة`);
     } catch (e) { setMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setBusy(""); }
   };
 
@@ -5885,12 +6039,12 @@ const SmartPlanPage = ({ neighborhoods = [], bins = [], profiles = [], vehicles 
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>🧠 خطة الجمع الذكية — {municipalityById(mid)?.nameAr || "—"}</div>
+          <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>خطة الجمع الذكية — {municipalityById(mid)?.nameAr || "—"}</div>
           <div style={{ fontSize: 12, color: C.dim }}>محرك تخطيط الجمع البلدي: الحاويات المؤهلة (امتلاء + تنبؤ + بلاغات) → جولات لكل حي → ترتيب محسَّن بقيود السعة على أزمنة الطرق → السائق المرشح → مؤشرات وقيود.</div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {scope.all && <select value={mid} onChange={(e) => { setMid(e.target.value); setPlan(null); }} style={{ padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>{MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.nameAr}</option>)}</select>}
-          <button disabled={!!busy} onClick={build} style={{ padding: "11px 20px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === "build" ? "جاري الحساب…" : "⚡ إنشاء خطة الجمع الذكية"}</button>
+          <button disabled={!!busy} onClick={build} style={{ padding: "11px 20px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === "build" ? "جاري الحساب…" : "إنشاء خطة الجمع الذكية"}</button>
         </div>
       </div>
       {msg && <div style={{ fontSize: 12, color: C.text, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>{msg}</div>}
@@ -5923,7 +6077,7 @@ const SmartPlanPage = ({ neighborhoods = [], bins = [], profiles = [], vehicles 
           </div>
           {plan.excluded.length > 0 && <Card title={`حاويات حرجة/مرتفعة مستبعدة من الجمع التلقائي (${plan.excluded.length})`} icon={<AlertTriangle size={16} color={C.muted} />}><div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>{plan.excluded.map((e) => `${e.binName}: ${e.reason}`).join(" · ")}</div></Card>}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button disabled={!!busy || plan.routes.length === 0} onClick={apply} style={{ padding: "11px 20px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === "apply" ? "…" : "📋 اعتماد الخطة كجولات مقترحة"}</button>
+            <button disabled={!!busy || plan.routes.length === 0} onClick={apply} style={{ padding: "11px 20px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === "apply" ? "…" : "اعتماد الخطة كجولات مقترحة"}</button>
             <span style={{ fontSize: 11, color: C.dim, alignSelf: "center" }}>لا تُرسل أي مركبة تلقائيًا: الاعتماد والإسناد قرار بشري لكل جولة.</span>
           </div>
         </>
@@ -6056,7 +6210,7 @@ const DriversPage = ({ profiles = [], assignments = [], vehicles = [], loggedInU
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 10, background: (p.shiftStatus === "on_shift" ? C.accent : C.dim) + "20", color: p.shiftStatus === "on_shift" ? C.accent : C.dim }}>{SHIFT_STATUS_LABELS[p.shiftStatus] || p.shiftStatus}</span>
                           <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 10, background: C.info + "20", color: C.info }}>{v ? v.vehicleNumber : "بلا مركبة"}</span>
-                          {fresh.state !== "none" && <span style={{ fontSize: 10.5, color: fresh.state === "live" ? C.accent : C.warning }}>📍 {fresh.state === "live" ? "موقع مباشر" : `آخر موقع قبل ${fresh.ageMin} د`}</span>}
+                          {fresh.state !== "none" && <span style={{ fontSize: 10.5, color: fresh.state === "live" ? C.accent : C.warning }}>{fresh.state === "live" ? "موقع مباشر" : `آخر موقع قبل ${fresh.ageMin} د`}</span>}
                         </div>
                       ) : (
                         <button disabled={busy} onClick={(e) => { e.stopPropagation(); createProfile(u); }} style={smallBtn(C.accent, true)}>تهيئة ملف السائق</button>
@@ -6095,7 +6249,7 @@ const DriversPage = ({ profiles = [], assignments = [], vehicles = [], loggedInU
               </div>
 
               <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>🚛 المركبة المسندة</div>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>المركبة المسندة</div>
                 {activeAssignment ? (
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, background: C.bg, borderRadius: 8, padding: "8px 12px", marginBottom: 8, flexWrap: "wrap" }}>
                     <span><b style={{ color: C.text }}>{activeAssignment.vehicleNumber || vehicleById.get(activeAssignment.vehicleId)?.vehicleNumber}</b> <span style={{ color: C.dim }}>· منذ {new Date(activeAssignment.start).toLocaleString("ar-SA")} {activeAssignment.end ? `حتى ${new Date(activeAssignment.end).toLocaleString("ar-SA")}` : "(مفتوح)"}</span></span>
@@ -6110,12 +6264,12 @@ const DriversPage = ({ profiles = [], assignments = [], vehicles = [], loggedInU
                   <input type="datetime-local" value={vehicleForm.start} onChange={(e) => setVehicleForm({ ...vehicleForm, start: e.target.value })} style={inputSt} title="بداية نافذة الإسناد" />
                   <input type="datetime-local" value={vehicleForm.end} onChange={(e) => setVehicleForm({ ...vehicleForm, end: e.target.value })} style={inputSt} title="نهاية النافذة (اتركها فارغة للإسناد المفتوح)" />
                 </div>
-                {vehicleConflicts.length > 0 && <div style={{ color: C.danger, fontSize: 11.5, marginTop: 6 }}>{vehicleConflicts.map((c, i) => <div key={i}>⛔ {c.message}</div>)}</div>}
+                {vehicleConflicts.length > 0 && <div style={{ color: C.danger, fontSize: 11.5, marginTop: 6 }}>{vehicleConflicts.map((c, i) => <div key={i}>{c.message}</div>)}</div>}
                 <button disabled={busy || !vehicleForm.vehicleId || vehicleConflicts.length > 0} onClick={assignVehicle} style={{ ...smallBtn(C.info, true), color: "#fff", marginTop: 8, opacity: !vehicleForm.vehicleId || vehicleConflicts.length ? 0.5 : 1 }}>إسناد المركبة</button>
               </div>
 
               <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>📜 سجل التغييرات</div>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>سجل التغييرات</div>
                 {(history || []).length === 0 ? <div style={{ color: C.dim }}>لا تغييرات مسجلة بعد.</div> : (
                   <div style={{ maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
                     {[...history].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).map((h) => (
@@ -6131,7 +6285,7 @@ const DriversPage = ({ profiles = [], assignments = [], vehicles = [], loggedInU
         </Card>
       </div>
 
-      <Card title="🗺️ تغطية الأحياء — من يغطي كل حي؟" icon={<MapGlyph size={16} color={C.muted} />}>
+      <Card title="تغطية الأحياء — من يغطي كل حي؟" icon={<MapGlyph size={16} color={C.muted} />}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8 }}>
           {NEIGHBORHOOD_KEYS.map((k) => {
             const ds = matrix[k] || [];
@@ -6187,10 +6341,17 @@ const DISPATCH_STATUS = {
   executed: ["نُفّذ تلقائيًا", "ok"], observed: ["توصية — لم تُنفَّذ (مراقبة)", "info"], open: ["يحتاج قرارك", "danger"],
   resolved: ["عولج", "ok"], dismissed: ["تُجوهل", "neutral"], rejected_at_commit: ["رُفض عند التنفيذ", "warning"],
 };
+/** Operational status of automatic dispatch — a quiet indicator, not a badge. */
 const DispatchModeBadge = ({ settings }) => {
   const s = { ...DEFAULT_DISPATCH_SETTINGS, ...(settings || {}) };
-  const tone = s.mode === "auto" ? "ok" : s.mode === "observe" ? "info" : "neutral";
-  return <Badge tone={tone} solid={s.mode === "auto"}>{s.mode === "auto" ? "🤖 " : ""}{DISPATCH_MODES[s.mode] || s.mode}{s.mode !== "off" ? ` · ${s.scope === "all" ? "كل الحاويات" : "بيئة العرض فقط"}` : ""}</Badge>;
+  const [state, color] = s.mode === "auto" ? ["نشط", C.accent] : s.mode === "observe" ? ["مراقبة دون تنفيذ", C.info] : ["متوقف", C.dim];
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>
+      <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: color, flexShrink: 0 }} />
+      <span>الإسناد التلقائي: <b style={{ color: C.text, fontWeight: 700 }}>{state}</b></span>
+      {s.mode !== "off" && <span style={{ color: C.dim, fontSize: 11 }}>· النطاق: {s.scope === "all" ? "كل الحاويات" : "الحاويات التجريبية"}</span>}
+    </span>
+  );
 };
 
 const DispatchCenter = ({ loggedInUser, onOpenRoute }) => {
@@ -6232,7 +6393,7 @@ const DispatchCenter = ({ loggedInUser, onOpenRoute }) => {
     <div style={{ display: "flex", flexDirection: "column", gap: SP.md }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: SP.sm, flexWrap: "wrap", background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 14px" }}>
         <div style={{ display: "flex", gap: SP.sm, alignItems: "center", flexWrap: "wrap", fontSize: FS.body, color: C.muted }}>
-          <b style={{ color: C.text }}>الإسناد التلقائي:</b> <DispatchModeBadge settings={settings} />
+          <DispatchModeBadge settings={settings} />
           <span>آخر دورة: {lastRun ? `${getReadingAgeLabel(lastRun.startedAt)} (${({ cron: "دورية", heartbeat: "دورية", critical_reading: "قراءة حرجة", simulator_event: "حدث محاكاة", manual: "يدوية" })[lastRun.trigger] || lastRun.trigger})` : "لم تعمل بعد"}</span>
           <span>· كل {s.periodMinutes} د، والحالات الحرجة فورًا</span>
         </div>
@@ -6286,7 +6447,7 @@ const DispatchSettingsCard = ({ loggedInUser }) => {
     catch (e) { setMsg("تعذر الحفظ: " + friendlyError(e)); } finally { setBusy(false); }
   };
   return (
-    <Section title="🤖 الإسناد التشغيلي الذاتي" hint="يحلل المستشعرات والتنبؤات والبلاغات دوريًا على الخادم، ويضيف الحاويات لجولات قائمة أو ينشئ جولات مجمعة ويسندها للسائق الأنسب. نقل الموارد بين البلديات يبقى باعتماد الأمانة." actions={<DispatchModeBadge settings={settings} />}>
+    <Section title="الإسناد التشغيلي الذاتي" hint="يحلل المستشعرات والتنبؤات والبلاغات دوريًا على الخادم، ويضيف الحاويات لجولات قائمة أو ينشئ جولات مجمعة ويسندها للسائق الأنسب. نقل الموارد بين البلديات يبقى باعتماد الأمانة." actions={<DispatchModeBadge settings={settings} />}>
       {!canEdit && <div style={{ fontSize: FS.meta, color: C.dim, marginBottom: SP.sm }}>تغيير الوضع من صلاحية متخذ القرار في الأمانة فقط.</div>}
       <div style={{ display: "flex", gap: SP.sm, flexWrap: "wrap", marginBottom: SP.md }}>
         {Object.entries(DISPATCH_MODES).map(([k, l]) => <Btn key={k} variant={s.mode === k ? "primary" : "secondary"} disabled={!canEdit} onClick={() => set("mode", k)}>{l}</Btn>)}
@@ -6314,7 +6475,7 @@ const DriverNotifications = ({ driverId }) => {
     <div role="status" aria-live="polite" style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
       {unread.map((n) => (
         <div key={n.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, background: n.type === "route_removed" ? C.warning + "18" : C.accent + "18", border: `1px solid ${n.type === "route_removed" ? C.warning : C.accent}60`, borderRadius: 12, padding: "10px 12px" }}>
-          <div><div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>🔔 {n.title}</div><div style={{ fontSize: 12.5, color: C.muted }}>{n.body}</div></div>
+          <div><div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{n.title}</div><div style={{ fontSize: 12.5, color: C.muted }}>{n.body}</div></div>
           <Btn onClick={() => markDriverNotificationRead(n.id).catch(() => {})}>تم</Btn>
         </div>
       ))}
@@ -6408,7 +6569,7 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
       {draftBinId && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: C.info, background: C.info + "15", border: `1px solid ${C.info}40`, borderRadius: 10, padding: "10px 14px" }}>
           <span>تمت الإشارة إلى حاوية "{bins.find((b) => b.id === draftBinId)?.name || draftBinId}" من صفحة أخرى — افتح جولة مقترحة لنفس حيها لإضافتها يدويًا، أو ولّد جولات جديدة.</span>
-          <button onClick={onConsumeDraftBin} style={{ background: "none", border: "none", color: C.info, cursor: "pointer", fontSize: 16 }}>✕</button>
+          <button onClick={onConsumeDraftBin} style={{ background: "none", border: "none", color: C.info, cursor: "pointer", fontSize: 16 }}><UiIcon e="✕" size={14} /></button>
         </div>
       )}
 
@@ -6418,16 +6579,16 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
           background: generating ? C.border : C.brand,
           color: generating ? C.dim : "#fff", fontWeight: 700, fontSize: 13, cursor: generating ? "not-allowed" : "pointer", fontFamily: ARABIC_FONT,
         }}>
-          {generating ? "جاري التوليد…" : pendingChanges > 0 ? `🧭 توليد/تحديث الجولات المقترحة (${pendingChanges} تغيير)` : "🧭 توليد جولات مقترحة الآن"}
+          {generating ? "جاري التوليد…" : pendingChanges > 0 ? `توليد/تحديث الجولات المقترحة (${pendingChanges} تغيير)` : "توليد جولات مقترحة الآن"}
         </button>
         {generateMsg && <span style={{ fontSize: 12, color: C.muted }}>{generateMsg}</span>}
         {!generateMsg && pendingChanges > 0 && (
           <span style={{ fontSize: 12, color: C.warning }}>
-            ⚠️ الاقتراحات غير متزامنة مع حالة الحاويات: {pendingPlan.toCreate.length} حي بلا جولة، {pendingPlan.toUpdate.length} جولة تحتاج تحديثًا، {pendingPlan.toWithdraw.length} اقتراح لم يعد مطلوبًا.
+            الاقتراحات غير متزامنة مع حالة الحاويات: {pendingPlan.toCreate.length} حي بلا جولة، {pendingPlan.toUpdate.length} جولة تحتاج تحديثًا، {pendingPlan.toWithdraw.length} اقتراح لم يعد مطلوبًا.
           </span>
         )}
         <button onClick={() => setShowVehicles((s) => !s)} style={{ padding: "10px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>
-          🚛 إدارة المركبات ({vehicles.length})
+          إدارة المركبات ({vehicles.length})
         </button>
       </div>
 
@@ -6484,7 +6645,7 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
           ) : grouped[tab].map((r) => (
             <div key={r.id} onClick={() => setSelectedRouteId(r.id)} style={{ background: C.card, border: `1px solid ${STATUS_COLORS[r.priorityTier] || C.border}40`, borderRadius: 14, padding: 16, cursor: "pointer" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>{r.routeName} {r.demo && <DemoBadge />}{r.dispatch?.auto && <Badge tone="ok">🤖 تلقائي</Badge>}{r.driverName && <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>← {r.driverName}</span>}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>{r.routeName} {r.demo && <DemoBadge />}{r.dispatch?.auto && <Badge tone="ok">تلقائي</Badge>}{r.driverName && <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>← {r.driverName}</span>}</div>
                 <StateBadge state={r.priorityTier} />
               </div>
               <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{r.binIds?.length || 0} حاوية · {r.estimatedDistanceKm} كم تقريبًا · تقدير {r.estimatedWasteLiters} لتر</div>
@@ -6657,7 +6818,7 @@ const SessionTimeout = ({ onLogout, timeoutMin = 30, countdownSec = 10 }) => {
         </div>
         <div style={{ display:"flex", gap:10 }}>
           <button onClick={resetTimer} style={{ flex:1, padding:13, borderRadius:10, border:"none",
-            background:"linear-gradient(135deg,#10b981,#059669)", color:"#000", fontWeight:800, fontSize:14, cursor:"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+            background:"#10b981", color:"#000", fontWeight:800, fontSize:14, cursor:"pointer", fontFamily:F, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
             <CheckCircle size={16} /> تمديد الجلسة
           </button>
           <button onClick={onLogout} style={{ padding:"13px 20px", borderRadius:10, border:`1px solid ${C.danger}`,
@@ -6706,7 +6867,7 @@ const AmanahStrategicPanel = ({ neighborhoods = [], bins = [], profiles = [], ve
   const propose = (rec) => run(rec.resourceId, async () => {
     const id = await proposeResourceTransfer(transferFromRecommendation(rec), actor);
     await writeAuditLog("transfer_proposed", actor.uid, actor.name, { transferId: id, from: rec.fromMunicipalityId, to: rec.toMunicipalityId, resource: rec.resourceLabel });
-    return `📝 سُجّل اقتراح نقل ${rec.resourceLabel} من ${rec.fromName} إلى ${rec.toName} — بانتظار الاعتماد`;
+    return `سُجّل اقتراح نقل ${rec.resourceLabel} من ${rec.fromName} إلى ${rec.toName} — بانتظار الاعتماد`;
   });
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -6718,11 +6879,11 @@ const AmanahStrategicPanel = ({ neighborhoods = [], bins = [], profiles = [], ve
         ))}
       </div>
       {/* 1. خريطة البلديات */}
-      <Card title="🗺️ خريطة البلديات — النطاقات التشغيلية والضغط" icon={<MapGlyph size={16} color={C.muted} />}>
+      <Card title="خريطة البلديات — النطاقات التشغيلية والضغط" icon={<MapGlyph size={16} color={C.muted} />}>
         <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={profiles} initialLayer="municipalities" height={420} compact />
       </Card>
       {/* 3+4. مقارنة البلديات والضغط التشغيلي */}
-      <Card title="📊 مقارنة أداء البلديات والضغط التشغيلي" icon={<BarChart2 size={16} color={C.muted} />}>
+      <Card title="مقارنة أداء البلديات والضغط التشغيلي" icon={<BarChart2 size={16} color={C.muted} />}>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: ARABIC_FONT }}>
             <thead><tr style={{ color: C.muted, textAlign: "right" }}>{["#", "البلدية", "الضغط", "حرجة", "متابعة", "متوقعة قريبًا", "بلاغات", "سائقون جاهزون", "مركبات متاحة", "جولات نشطة", "الطاقة (حاوية/مناوبة)", ""].map((h) => <th key={h} style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{h}</th>)}</tr></thead>
@@ -6747,9 +6908,9 @@ const AmanahStrategicPanel = ({ neighborhoods = [], bins = [], profiles = [], ve
         <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>الضغط = الطلب (حرجة ×1 + متابعة/متوقعة ×0.5 + بلاغات ×0.5) ÷ الطاقة (الطواقم الجاهزة × {Math.round(CREW_BINS_PER_HOUR * 10) / 10} حاوية/ساعة × {city.pressures[0]?.remainingShiftHours || 4} ساعات متبقية) × 100 — إشرافي بلا الدخول إلى حساب متخذ القرار بالبلدية.</div>
       </Card>
       {/* 6+7. التنبؤات والتوصيات الاستراتيجية */}
-      <Card title="🤝 التوصيات الاستراتيجية — دعم البلديات ونقل الموارد" icon={<Target size={16} color={C.muted} />}>
-        {city.transfersRec.recommendations.length === 0 && city.transfersRec.warnings.length === 0 && <div style={{ fontSize: 12, color: C.accent }}>✅ لا توجد بلدية تحت ضغط يستدعي دعمًا الآن.</div>}
-        {city.transfersRec.warnings.map((w, i) => <div key={i} style={{ fontSize: 12, color: C.warning, marginBottom: 6 }}>⚠️ {w}</div>)}
+      <Card title="التوصيات الاستراتيجية — دعم البلديات ونقل الموارد" icon={<Target size={16} color={C.muted} />}>
+        {city.transfersRec.recommendations.length === 0 && city.transfersRec.warnings.length === 0 && <div style={{ fontSize: 12, color: C.accent }}>لا توجد بلدية تحت ضغط يستدعي دعمًا الآن.</div>}
+        {city.transfersRec.warnings.map((w, i) => <div key={i} style={{ fontSize: 12, color: C.warning, marginBottom: 6 }}>{w}</div>)}
         {city.transfersRec.recommendations.map((rec) => (
           <div key={rec.toMunicipalityId + rec.resourceId} style={{ background: C.bg, border: `1px solid ${C.info}50`, borderRadius: 12, padding: 12, marginBottom: 8, fontSize: 12 }}>
             <div style={{ fontSize: 13.5, fontWeight: 800, color: C.text }}>نقل {rec.resourceType === "crew" ? "طاقم" : rec.resourceType === "vehicle" ? "مركبة" : "سائق"} {rec.resourceLabel}{rec.driverName && rec.resourceType === "crew" ? ` (${rec.driverName})` : ""}: {rec.fromName} ← {rec.toName}</div>
@@ -6758,35 +6919,35 @@ const AmanahStrategicPanel = ({ neighborhoods = [], bins = [], profiles = [], ve
               {[["ضغط المستقبِلة", `${rec.impact.receiverBefore} ← ${rec.impact.receiverAfter}`, C.accent], ["ضغط المرسِلة", `${rec.impact.donorBefore} ← ${rec.impact.donorAfter}`, C.warning], ["الانتقال", rec.travelMin != null ? `~${rec.travelMin} د · ${rec.travelKm} كم` : "—", C.info], ["الفائدة − التكلفة", rec.net, rec.net > 0 ? C.accent : C.danger]].map(([l, v, c]) => <div key={l} style={{ background: C.card, borderRadius: 8, padding: "6px 10px" }}><div style={{ fontSize: 10.5, color: C.muted }}>{l}</div><b style={{ color: c }}>{v}</b></div>)}
             </div>
             {rec.rejected.length > 0 && <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>بدائل مرفوضة: {rec.rejected.map((o) => `${o.fromName} (${o.constraintsViolated[0]})`).join(" · ")}</div>}
-            {isAmanah && <button disabled={!!busy} onClick={propose(rec)} style={{ ...smallBtn(C.info, true), color: "#fff", marginTop: 8 }}>📝 تسجيل اقتراح النقل للاعتماد</button>}
+            {isAmanah && <button disabled={!!busy} onClick={propose(rec)} style={{ ...smallBtn(C.info, true), color: "#fff", marginTop: 8 }}>تسجيل اقتراح النقل للاعتماد</button>}
           </div>
         ))}
         <div style={{ fontSize: 10.5, color: C.dim }}>لا يُنقل أي مورد فعليًا دون اعتماد متخذ القرار بالأمانة؛ التوصية تحسب أثر النقل على الطرفين وتستبعد ما يخالف القيود (سقف ضغط المرسِلة {city.transfersRec.thresholds.donorCeiling}، زمن انتقال ≤ {city.transfersRec.thresholds.maxTransferMin} د).</div>
       </Card>
       {/* طلبات الدعم */}
-      <Card title={`📨 طلبات الدعم من البلديات (${supportRequests.filter((s) => s.status === "open").length} مفتوح)`} icon={<Inbox size={16} color={C.muted} />}>
+      <Card title={`طلبات الدعم من البلديات (${supportRequests.filter((s) => s.status === "open").length} مفتوح)`} icon={<Inbox size={16} color={C.muted} />}>
         {supportRequests.length === 0 ? <div style={{ fontSize: 12, color: C.dim }}>لا طلبات دعم.</div> : supportRequests.slice(0, 20).map((s) => (
           <div key={s.id} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px", marginBottom: 6, fontSize: 12, display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
             <div><b style={{ color: C.text }}>{municipalityById(s.municipalityId)?.shortAr}</b> · {s.requestedByName} · {s.need}{s.note ? ` — ${s.note}` : ""}<div style={{ color: C.dim, fontSize: 11 }}>ضغط عند الطلب: {s.pressureIndex} · {getReadingAgeLabel(s.createdAt)} · {s.status === "open" ? "مفتوح" : s.status === "approved" ? "موافق عليه" : s.status === "rejected" ? "مرفوض" : s.status}{s.resolution ? ` — ${s.resolution}` : ""}</div></div>
-            {isAmanah && s.status === "open" && <div style={{ display: "flex", gap: 6 }}><button disabled={!!busy} onClick={run(s.id, async () => { const res = window.prompt("قرار الأمانة (ملاحظة):", "") ?? ""; await reviewSupportRequest(s.id, actor, "approved", res); await writeAuditLog("support_request_approved", actor.uid, actor.name, { requestId: s.id, municipalityId: s.municipalityId }); return "✅ تمت الموافقة على طلب الدعم — اقترح النقل المناسب أعلاه"; })} style={smallBtn(C.accent)}>موافقة</button><button disabled={!!busy} onClick={run(s.id + "r", async () => { const res = window.prompt("سبب الرفض:", "") ?? ""; await reviewSupportRequest(s.id, actor, "rejected", res); await writeAuditLog("support_request_rejected", actor.uid, actor.name, { requestId: s.id }); return "تم رفض الطلب"; })} style={smallBtn(C.danger)}>رفض</button></div>}
+            {isAmanah && s.status === "open" && <div style={{ display: "flex", gap: 6 }}><button disabled={!!busy} onClick={run(s.id, async () => { const res = window.prompt("قرار الأمانة (ملاحظة):", "") ?? ""; await reviewSupportRequest(s.id, actor, "approved", res); await writeAuditLog("support_request_approved", actor.uid, actor.name, { requestId: s.id, municipalityId: s.municipalityId }); return "تمت الموافقة على طلب الدعم — اقترح النقل المناسب أعلاه"; })} style={smallBtn(C.accent)}>موافقة</button><button disabled={!!busy} onClick={run(s.id + "r", async () => { const res = window.prompt("سبب الرفض:", "") ?? ""; await reviewSupportRequest(s.id, actor, "rejected", res); await writeAuditLog("support_request_rejected", actor.uid, actor.name, { requestId: s.id }); return "تم رفض الطلب"; })} style={smallBtn(C.danger)}>رفض</button></div>}
           </div>
         ))}
       </Card>
       {/* النقل المعتمد */}
-      <Card title={`🔁 عمليات نقل الموارد (${transfers.length})`} icon={<Truck size={16} color={C.muted} />}>
+      <Card title={`عمليات نقل الموارد (${transfers.length})`} icon={<Truck size={16} color={C.muted} />}>
         {transfers.length === 0 ? <div style={{ fontSize: 12, color: C.dim }}>لا عمليات نقل.</div> : [...transfers].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 20).map((t) => { const [lab, col] = TRANSFER_STATUS[t.status] || ["—", C.dim]; return (
           <div key={t.id} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px", marginBottom: 6, fontSize: 12, display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
             <div><b style={{ color: C.text }}>{t.resourceLabel}</b> ({t.resourceType === "crew" ? `طاقم: مركبة + سائق ${t.driverName || ""}` : t.resourceType === "vehicle" ? "مركبة" : "سائق"}): {municipalityById(t.fromMunicipalityId)?.shortAr} ← {municipalityById(t.toMunicipalityId)?.shortAr} · <span style={{ color: col, fontWeight: 700 }}>{lab}</span><div style={{ color: C.dim, fontSize: 11 }}>الأثر: {t.impact?.receiverBefore} ← {t.impact?.receiverAfter} للمستقبِلة · {t.impact?.donorBefore} ← {t.impact?.donorAfter} للمرسِلة · {getReadingAgeLabel(t.createdAt)}{t.decisionNote ? ` · ${t.decisionNote}` : ""}</div></div>
             {isAmanah && <div style={{ display: "flex", gap: 6 }}>
-              {t.status === "proposed" && <><button disabled={!!busy} onClick={run(t.id, async () => { await decideResourceTransfer(t, actor, "approved", window.prompt("ملاحظة الاعتماد:", "") ?? ""); return "✅ اعتُمد النقل — نفّذه لإعادة توطين المورد مؤقتًا"; })} style={smallBtn(C.accent)}>اعتماد</button><button disabled={!!busy} onClick={run(t.id + "x", async () => { await decideResourceTransfer(t, actor, "rejected", window.prompt("سبب الرفض:", "") ?? ""); return "رُفض النقل"; })} style={smallBtn(C.danger)}>رفض</button></>}
-              {t.status === "approved" && <button disabled={!!busy} onClick={run(t.id + "e", async () => { await executeResourceTransfer(t, actor); return "🚚 نُفّذ النقل: المورد يعمل الآن ضمن البلدية المستقبِلة مؤقتًا"; })} style={smallBtn(C.info)}>تنفيذ النقل</button>}
-              {t.status === "executed" && <button disabled={!!busy} onClick={run(t.id + "b", async () => { await returnResourceTransfer(t, actor); return "↩️ أُعيد المورد إلى بلديته"; })} style={smallBtn(C.dim)}>إعادة المورد</button>}
+              {t.status === "proposed" && <><button disabled={!!busy} onClick={run(t.id, async () => { await decideResourceTransfer(t, actor, "approved", window.prompt("ملاحظة الاعتماد:", "") ?? ""); return "اعتُمد النقل — نفّذه لإعادة توطين المورد مؤقتًا"; })} style={smallBtn(C.accent)}>اعتماد</button><button disabled={!!busy} onClick={run(t.id + "x", async () => { await decideResourceTransfer(t, actor, "rejected", window.prompt("سبب الرفض:", "") ?? ""); return "رُفض النقل"; })} style={smallBtn(C.danger)}>رفض</button></>}
+              {t.status === "approved" && <button disabled={!!busy} onClick={run(t.id + "e", async () => { await executeResourceTransfer(t, actor); return "نُفّذ النقل: المورد يعمل الآن ضمن البلدية المستقبِلة مؤقتًا"; })} style={smallBtn(C.info)}>تنفيذ النقل</button>}
+              {t.status === "executed" && <button disabled={!!busy} onClick={run(t.id + "b", async () => { await returnResourceTransfer(t, actor); return "أُعيد المورد إلى بلديته"; })} style={smallBtn(C.dim)}>إعادة المورد</button>}
             </div>}
           </div>
         ); })}
       </Card>
       {/* 9. سجل القرارات */}
-      <Card title="📜 سجل القرارات" icon={<ClipboardList size={16} color={C.muted} />}>
+      <Card title="سجل القرارات" icon={<ClipboardList size={16} color={C.muted} />}>
         {decisions.length === 0 ? <div style={{ fontSize: 12, color: C.dim }}>لا قرارات مسجلة بعد.</div> : decisions.map((a) => <div key={a.id} style={{ fontSize: 11.5, color: C.muted, background: C.bg, borderRadius: 6, padding: "6px 10px", marginBottom: 4 }}><b style={{ color: C.text }}>{AUDIT_ACTION_LABELS[a.action] || a.action}</b> · {a.actorName || "—"} · {getReadingAgeLabel(a.createdAt)}{a.details?.resource ? ` · ${a.details.resource}` : ""}{a.details?.routeName ? ` · ${a.details.routeName}` : ""}</div>)}
       </Card>
     </div>
@@ -6869,7 +7030,7 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
               <div key={l} style={{ background: C.card, border: `1px solid ${c}30`, borderRadius: 12, padding: "12px 14px" }}><div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 11, color: C.muted }}>{l}</div></div>
             ))}
           </div>
-          <Card title="🔮 التنبؤات والمخاطر القادمة" icon={<Sparkles size={16} color={C.muted} />}>
+          <Card title="التنبؤات والمخاطر القادمة" icon={<LuLightbulb size={16} color={C.muted} />}>
             {forecast.soon.length === 0 ? <div style={{ fontSize: 12, color: C.muted }}>لا حاويات متوقع وصولها للمستوى الحرج خلال 6 ساعات وفق القراءات الحالية.{forecast.insufficient ? ` (${forecast.insufficient} حاوية بيانات غير كافية للتنبؤ)` : ""}</div> : (
               <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 320, overflowY: "auto" }}>
                 {forecast.soon.slice(0, 30).map(({ bin: b, p }) => <div key={b.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, background: C.bg, borderRadius: 8, padding: "7px 10px", flexWrap: "wrap" }}><span><b style={{ color: C.text }}>{b.name}</b> · الآن {b.lastFillLevelPercent}%</span><span style={{ color: p.hoursToFull <= 2 ? C.danger : C.warning }}>حرجة خلال ~{Math.round(p.hoursToFull * 10) / 10} س · ثقة {CONFIDENCE_LABELS[p.confidence] || p.confidence}</span></div>)}
@@ -6877,7 +7038,7 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
             )}
             <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>التنبؤ: انحدار خطي على القراءات بعد آخر تفريغ مع كشف الشذوذ؛ لا تنبؤ من قراءة واحدة، والمستشعرات الصامتة تُعرض مخاطر بلا توقع.</div>
           </Card>
-          {pressure && <Card title="⚖️ لماذا هذا الضغط؟" icon={<Gauge size={16} color={C.muted} />}><div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>{pressure.reasons.join(" · ")} — الطلب {pressure.demandUnits} وحدة مقابل طاقة {pressure.capacityUnits} حاوية في {pressure.remainingShiftHours} ساعات متبقية.</div></Card>}
+          {pressure && <Card title="لماذا هذا الضغط؟" icon={<Gauge size={16} color={C.muted} />}><div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>{pressure.reasons.join(" · ")} — الطلب {pressure.demandUnits} وحدة مقابل طاقة {pressure.capacityUnits} حاوية في {pressure.remainingShiftHours} ساعات متبقية.</div></Card>}
         </div>
       )}
 
@@ -6906,7 +7067,7 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
       {section === "models" && modelsDetail}
       {section === "impact" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <Card title="🧪 مركز محاكاة القرارات — ماذا لو؟" icon={<Gauge size={16} color={C.muted} />}>
+          <Card title="مركز محاكاة القرارات — ماذا لو؟" icon={<Gauge size={16} color={C.muted} />}>
             {!can(loggedInUser?.role, "decisions.simulate") && <div style={{ fontSize: 12, color: C.warning, marginBottom: 8 }}>تشغيل السيناريوهات متاح لمتخذي القرار (الأمانة/متخذ القرار بالبلدية)؛ يمكنك الاطلاع على النتائج المحفوظة.</div>}
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
               {field("السيناريو", sel(scenario.type, (v) => setScenario({ ...scenario, type: v }), Object.entries(SCENARIO_TYPES).map(([k, s]) => [k, s.label])))}
@@ -7072,7 +7233,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
         <Tabs value={tab} onChange={setTab} tabs={[
           { key: "amanah", label: "القيادة الاستراتيجية" },
           { key: "today", label: "ملخص اليوم" },
-          ...(embedded ? [] : [{ key: "brain", label: "العقل التشغيلي للمدينة" }]),
+          ...(embedded ? [] : [{ key: "brain", label: "محرك القرارات التشغيلية" }]),
           ...EXEC_ILLUSTRATIVE_TABS.map(([key, label]) => ({ key, label: `${label} · توضيحي` })),
         ]} />
         {embedded && <div style={{ display: "flex", justifyContent: "flex-end" }}><Btn variant="ghost" onClick={() => window.__showAdminPanel && window.__showAdminPanel()}>إدارة المستخدمين</Btn></div>}
@@ -7096,7 +7257,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                 <div style={{ fontSize: 18, fontWeight: 900, color: C.warning }}>ملخص المدينة اليوم — {new Date().toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</div>
                 <div style={{ fontSize: 12, color: C.muted }}>أرقام حية من الحاويات الذكية والجولات — جاهزة للتصدير كتقرير PDF أسبوعي.</div>
               </div>
-              <button className="no-print" onClick={() => window.print()} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #f59e0b, #d97706)", color: "#000", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🖨️ تصدير PDF</button>
+              <button className="no-print" onClick={() => window.print()} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: "#f59e0b", color: "#000", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>تصدير PDF</button>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
@@ -7117,12 +7278,12 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
               ))}
             </div>
 
-            <Card title="📌 القرارات المقترحة اليوم" icon={<Target size={16} color={C.muted} />}>
+            <Card title="القرارات المقترحة اليوم" icon={<Target size={16} color={C.muted} />}>
               {today.decisions.length === 0 ? <EmptyState icon="✅" title="لا توجد قرارات عاجلة اليوم" /> : (
                 <ol style={{ margin: 0, paddingInlineStart: 20, display: "flex", flexDirection: "column", gap: 10 }}>
                   {today.decisions.map((d, i) => (
                     <li key={i} style={{ fontSize: 13, color: C.text, lineHeight: 1.7 }}>
-                      <b>{d.icon} {d.title}</b><br />
+                      <b>{ico(d.icon)} {d.title}</b><br />
                       <span style={{ color: C.muted, fontSize: 12 }}>لماذا: {d.why}</span> · <span style={{ color: C.info, fontSize: 12 }}>الحالة: {d.state}</span>
                     </li>
                   ))}
@@ -7133,7 +7294,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
 
             <ImpactCard impact={today.impact} compact accent={C.warning} />
 
-            <Card title="🚛 الأسطول خلال 7 أيام" icon={<Truck size={16} color={C.muted} />}>
+            <Card title="الأسطول خلال 7 أيام" icon={<Truck size={16} color={C.muted} />}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
                 {[
                   { label: "جولات مكتملة", value: today.fleet.totals.routes },
@@ -7157,10 +7318,10 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
         {tab === "overview" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
-              <StatCard title="إجمالي الإيرادات" value={(totalRevenue / 1000000).toFixed(2)} unit="مليون ر.س" icon={<DollarSign size={22} color="#fff" />} gradient="linear-gradient(135deg, #f59e0b, #d97706)" />
-              <StatCard title="إجمالي التكاليف" value={(totalCost / 1000000).toFixed(2)} unit="مليون ر.س" icon={<TrendingDown size={22} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
-              <StatCard title="صافي الأرباح" value={(totalProfit / 1000000).toFixed(2)} unit="مليون ر.س" icon={<TrendingUp size={22} color="#fff" />} gradient="linear-gradient(135deg, #10b981, #059669)" trend={18.5} />
-              <StatCard title="كفاءة التشغيل" value={avgEfficiency} unit="%" icon={<Zap size={22} color="#fff" />} gradient="linear-gradient(135deg, #3b82f6, #1d4ed8)" trend={5.2} />
+              <StatCard title="إجمالي الإيرادات" value={(totalRevenue / 1000000).toFixed(2)} unit="مليون ر.س" icon={<DollarSign size={22} color="#fff" />} gradient="#f59e0b" />
+              <StatCard title="إجمالي التكاليف" value={(totalCost / 1000000).toFixed(2)} unit="مليون ر.س" icon={<TrendingDown size={22} color="#fff" />} gradient="#ef4444" />
+              <StatCard title="صافي الأرباح" value={(totalProfit / 1000000).toFixed(2)} unit="مليون ر.س" icon={<TrendingUp size={22} color="#fff" />} gradient="#10b981" trend={18.5} />
+              <StatCard title="كفاءة التشغيل" value={avgEfficiency} unit="%" icon={<Zap size={22} color="#fff" />} gradient="#3b82f6" trend={5.2} />
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
@@ -7209,7 +7370,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                 { title: "العائد على الاستثمار", value: "340%", sub: "منذ بداية المشروع", icon: <Target size={26} color={C.purple} />, color: C.purple },
               ].map((insight, i) => (
                 <div key={i} style={{ background: C.card, border: `1px solid ${insight.color}30`, borderRadius: 14, padding: 18, display: "flex", gap: 14, alignItems: "center" }}>
-                  <div style={{ width: 50, height: 50, borderRadius: 14, background: `${insight.color}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>{insight.icon}</div>
+                  <div style={{ width: 50, height: 50, borderRadius: 14, background: `${insight.color}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>{ico(insight.icon)}</div>
                   <div>
                     <div style={{ fontSize: 11, color: C.dim }}>{insight.title}</div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: insight.color }}>{insight.value}</div>
@@ -7351,7 +7512,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                     <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
                       <span style={{ fontSize: 32, fontWeight: 900, color: C.warning }}>{b.بريدة}%</span>
                       <span style={{ fontSize: 12, color: gap <= 5 ? C.accent : gap <= 15 ? C.warning : C.danger }}>
-                        {gap <= 5 ? "✓ ممتاز" : gap <= 15 ? "↗ جيد" : "↑ يحتاج تحسين"} (فجوة {gap}%)
+                        {gap <= 5 ? "✓ ممتاز" : gap <= 15 ? "جيد" : "↑ يحتاج تحسين"} (فجوة {gap}%)
                       </span>
                     </div>
                     <div style={{ display: "flex", gap: 10, fontSize: 11 }}>
@@ -7409,7 +7570,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                       { label: "الأثر المتوقع", val: selectedScenario.impact, color: C.purple, icon: <Target size={22} color={C.purple} /> },
                     ].map((item, i) => (
                       <div key={i} style={{ background: "#070b14", borderRadius: 12, padding: 16, textAlign: "center" }}>
-                        <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>{item.icon}</div>
+                        <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>{ico(item.icon)}</div>
                         <div style={{ fontSize: 16, fontWeight: 800, color: item.color }}>{item.val}</div>
                         <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>{item.label}</div>
                       </div>
@@ -7418,7 +7579,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
                     <div style={{ background: "#10b98110", border: "1px solid #10b98130", borderRadius: 12, padding: 16 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 10 }}>✅ المميزات</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 10 }}>المميزات</div>
                       {selectedScenario.pros.map((p, i) => (
                         <div key={i} style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "flex", gap: 6 }}>
                           <span style={{ color: C.accent }}>●</span> {p}
@@ -7426,7 +7587,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                       ))}
                     </div>
                     <div style={{ background: "#ef444410", border: "1px solid #ef444430", borderRadius: 12, padding: 16 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.danger, marginBottom: 10 }}>⚠️ التحديات</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.danger, marginBottom: 10 }}>التحديات</div>
                       {selectedScenario.cons.map((c, i) => (
                         <div key={i} style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "flex", gap: 6 }}>
                           <span style={{ color: C.danger }}>●</span> {c}
@@ -7567,32 +7728,32 @@ const AIAssistant = ({ role }) => {
   };
 
   const greeting = isMgmtRole(role)
-    ? "مرحباً! أنا مساعدك الذكي. اسألني عن حالة الأحياء، التنبيهات، أوامر الجولات، أو أي شيء آخر."
-    : "أهلاً! أنا مساعدك في بوابة الأفراد. اسألني عن طلباتك أو وضع حيّك.";
+    ? "اسأل عن حالة الأحياء أو التنبيهات أو الجولات ضمن نطاق صلاحيتك."
+    : "اسأل عن حالة طلباتك أو وضع الجمع في حيّك.";
 
   const suggestions = isMgmtRole(role)
     ? ["أي حي يحتاج جمعًا الآن؟", "لخص التنبيهات النشطة", "ما وضع الأحياء الحرجة؟"]
-    : ["وش حالة طلباتي؟", "متى تُجمع حاويات حينا؟", "كيف أرفع بلاغ؟"];
+    : ["ما حالة طلباتي؟", "متى تُجمع حاويات حينا؟", "كيف أرفع بلاغ؟"];
 
   return (
     <>
       {/* Floating button */}
       <button
         onClick={() => setOpen(p => !p)}
-        title="المساعد الذكي"
+        title="المساعد التشغيلي"
         style={{
           position: "fixed", bottom: 24, left: 24, zIndex: 1200,
           width: 56, height: 56, borderRadius: "50%", border: "none",
-          background: "linear-gradient(135deg, #6d28d9, #4c1d95)",
+          background: C.brand,
           color: "#fff", fontSize: 26, cursor: "pointer",
-          boxShadow: "0 4px 20px rgba(109,40,217,0.5)",
+          boxShadow: "0 2px 10px rgba(15,23,42,0.18)",
           display: "flex", alignItems: "center", justifyContent: "center",
           transition: "transform 0.2s",
         }}
-        onMouseEnter={e => e.currentTarget.style.transform = "scale(1.1)"}
+        onMouseEnter={e => e.currentTarget.style.transform = "translateY(-1px)"}
         onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}
       >
-        {open ? "✕" : "🤖"}
+        {open ? <UiIcon e="✕" size={20} /> : <UiIcon e="🤖" size={22} />}
       </button>
 
       {/* Chat panel */}
@@ -7601,16 +7762,16 @@ const AIAssistant = ({ role }) => {
           position: "fixed", bottom: 92, left: 24, zIndex: 1200,
           width: "min(380px, calc(100vw - 48px))",
           height: "min(520px, calc(100vh - 120px))",
-          background: C.card, border: `1px solid #6d28d930`,
-          borderRadius: 20, display: "flex", flexDirection: "column",
-          boxShadow: "0 8px 40px rgba(109,40,217,0.25)",
+          background: C.card, border: `1px solid ${C.border}`,
+          borderRadius: 14, display: "flex", flexDirection: "column",
+          boxShadow: "0 8px 28px rgba(15,23,42,0.16)",
           fontFamily: F, overflow: "hidden",
         }}>
           {/* Header */}
-          <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#6d28d9,#4c1d95)", borderRadius: "20px 20px 0 0" }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>🤖 المساعد الذكي</div>
-            <div style={{ fontSize: 11, color: "#c4b5fd", marginTop: 2 }}>
-              {isMgmtRole(role) ? "مساعد الموظف — يقرأ بيانات النظام" : "مساعد الأفراد — بوابة بريدة"}
+          <div style={{ padding: "14px 18px", background: C.brand, borderRadius: "14px 14px 0 0" }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>المساعد التشغيلي</div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.75)", marginTop: 2 }}>
+              {isMgmtRole(role) ? "استعلام عن بيانات نطاقك التشغيلي" : "استعلام عن طلباتك وخدمات حيّك"}
             </div>
           </div>
 
@@ -7627,8 +7788,8 @@ const AIAssistant = ({ role }) => {
                 {suggestions.map((s, i) => (
                   <button key={i} onClick={() => { setInput(s); }} style={{
                     alignSelf: "flex-start", padding: "6px 12px", borderRadius: 20,
-                    border: "1px solid #6d28d940", background: "#6d28d910",
-                    color: "#a78bfa", fontSize: 11, cursor: "pointer", fontFamily: F, textAlign: "right",
+                    border: `1px solid ${C.border}`, background: C.bg,
+                    color: C.text, fontSize: 11, cursor: "pointer", fontFamily: F, textAlign: "right",
                   }}>{s}</button>
                 ))}
               </div>
@@ -7639,7 +7800,7 @@ const AIAssistant = ({ role }) => {
               <div key={i} style={{
                 alignSelf: m.role === "user" ? "flex-end" : "flex-start",
                 maxWidth: "85%",
-                background: m.role === "user" ? "linear-gradient(135deg,#6d28d9,#4c1d95)" : C.border,
+                background: m.role === "user" ? C.brand : C.border,
                 borderRadius: m.role === "user" ? "12px 12px 0 12px" : "12px 12px 12px 0",
                 padding: "10px 14px", fontSize: 12, color: C.text, lineHeight: 1.7,
                 whiteSpace: "pre-wrap",
@@ -7649,7 +7810,7 @@ const AIAssistant = ({ role }) => {
             ))}
 
             {loading && (
-              <div style={{ alignSelf: "flex-start", background: C.border, borderRadius: "12px 12px 12px 0", padding: "10px 14px", fontSize: 12, color: "#a78bfa" }}>
+              <div style={{ alignSelf: "flex-start", background: C.border, borderRadius: "12px 12px 12px 0", padding: "10px 14px", fontSize: 12, color: C.muted }}>
                 <span style={{ animation: "pulse 1s infinite" }}>● </span>جاري التفكير...
               </div>
             )}
@@ -7674,12 +7835,12 @@ const AIAssistant = ({ role }) => {
               disabled={loading || !input.trim()}
               style={{
                 padding: "10px 14px", borderRadius: 12, border: "none",
-                background: loading || !input.trim() ? C.border : "linear-gradient(135deg,#6d28d9,#4c1d95)",
+                background: loading || !input.trim() ? C.border : C.brand,
                 color: loading || !input.trim() ? C.dim : "#fff",
                 cursor: loading || !input.trim() ? "not-allowed" : "pointer",
                 fontSize: 16, fontFamily: F,
               }}
-            >➤</button>
+            ><UiIcon e="➤" size={16} /></button>
           </div>
         </div>
       )}
@@ -7851,7 +8012,7 @@ const NavigationView = ({ position, posStatus, remainingStops = [], nextStop, al
     <div style={wrap}>
       {/* Maneuver banner */}
       <div style={{ background: maneuver ? C.info : C.card, color: maneuver ? "#fff" : C.muted, borderRadius: fullscreen ? 0 : 14, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, minHeight: 64 }}>
-        <div style={{ fontSize: 28 }}>{maneuver ? ({ left: "⬅️", right: "➡️", "slight left": "↖️", "slight right": "↗️", uturn: "↩️" }[maneuver.modifier] || (maneuver.type === "arrive" ? "📍" : "⬆️")) : road.status === "loading" ? "⏳" : "🧭"}</div>
+        <div style={{ fontSize: 28 }}>{maneuver ? ({ left: <UiIcon e="⬅️" size={22} />, right: <UiIcon e="➡️" size={22} />, "slight left": <UiIcon e="↖️" size={22} />, "slight right": <UiIcon e="↗️" size={22} />, uturn: <UiIcon e="↩️" size={22} /> }[maneuver.modifier] || (maneuver.type === "arrive" ? <UiIcon e="📍" size={22} /> : <UiIcon e="⬆️" size={22} />)) : road.status === "loading" ? <UiIcon e="⏳" size={22} /> : <UiIcon e="🧭" size={22} />}</div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 16, fontWeight: 800 }}>{maneuver ? maneuver.text : road.status === "loading" ? "جاري حساب المسار…" : road.status === "unavailable" ? "خدمة التوجيه غير متاحة — اتبع الخريطة والخط المستقيم" : "لا توجد توقفات متبقية"}</div>
           <div style={{ fontSize: 12, opacity: 0.9 }}>{maneuver ? `بعد ${formatDistanceAr(maneuver.distanceToM)}` : ""}{!liveFix ? " · الموقع غير مباشر" : ""}</div>
@@ -7867,25 +8028,25 @@ const NavigationView = ({ position, posStatus, remainingStops = [], nextStop, al
           {allStops.filter((s) => s.lat != null).map((s) => (
             <CircleMarker key={s.binId} center={[s.lat, s.lng]} radius={s.binId === nextStop?.binId ? 11 : 7}
               pathOptions={{ color: "#fff", weight: 2, fillColor: s.done ? C.dim : s.skipped ? C.warning : (STATUS_COLORS[s.priorityTier] || C.info), fillOpacity: s.done ? 0.5 : 1 }}>
-              <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}>#{s.order} {s.binName}{s.done ? " ✅" : s.skipped ? " 🚧" : ""}</div></Popup>
+              <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}>#{s.order} {s.binName}{s.done ? "" : s.skipped ? "" : ""}</div></Popup>
             </CircleMarker>
           ))}
           <Marker position={[position.lat, position.lng]} icon={vehicleIcon(headingMode && headingReliable ? position.heading : 0, liveFix)} />
         </MapContainer>
         <div style={{ position: "absolute", top: 10, left: 10, display: "flex", flexDirection: "column", gap: 8, zIndex: 1000 }}>
-          <button title="إعادة التمركز" onClick={() => setFollow(true)} style={iconBtn(follow)}>🎯</button>
-          <button title="ملء الشاشة" onClick={() => setFullscreen((f) => !f)} style={iconBtn(fullscreen)}>{fullscreen ? "✕" : "⛶"}</button>
-          <button title={headingReliable ? "متابعة اتجاه الحركة" : "اتجاه الحركة غير موثوق (سرعة منخفضة أو لا بيانات اتجاه)"} disabled={!headingReliable} onClick={() => setHeadingMode((h) => !h)} style={{ ...iconBtn(headingMode && headingReliable), opacity: headingReliable ? 1 : 0.4 }}>🧭</button>
-          {voiceSupported && <button title={voiceOn ? "إيقاف الصوت" : "تشغيل الإرشاد الصوتي"} onClick={onToggleVoice} style={iconBtn(voiceOn)}>{voiceOn ? "🔊" : "🔇"}</button>}
+          <button title="إعادة التمركز" onClick={() => setFollow(true)} style={iconBtn(follow)}><UiIcon e="🎯" size={16} /></button>
+          <button title="ملء الشاشة" onClick={() => setFullscreen((f) => !f)} style={iconBtn(fullscreen)}>{fullscreen ? <UiIcon e="✕" size={16} /> : <UiIcon e="⛶" size={16} />}</button>
+          <button title={headingReliable ? "متابعة اتجاه الحركة" : "اتجاه الحركة غير موثوق (سرعة منخفضة أو لا بيانات اتجاه)"} disabled={!headingReliable} onClick={() => setHeadingMode((h) => !h)} style={{ ...iconBtn(headingMode && headingReliable), opacity: headingReliable ? 1 : 0.4 }}><UiIcon e="🧭" size={16} /></button>
+          {voiceSupported && <button title={voiceOn ? "إيقاف الصوت" : "تشغيل الإرشاد الصوتي"} onClick={onToggleVoice} style={iconBtn(voiceOn)}>{voiceOn ? <UiIcon e="🔊" size={16} /> : <UiIcon e="🔇" size={16} />}</button>}
         </div>
         <div style={{ position: "absolute", bottom: 10, right: 10, left: 10, zIndex: 1000, background: C.card + "f2", border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px", fontSize: 12, color: C.text }}>
           {nextStop ? (
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-              <span>📍 التالي: <b>{nextStop.binName}</b></span>
+              <span>التالي: <b>{nextStop.binName}</b></span>
               <span>{toNext ? `${formatDistanceAr(toNext.m)} · ~${toNext.min} د${toNext.source === "straight" ? " (تقدير مستقيم)" : ""}` : "—"}</span>
-              <span>🗑️ متبقٍ: <b>{remainingStops.length}</b></span>
+              <span>متبقٍ: <b>{remainingStops.length}</b></span>
             </div>
-          ) : <span>🎉 لا توجد توقفات متبقية</span>}
+          ) : <span>لا توجد توقفات متبقية</span>}
           <div style={{ fontSize: 10.5, color: quality.level === "poor" ? C.warning : C.dim, marginTop: 2 }}>
             {liveFix ? quality.label : "الموقع غير مباشر — اضغط «تحديث موقعي» أو امنح الإذن"}{road.status === "ok" ? " · مسار على الطرق (OSRM)" : road.status === "unavailable" ? " · بلا خدمة توجيه: خط مستقيم" : ""}{voiceOn && voiceSupported && !hasArabic ? " · لا يوجد صوت عربي على هذا الجهاز" : ""}
           </div>
@@ -7916,7 +8077,7 @@ const FieldRouteMap = ({ position, feature, stops = [], allBins = [], neighborho
           : <Polyline positions={path} pathOptions={{ color: C.info, weight: 4, dashArray: "8 8", opacity: 0.9 }} />)}
         {position && (
           <CircleMarker center={[position.lat, position.lng]} radius={10} pathOptions={{ color: "#fff", weight: 2, fillColor: "#0ea5e9", fillOpacity: 1 }}>
-            <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}>🚛 {position.label}</div></Popup>
+            <Popup><div style={{ fontFamily: ARABIC_FONT, direction: "rtl", fontSize: 12 }}>{position.label}</div></Popup>
           </CircleMarker>
         )}
         {others.map((b) => (
@@ -8072,7 +8233,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
   };
   const handleIncident = async (type, stop) => {
     const t = INCIDENT_TYPES[type];
-    const note = window.prompt(`${t.icon} ${t.label} — ملاحظة (اختياري):`, "") ?? "";
+    const note = window.prompt(`${t.label} — ملاحظة (اختياري):`, "") ?? "";
     setBusy(true);
     try {
       const payload = { route, binId: stop?.binId || null, type, note, user: { uid: user.uid, name: user.name }, position: posStatus === "gps" ? position : null };
@@ -8096,20 +8257,19 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
     ...ranked.filter((r) => r.criticalCount > 0).map((r) => ({ key: `critical:${r.group.key}:${r.criticalCount}`, kind: "critical", r })),
   ], [routes, ranked]);
   useBrowserNotifications(driverNotifItems, useCallback((item) => item.kind === "approved"
-    ? { title: "🚦 جولة معتمدة جاهزة للبدء", body: `${item.route.routeName} — ${item.route.orderedStops?.length || 0} توقف` }
-    : { title: "🔴 حي يحتاج جمعًا الآن", body: `${item.r.group.name}: ${item.r.criticalCount} حاوية حرجة${item.r.distanceKm != null ? ` · يبعد ${item.r.distanceKm} كم` : ""}` }, []));
+    ? { title: "جولة معتمدة جاهزة للبدء", body: `${item.route.routeName} — ${item.route.orderedStops?.length || 0} توقف` }
+    : { title: "حي يحتاج جمعًا الآن", body: `${item.r.group.name}: ${item.r.criticalCount} حاوية حرجة${item.r.distanceKm != null ? ` · يبعد ${item.r.distanceKm} كم` : ""}` }, []));
 
-  const positionNote = posStatus === "gps" ? `📍 موقعك الحالي عبر GPS${onShift ? " (تتبع مستمر أثناء المناوبة)" : ""}` : posStatus === "locating" ? "⏳ جاري تحديد موقعك…" : `📍 ${position.label} — ${posError || "لم يُمنح إذن الموقع"}`;
+  const positionNote = posStatus === "gps" ? `موقعك الحالي عبر GPS${onShift ? " (تتبع مستمر أثناء المناوبة)" : ""}` : posStatus === "locating" ? "جاري تحديد موقعك…" : `${position.label} — ${posError || "لم يُمنح إذن الموقع"}`;
   const btn = (extra) => ({ padding: 11, borderRadius: 10, border: "none", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT, ...extra });
 
   return (
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", padding: 16 }}>
-      <div style={{ margin: "-16px -16px 12px", borderRadius: "0 0 12px 12px", overflow: "hidden" }}><DemoEnvBanner /></div>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 800 }}>🚛 بوابة التشغيل الميداني</div>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>بوابة التشغيل الميداني</div>
             <div style={{ fontSize: 12, color: C.muted }}>{profile?.fullName || user.name}{profile?.driverCode ? ` · ${profile.driverCode}` : ""}{myVehicle ? ` · ${myVehicle.vehicleNumber}` : " · بلا مركبة مسندة"}</div>
           </div>
           <button onClick={onLogout} style={{ padding: "8px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>خروج</button>
@@ -8121,7 +8281,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
         </div>
         {!loadingProfile && !profile && (
           <div style={{ marginBottom: 12, fontSize: 12, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 10, padding: "10px 12px" }}>
-            ⚠️ لم يُهيأ ملفك كسائق بعد — اطلب من المشرف تهيئته من صفحة «السائقون والأسطول» (المركبة ونطاق الأحياء).
+            لم يُهيأ ملفك كسائق بعد — اطلب من المشرف تهيئته من صفحة «السائقون والأسطول» (المركبة ونطاق الأحياء).
           </div>
         )}
         {profile && (
@@ -8130,7 +8290,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
               <b style={{ color: onShift ? C.accent : C.text }}>{SHIFT_STATUS_LABELS[profile.shiftStatus] || profile.shiftStatus}</b> · {AVAILABILITY_LABELS[profile.availability] || "—"}<br />
               النطاق: {(profile.neighborhoodKeys || []).length ? profile.neighborhoodKeys.map((k) => `حي ${k}`).join("، ") : "غير محدد"}{profile.shiftStart ? ` · المناوبة ${profile.shiftStart}–${profile.shiftEnd}` : ""}
             </div>
-            <button disabled={busy} onClick={toggleShift} style={btn({ padding: "8px 14px", background: onShift ? C.danger + "20" : C.accent, color: onShift ? C.danger : "#07231A", border: onShift ? `1px solid ${C.danger}` : "none", fontSize: 12 })}>{onShift ? "⏹ إنهاء المناوبة" : "▶️ بدء المناوبة"}</button>
+            <button disabled={busy} onClick={toggleShift} style={btn({ padding: "8px 14px", background: onShift ? C.danger + "20" : C.accent, color: onShift ? C.danger : "#07231A", border: onShift ? `1px solid ${C.danger}` : "none", fontSize: 12 })}>{onShift ? "إنهاء المناوبة" : "▶️ بدء المناوبة"}</button>
           </div>
         )}
         <DriverNotifications driverId={user.uid} />
@@ -8154,12 +8314,12 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
 
             {route.status === "in_progress" && (
               <>
-                {pendingOffline > 0 && <div style={{ fontSize: 12, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 10, padding: "8px 12px" }}>📶 {pendingOffline} عملية محفوظة دون اتصال — ستُرسل تلقائيًا عند عودة الشبكة.</div>}
+                {pendingOffline > 0 && <div style={{ fontSize: 12, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 10, padding: "8px 12px" }}>{pendingOffline} عملية محفوظة دون اتصال — ستُرسل تلقائيًا عند عودة الشبكة.</div>}
                 <NavigationView position={position} posStatus={posStatus} remainingStops={remainingStopsPos} nextStop={nextStopPos} allStops={stopsWithCoords} onArrivedChange={setArrived} voiceOn={voiceOn} onToggleVoice={() => setVoiceOn((v) => { try { localStorage.setItem("swm_voice", v ? "off" : "on"); } catch { /* ignore */ } return !v; })} recomputeKey={recomputeKey} />
 
                 {nextStop ? (
                   <div style={{ background: C.card, border: `2px solid ${arrived ? C.accent : C.info}`, borderRadius: 14, padding: 16 }}>
-                    <div style={{ fontSize: 11, color: arrived ? C.accent : C.info, marginBottom: 4 }}>{arrived ? "✅ وصلت — " : ""}التوقف التالي — #{nextStop.order} من {stops.length}{nextStop.deferred ? " · مؤجَّل (تجاوز السعة)" : ""}</div>
+                    <div style={{ fontSize: 11, color: arrived ? C.accent : C.info, marginBottom: 4 }}>{arrived ? "وصلت — " : ""}التوقف التالي — #{nextStop.order} من {stops.length}{nextStop.deferred ? " · مؤجَّل (تجاوز السعة)" : ""}</div>
                     <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>{nextStop.binName}</div>
                     {(() => {
                       const bin = bins.find((b) => b.id === nextStop.binId);
@@ -8172,10 +8332,10 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
                         </div>
                       );
                     })()}
-                    <button disabled={busy} onClick={() => handleCollected(nextStop)} style={btn({ width: "100%", padding: 14, fontSize: 15, background: C.accent, color: "#07231A" })}>✅ تم التفريغ</button>
+                    <button disabled={busy} onClick={() => handleCollected(nextStop)} style={btn({ width: "100%", padding: 14, fontSize: 15, background: C.accent, color: "#07231A" })}>تم التفريغ</button>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 8 }}>
                       {Object.entries(INCIDENT_TYPES).map(([k, t]) => (
-                        <button key={k} disabled={busy} onClick={() => handleIncident(k, nextStop)} style={btn({ padding: 9, border: `1px solid ${C.warning}`, background: C.warning + "15", color: C.warning, fontSize: 11.5, fontWeight: 600 })}>{t.icon} {t.label.split(" (")[0]}</button>
+                        <button key={k} disabled={busy} onClick={() => handleIncident(k, nextStop)} style={btn({ padding: 9, border: `1px solid ${C.warning}`, background: C.warning + "15", color: C.warning, fontSize: 11.5, fontWeight: 600 })}>{ico(t.icon)} {t.label.split(" (")[0]}</button>
                       ))}
                     </div>
                     <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6 }}>تأكيد التفريغ يسجّل الوقت وموقعك ودقته، ولا يغيّر قراءة المستشعر — تتحدث عند وصول قراءة جديدة من الجهاز.</div>
@@ -8201,7 +8361,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
                 const skipped = skippedIds.has(s.binId);
                 return (
                   <div key={s.binId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12, opacity: done ? 0.5 : 1 }}>
-                    <span>{done ? "✅" : skipped ? "🚧" : `#${s.order}`} {s.binName}{skipped && <span style={{ color: C.warning, fontSize: 10.5 }}> (متخطاة — بلاغ)</span>}{s.deferred && !done && <span style={{ color: C.dim, fontSize: 10.5 }}> (مؤجَّل)</span>}</span>
+                    <span>{done ? <UiIcon e="✅" size={16} /> : skipped ? <UiIcon e="🚧" size={16} /> : `#${s.order}`} {s.binName}{skipped && <span style={{ color: C.warning, fontSize: 10.5 }}> (متخطاة — بلاغ)</span>}{s.deferred && !done && <span style={{ color: C.dim, fontSize: 10.5 }}> (مؤجَّل)</span>}</span>
                     <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                       <b style={{ color: STATUS_COLORS[s.priorityTier] || C.text }}>{bin?.lastFillLevelPercent != null ? `${bin.lastFillLevelPercent}%` : "—"}</b>
                       <StateBadge state={s.priorityTier} />
@@ -8234,7 +8394,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
                 ))}
               </div>
               <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10 }}>
-                {focused.criticalCount} حرجة · {focused.highCount} مرتفعة · {focused.total} حاوية إجمالًا{focused.thermalAlert && <span style={{ color: C.danger }}> · 🔥 تنبيه حراري نشط</span>}
+                {focused.criticalCount} حرجة · {focused.highCount} مرتفعة · {focused.total} حاوية إجمالًا{focused.thermalAlert && <span style={{ color: C.danger }}> · تنبيه حراري نشط</span>}
                 {previewEta != null && <span> · الزمن الكلي للوصول والمسار ~{previewEta} دقيقة</span>}
               </div>
             </div>
@@ -8259,7 +8419,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
             <div style={{ background: focused.openRoute ? C.info + "12" : C.warning + "12", border: `1px solid ${focused.openRoute ? C.info : C.warning}50`, borderRadius: 14, padding: 14 }}>
               {focused.openRoute ? (
                 <>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.info, marginBottom: 4 }}>🧭 {focused.openRoute.routeName} — {ROUTE_STATUS_LABELS[focused.openRoute.status] || focused.openRoute.status}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.info, marginBottom: 4 }}>{focused.openRoute.routeName} — {ROUTE_STATUS_LABELS[focused.openRoute.status] || focused.openRoute.status}</div>
                   {focused.openRoute.status === "suggested" && <div style={{ fontSize: 12, color: C.muted }}>بانتظار اعتماد المشرف واختيار مركبة — لا يمكن البدء قبل الاعتماد.</div>}
                   {(focused.openRoute.status === "approved" || focused.openRoute.status === "in_progress") && (
                     <button onClick={() => setActiveRouteId(focused.openRoute.id)} style={btn({ marginTop: 8, width: "100%", background: C.accent, color: "#07231A" })}>
@@ -8268,7 +8428,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
                   )}
                 </>
               ) : (
-                <div style={{ fontSize: 12, color: C.warning }}>⚠️ لا توجد جولة مقترحة أو معتمدة لهذا الحي بعد — أبلغ المشرف ليولّد الجولات ويعتمدها.</div>
+                <div style={{ fontSize: 12, color: C.warning }}>لا توجد جولة مقترحة أو معتمدة لهذا الحي بعد — أبلغ المشرف ليولّد الجولات ويعتمدها.</div>
               )}
             </div>
           </div>
@@ -8277,7 +8437,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
             <NeedsCollectionBanner ranked={ranked} compact onSelect={(r) => setFocusKey(r.group.key)} noRouteLabel="بانتظار إسناد من المشرف" />
 
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🚦 جولاتي المعتمدة / النشطة</div>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>جولاتي المعتمدة / النشطة</div>
               {runnableRoutes.length === 0 ? (
                 <EmptyState icon="🧭" title="لا توجد جولة معتمدة لك حاليًا" desc="انتظر اعتماد جولة من قبل المشرف، أو اضغط على أي حي أعلاه لمعاينة المسار." />
               ) : (
@@ -8382,7 +8542,6 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
 
   return (
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      <DemoEnvBanner />
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
       {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
 
@@ -8400,8 +8559,8 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
             <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{user.name}</div>
             <div style={{ fontSize: 10, color: C.accent }}>{user.district}</div>
           </div>
-          <div style={{ width: 38, height: 38, borderRadius: 10, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>👤</div>
-          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid #10b98140`, background: `#10b98115`, color: C.accent, cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>⚙️ إعدادات الحساب</button>
+          <div style={{ width: 38, height: 38, borderRadius: 10, background: C.accent + "20", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}><UiIcon e="👤" size={14} /></div>
+          <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid #10b98140`, background: `#10b98115`, color: C.accent, cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>إعدادات الحساب</button>
           <button onClick={onLogout} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.danger}40`, background: `${C.danger}15`, color: C.danger, cursor: "pointer", fontSize: 11, fontFamily: ARABIC_FONT, fontWeight: 600 }}>خروج</button>
         </div>
       </header>
@@ -8409,12 +8568,12 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
       {/* Tabs */}
       <div style={{ padding: "12px 24px 0", display: "flex", gap: 6, flexWrap: "wrap" }}>
         {[
-          { key: "home",    label: "🏠 الرئيسية" },
-          { key: "bins",    label: "🗑️ حاوياتي" },
-          { key: "station", label: "🏭 محطة الحي" },
-          { key: "request", label: "📝 طلب حاوية" },
-          { key: "report",  label: "⚠️ إبلاغ عن مشكلة" },
-          { key: "history", label: "📋 سجل الطلبات والبلاغات" },
+          { key: "home",    label: "الرئيسية" },
+          { key: "bins",    label: "حاوياتي" },
+          { key: "station", label: "محطة الحي" },
+          { key: "request", label: "طلب حاوية" },
+          { key: "report",  label: "إبلاغ عن مشكلة" },
+          { key: "history", label: "سجل الطلبات والبلاغات" },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             padding: "9px 16px", borderRadius: 10, border: `1px solid ${tab === t.key ? C.accent : C.border}`,
@@ -8430,7 +8589,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
         {tab === "home" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ background: `linear-gradient(135deg, ${C.accent}15, ${C.card})`, border: `1px solid ${C.accent}30`, borderRadius: 16, padding: 24 }}>
-              <div style={{ fontSize: 20, fontWeight: 900, color: C.text, marginBottom: 6 }}>مرحباً {user.name} 👋</div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: C.text, marginBottom: 6 }}>مرحباً {user.name}</div>
               <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.8 }}>
                 مرحباً بك في بوابة الأفراد لنظام إدارة النفايات الذكي. يمكنك متابعة حاوياتك، طلب حاوية جديدة، الإبلاغ عن مشاكل، ومتابعة أداء محطة حيك.
               </p>
@@ -8454,7 +8613,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                 <div key={i} onClick={item.action} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 14, padding: 18, cursor: "pointer", transition: "all 0.2s" }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = item.color + "70"; e.currentTarget.style.transform = "translateY(-2px)"; }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = item.color + "30"; e.currentTarget.style.transform = "translateY(0)"; }}>
-                  <div style={{ marginBottom: 8, display: "flex" }}>{item.icon}</div>
+                  <div style={{ marginBottom: 8, display: "flex" }}>{ico(item.icon)}</div>
                   <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>{item.label}</div>
                   <div style={{ fontSize: 11, color: C.dim }}>{item.desc}</div>
                 </div>
@@ -8472,7 +8631,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                 <div style={{ color: C.muted, fontSize: 13, padding: 16 }}>جاري التحميل…</div>
               ) : approvedBins.length === 0 ? (
                 <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 32, textAlign: "center" }}>
-                  <div style={{ fontSize: 48, marginBottom: 12 }}>🗑️</div>
+                  <div style={{ fontSize: 48, marginBottom: 12 }}><UiIcon e="🗑️" size={38} /></div>
                   <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>لا توجد حاويات مسجلة بعد</div>
                   <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8 }}>
                     يمكنك طلب حاوية جديدة وستظهر هنا بعد موافقة الموظف.
@@ -8485,17 +8644,17 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                 </div>
               ) : (
                 approvedBins.map((bin) => {
-                  const typeIcon = bin.binType === "عضوية" ? "🟢" : bin.binType === "بلاستيك" ? "🔵" : bin.binType === "ورق" ? "📄" : "🗑️";
+                  const typeIcon = bin.binType === "عضوية" ? <UiIcon e="🟢" size={16} /> : bin.binType === "بلاستيك" ? <UiIcon e="🔵" size={16} /> : bin.binType === "ورق" ? <UiIcon e="📄" size={16} /> : <UiIcon e="🗑️" size={16} />;
                   const approvedAt = bin.updatedAt || bin.createdAt;
                   return (
                     <div key={bin.id} style={{ background: C.card, border: `1px solid ${C.accent}30`, borderRadius: 14, padding: 20 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                         <div>
                           <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{typeIcon} حاوية {bin.binType}</div>
-                          <div style={{ fontSize: 12, color: C.muted }}>📍 {bin.address}</div>
-                          {bin.notes && <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>📝 {bin.notes}</div>}
+                          <div style={{ fontSize: 12, color: C.muted }}>{bin.address}</div>
+                          {bin.notes && <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>{bin.notes}</div>}
                         </div>
-                        <span style={{ padding: "4px 12px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: C.accent + "20", color: C.accent }}>✅ نشطة</span>
+                        <span style={{ padding: "4px 12px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: C.accent + "20", color: C.accent }}>نشطة</span>
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
                         {[
@@ -8505,7 +8664,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                           { label: "رقم الطلب",     val: bin.id.slice(0, 8),                                      icon: <Bookmark size={18} color={C.muted} /> },
                         ].map((item, j) => (
                           <div key={j} style={{ background: C.bg, borderRadius: 10, padding: "10px 12px", display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ display: "flex", alignItems: "center" }}>{item.icon}</span>
+                            <span style={{ display: "flex", alignItems: "center" }}>{ico(item.icon)}</span>
                             <div>
                               <div style={{ fontSize: 10, color: C.dim }}>{item.label}</div>
                               <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{item.val}</div>
@@ -8515,7 +8674,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                       </div>
                       {bin.response && (
                         <div style={{ marginTop: 12, fontSize: 12, color: C.accent, background: C.accent + "10", padding: "8px 12px", borderRadius: 8 }}>
-                          💬 ملاحظة الموظف: {bin.response}
+                          ملاحظة الموظف: {bin.response}
                         </div>
                       )}
                     </div>
@@ -8590,7 +8749,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
           <div style={{ maxWidth: 550 }}>
             {reqDone === "success" ? (
               <div style={{ background: C.card, border: `1px solid ${C.accent}40`, borderRadius: 16, padding: 32, textAlign: "center" }}>
-                <div style={{ fontSize: 56, marginBottom: 12 }}>✅</div>
+                <div style={{ fontSize: 56, marginBottom: 12 }}><UiIcon e="✅" size={44} /></div>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.accent, marginBottom: 8 }}>تم إرسال الطلب بنجاح!</div>
                 <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.8, marginBottom: 16 }}>
                   سيتم مراجعة طلبك والرد عليك خلال 3-5 أيام عمل. يمكنك متابعة الطلب في تبويب «سجل الطلبات والبلاغات».
@@ -8601,7 +8760,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
               <Card title="طلب حاوية جديدة" icon={<FileText size={16} color={C.muted} />}>
                 {reqDone?.error && (
                   <div style={{ background: C.danger + "20", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: C.danger }}>
-                    ❌ خطأ: <strong>{reqDone.error}</strong>
+                    خطأ: <strong>{reqDone.error}</strong>
                   </div>
                 )}
                 <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.7, margin: "0 0 20px" }}>
@@ -8654,7 +8813,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
           <div style={{ maxWidth: 550 }}>
             {reportDone === "success" ? (
               <div style={{ background: C.card, border: `1px solid ${C.accent}40`, borderRadius: 16, padding: 32, textAlign: "center" }}>
-                <div style={{ fontSize: 56, marginBottom: 12 }}>📨</div>
+                <div style={{ fontSize: 56, marginBottom: 12 }}><UiIcon e="📨" size={44} /></div>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.accent, marginBottom: 8 }}>تم إرسال البلاغ بنجاح!</div>
                 <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.8, marginBottom: 16 }}>
                   سيتم التعامل مع البلاغ خلال 24 ساعة كحد أقصى. يمكنك متابعة حالته في تبويب «سجل الطلبات والبلاغات».
@@ -8665,7 +8824,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
               <Card title="إبلاغ عن مشكلة" icon={<AlertTriangle size={16} color={C.muted} />}>
                 {reportDone?.error && (
                   <div style={{ background: C.danger + "20", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: C.danger }}>
-                    ❌ خطأ: <strong>{reportDone.error}</strong>
+                    خطأ: <strong>{reportDone.error}</strong>
                   </div>
                 )}
                 <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.7, margin: "0 0 20px" }}>
@@ -8704,7 +8863,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                   </div>
                   <button onClick={handleSendReport} disabled={reportLoading || !reportType || !reportDesc.trim()} style={{
                     padding: "14px", borderRadius: 12, border: "none",
-                    background: (reportType && reportDesc.trim() && !reportLoading) ? "linear-gradient(135deg, #f59e0b, #d97706)" : C.border,
+                    background: (reportType && reportDesc.trim() && !reportLoading) ? "#f59e0b" : C.border,
                     color: (reportType && reportDesc.trim() && !reportLoading) ? "#000" : C.dim,
                     fontWeight: 800, cursor: (reportType && reportDesc.trim() && !reportLoading) ? "pointer" : "not-allowed",
                     fontFamily: ARABIC_FONT, fontSize: 14, marginTop: 8,
@@ -8721,7 +8880,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
 
             {/* Requests */}
             <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 10 }}>📝 طلبات الحاويات ({myRequests.length})</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 10 }}>طلبات الحاويات ({myRequests.length})</div>
               {reqsLoading ? (
                 <div style={{ color: C.muted, fontSize: 13 }}>جاري التحميل…</div>
               ) : myRequests.length === 0 ? (
@@ -8732,15 +8891,15 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                   <div key={r.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>📦 {r.binType}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.binType}</span>
                         <span style={{ fontSize: 11, color: C.dim, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{r.id.slice(0, 8)}</span>
                       </div>
                       <span style={{ padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: statusColor + "20", color: statusColor }}>{r.status}</span>
                     </div>
-                    <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>📍 {r.address}</div>
-                    {r.notes && <div style={{ fontSize: 11, color: C.dim, marginBottom: 4 }}>📝 {r.notes}</div>}
-                    {r.response && <div style={{ fontSize: 12, color: C.muted, background: C.bg, padding: "8px 12px", borderRadius: 8, marginTop: 6 }}>💬 الرد: {r.response}</div>}
-                    <div style={{ fontSize: 10, color: C.dim, marginTop: 6 }}>🕐 {r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}</div>
+                    <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>{r.address}</div>
+                    {r.notes && <div style={{ fontSize: 11, color: C.dim, marginBottom: 4 }}>{r.notes}</div>}
+                    {r.response && <div style={{ fontSize: 12, color: C.muted, background: C.bg, padding: "8px 12px", borderRadius: 8, marginTop: 6 }}>الرد: {r.response}</div>}
+                    <div style={{ fontSize: 10, color: C.dim, marginTop: 6 }}>{r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}</div>
                   </div>
                 );
               })}
@@ -8748,7 +8907,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
 
             {/* Citizen Reports */}
             <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 10 }}>📋 البلاغات ({myReports.length})</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 10 }}>البلاغات ({myReports.length})</div>
               {repsLoading ? (
                 <div style={{ color: C.muted, fontSize: 13 }}>جاري التحميل…</div>
               ) : myReports.length === 0 ? (
@@ -8759,15 +8918,15 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                   <div key={r.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>⚠️ {r.type}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.type}</span>
                         <span style={{ fontSize: 11, color: C.dim, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{r.id.slice(0, 8)}</span>
                       </div>
                       <span style={{ padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: statusColor + "20", color: statusColor }}>{r.status}</span>
                     </div>
-                    <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>📍 {r.location || r.district}</div>
+                    <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>{r.location || r.district}</div>
                     {r.description && <div style={{ fontSize: 12, color: C.muted, background: C.bg, padding: "8px 12px", borderRadius: 8, marginTop: 6 }}>{r.description}</div>}
-                    {r.response && <div style={{ fontSize: 12, color: C.accent, background: C.accent + "10", padding: "8px 12px", borderRadius: 8, marginTop: 6 }}>💬 الرد: {r.response}</div>}
-                    <div style={{ fontSize: 10, color: C.dim, marginTop: 6 }}>🕐 {r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}</div>
+                    {r.response && <div style={{ fontSize: 12, color: C.accent, background: C.accent + "10", padding: "8px 12px", borderRadius: 8, marginTop: 6 }}>الرد: {r.response}</div>}
+                    <div style={{ fontSize: 10, color: C.dim, marginTop: 6 }}>{r.createdAt ? new Date(r.createdAt).toLocaleString("ar-SA") : "—"}</div>
                   </div>
                 );
               })}
@@ -8929,11 +9088,11 @@ function SmartWasteManagement() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // 📦 البيانات من Firebase
+  // البيانات من Firebase
   const [stations, setStations] = useState([]);
   const [loadingStations, setLoadingStations] = useState(true);
 
-  // 🏘️ الأحياء والحاويات الذكية — المصدر الرئيسي الجديد للواجهة التشغيلية
+  // الأحياء والحاويات الذكية — المصدر الرئيسي الجديد للواجهة التشغيلية
   // (stations/containers أعلاه يبقى مؤقتًا كمصدر fallback داخلي لحين اكتمال
   // نقل كل الصفحات إليها؛ لا يُحذف من Firestore في هذه المرحلة)
   // Data scope (mirrors firestore.rules): platform admin → everything; manager/employee/driver with a
@@ -9021,7 +9180,7 @@ function SmartWasteManagement() {
   // أوامر الشفط (للمساعد الذكي)
   const { data: suctionJobs } = useCollection(COLLECTIONS.SUCTION_JOBS);
 
-  // ✅ التنبيهات الحقيقية (§28/§29) — مشتقة من bins/neighborhoods الحية عبر
+  // التنبيهات الحقيقية (§28/§29) — مشتقة من bins/neighborhoods الحية عبر
   // decisionEngine + alertsEngine، ومُزامَنة إلى Firestore (alerts) بمنطق
   // dedup يمنع تكرارها عند كل تحديث. استبدلت القائمة السابقة المشتقة من
   // stations فقط للعرض في الواجهة (generateAlerts تبقى معرّفة لتوافق الأماكن
@@ -9093,13 +9252,13 @@ function SmartWasteManagement() {
     ...(routeIncidents || []).filter((i) => i.status === "open").map((i) => ({ key: `incident:${i.id}`, kind: "incident", inc: i })),
   ], [realAlerts, routes, routeIncidents]);
   useBrowserNotifications(staffNotifItems, useCallback((item) => item.kind === "alert"
-    ? { title: `🔴 ${ALERT_TYPE_LABELS[item.alert.type] || "تنبيه حرج"}`, body: item.alert.message }
+    ? { title: `${ALERT_TYPE_LABELS[item.alert.type] || "تنبيه حرج"}`, body: item.alert.message }
     : item.kind === "incident"
-    ? { title: `🚧 بلاغ من السائق ${item.inc.driverName || ""}`, body: `${INCIDENT_TYPES[item.inc.type]?.label || item.inc.type} — ${item.inc.routeName || ""}` }
-    : { title: "🧭 جولة مقترحة جديدة بانتظار اعتمادك", body: `${item.route.routeName} — ${item.route.binIds?.length || 0} حاوية` }, []),
+    ? { title: `بلاغ من السائق ${item.inc.driverName || ""}`, body: `${INCIDENT_TYPES[item.inc.type]?.label || item.inc.type} — ${item.inc.routeName || ""}` }
+    : { title: "جولة مقترحة جديدة بانتظار اعتمادك", body: `${item.route.routeName} — ${item.route.binIds?.length || 0} حاوية` }, []),
     !!userData && userData.role !== "citizen" && userData.role !== "driver");
 
-  // 🔄 الاستماع المباشر للمحطات من Firestore (Realtime)
+  // الاستماع المباشر للمحطات من Firestore (Realtime)
   useEffect(() => {
     const unsubscribe = onSnapshot(
       collection(db, "stations"),
@@ -9167,18 +9326,18 @@ function SmartWasteManagement() {
   const role = loggedInUser.role;
   const I = (key, label, icon) => ({ key, label, icon });
   const navGroups = role === "executive" ? [
-    { id: "amanah", label: "الأمانة", items: [I("exec", "القيادة الاستراتيجية", <Crown size={18} />), I("brain", "العقل التشغيلي للمدينة", <Sparkles size={18} />), I("map", "الخريطة التشغيلية", <MapGlyph size={18} />), I("municipalities", "البلديات والنطاقات", <Landmark size={18} />), I("neighborhoods", "الأحياء", <Home size={18} />)] },
+    { id: "amanah", label: "الأمانة", items: [I("exec", "القيادة الاستراتيجية", <Crown size={18} />), I("brain", "محرك القرارات التشغيلية", <Gauge size={18} />), I("map", "الخريطة التشغيلية", <MapGlyph size={18} />), I("municipalities", "البلديات والنطاقات", <Landmark size={18} />), I("neighborhoods", "الأحياء", <Home size={18} />)] },
     { id: "ops", label: "التشغيل", items: [I("dashboard", "لوحة العمليات", <LayoutDashboard size={18} />), I("control", "الجولات والإسناد", <RouteIcon size={18} />), I("drivers", "الأسطول والسائقون", <Truck size={18} />), I("requests", "البلاغات والطلبات", <Inbox size={18} />), I("fire", "التنبيهات الحرارية", <Flame size={18} />), I("bins", "الحاويات الذكية", <Trash2 size={18} />)] },
     { id: "analysis", label: "التحليل", items: [I("reports", "التقارير", <ClipboardList size={18} />)] },
     { id: "admin", label: "الإدارة", items: [I("audit", "سجل العمليات", <FileText size={18} />), I("settings", "الإعدادات", <SettingsIcon size={18} />)] },
-    { id: "demo", label: "بيئة العرض", items: [I("simulation", "المحاكاة", <Gauge size={18} />), I("demo", "سيناريو العرض", <Sparkles size={18} />)] },
+    { id: "demo", label: "بيئة العرض", items: [I("simulation", "المحاكاة", <Gauge size={18} />), I("demo", "سيناريو العرض", <LuLightbulb size={18} />)] },
   ] : [
     { id: "now", label: "الآن", items: [I("dashboard", "لوحة العمليات", <LayoutDashboard size={18} />), I("map", "الخريطة التشغيلية", <MapGlyph size={18} />)] },
     { id: "ops", label: "التشغيل", items: [I("control", "الجولات والإسناد", <RouteIcon size={18} />), I("drivers", "الأسطول والسائقون", <Truck size={18} />), I("requests", "البلاغات والطلبات", <Inbox size={18} />), I("fire", "التنبيهات الحرارية", <Flame size={18} />)] },
     { id: "assets", label: "الأصول", items: [I("bins", "الحاويات الذكية", <Trash2 size={18} />), I("municipalities", role === "manager" ? "بلديتي" : "البلدية والأحياء", <Landmark size={18} />)] },
-    { id: "analysis", label: "التحليل والقرار", items: [I("brain", "العقل التشغيلي للمدينة", <Sparkles size={18} />), I("reports", "التقارير", <ClipboardList size={18} />)] },
+    { id: "analysis", label: "التحليل والقرار", items: [I("brain", "محرك القرارات التشغيلية", <Gauge size={18} />), I("reports", "التقارير", <ClipboardList size={18} />)] },
     { id: "admin", label: "الإدارة", items: [...(role === "manager" ? [I("audit", "سجل العمليات", <FileText size={18} />)] : []), I("settings", role === "manager" ? "الإعدادات" : "تفضيلاتي", <SettingsIcon size={18} />)] },
-    ...(role === "manager" ? [{ id: "demo", label: "بيئة العرض", items: [I("simulation", "المحاكاة", <Gauge size={18} />), I("demo", "سيناريو العرض", <Sparkles size={18} />)] }] : []),
+    ...(role === "manager" ? [{ id: "demo", label: "بيئة العرض", items: [I("simulation", "المحاكاة", <Gauge size={18} />), I("demo", "سيناريو العرض", <LuLightbulb size={18} />)] }] : []),
   ];
   const navItems = navGroups.flatMap((g) => g.items);
   // Old page keys that became tabs of a hub page.
@@ -9189,8 +9348,7 @@ function SmartWasteManagement() {
   const toggleGroup = (id) => { const n = { ...collapsedGroups, [id]: !collapsedGroups[id] }; setCollapsedGroupsSaved(n); try { localStorage.setItem("swm_nav_collapsed", JSON.stringify(n)); } catch { /* per-viewer convenience only */ } };
 
   return (
-    <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", overflow: "hidden", paddingTop: 26 }}>
-      <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 10000 }}><DemoEnvBanner /></div>
+    <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", overflow: "hidden" }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
       <SessionTimeout onLogout={handleLogout} timeoutMin={30} countdownSec={10} />
 
@@ -9213,7 +9371,7 @@ function SmartWasteManagement() {
         transition: "transform 0.3s ease",
         // Desktop: shrink to 64px when closed; Mobile: slide off-screen (fixed overlay)
         ...(isMobile ? {
-          position: "fixed", top: 26, right: 0, bottom: 0, zIndex: 50,
+          position: "fixed", top: 0, right: 0, bottom: 0, zIndex: 50,
           transform: sidebarOpen ? "translateX(0)" : "translateX(100%)",
           boxShadow: sidebarOpen ? "-8px 0 32px #0008" : "none",
         } : {
@@ -9230,7 +9388,7 @@ function SmartWasteManagement() {
             <div style={{ fontSize: 10, color: C.brandText, fontWeight: 600 }}>{BRAND.en} · {BRAND.city}</div>
           </div>}
           {isMobile && (
-            <button onClick={() => setSidebarOpen(false)} style={{ marginRight: "auto", background: "none", border: "none", color: C.muted, fontSize: 22, cursor: "pointer", padding: 4 }}>✕</button>
+            <button onClick={() => setSidebarOpen(false)} style={{ marginRight: "auto", background: "none", border: "none", color: C.muted, fontSize: 22, cursor: "pointer", padding: 4 }}><UiIcon e="✕" size={17} /></button>
           )}
         </div>
 
@@ -9258,7 +9416,7 @@ function SmartWasteManagement() {
                       cursor: "pointer", fontSize: 13.5, fontWeight: active ? 800 : 500,
                       fontFamily: ARABIC_FONT, whiteSpace: "nowrap", width: "100%",
                     }}>
-                      <span style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>{item.icon}</span>
+                      <span style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>{ico(item.icon)}</span>
                       {expanded && item.label}
                     </button>
                   );
@@ -9286,7 +9444,7 @@ function SmartWasteManagement() {
             borderRadius: 10, marginBottom: 6, border: "1px solid #ffffff30", background: "#ffffff10", color: C.brandText,
             cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
           }}>
-            <span style={{ fontSize: 14 }}>{THEME_NAME === "dark" ? "☀️" : "🌙"}</span>
+            <span style={{ fontSize: 14 }}>{THEME_NAME === "dark" ? <UiIcon e="☀️" size={14} /> : <UiIcon e="🌙" size={14} />}</span>
             {(sidebarOpen || isMobile) && (THEME_NAME === "dark" ? "الوضع الفاتح" : "الوضع الداكن")}
           </button>
           <button onClick={() => { setShowPassModal(true); if (isMobile) setSidebarOpen(false); }} style={{
@@ -9329,7 +9487,7 @@ function SmartWasteManagement() {
             <button
               onClick={() => setSidebarOpen(v => !v)}
               style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, fontSize: 18, cursor: "pointer", padding: "4px 8px", flexShrink: 0 }}
-            >☰</button>
+            ><UiIcon e="☰" size={16} /></button>
             <div style={{ minWidth: 0 }}>
               <h1 style={{ fontSize: isMobile ? 15 : 20, fontWeight: 800, margin: 0, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {navItems.find((n) => n.key === resolvedPage)?.label}
@@ -9451,7 +9609,7 @@ function SmartWasteManagement() {
 
 
 // ============================================================
-// ⏳ PENDING APPROVAL SCREEN
+// PENDING APPROVAL SCREEN
 // ============================================================
 const PendingApprovalScreen = () => {
   const { logout, userData } = useAuth();
@@ -9460,7 +9618,7 @@ const PendingApprovalScreen = () => {
     <div dir="rtl" style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
       <div style={{ width:"100%", maxWidth:460, padding:"clamp(20px,5vw,40px)", background:C.card, borderRadius:24, border:"1px solid #f59e0b30", textAlign:"center" }}>
-        <div style={{ width:80, height:80, borderRadius:20, background:"#f59e0b15", display:"flex", alignItems:"center", justifyContent:"center", fontSize:42, margin:"0 auto 20px", border:"2px solid #f59e0b30" }}>⏳</div>
+        <div style={{ width:80, height:80, borderRadius:20, background:"#f59e0b15", display:"flex", alignItems:"center", justifyContent:"center", fontSize:42, margin:"0 auto 20px", border:"2px solid #f59e0b30" }}><UiIcon e="⏳" size={33} /></div>
         <h2 style={{ fontSize:22, fontWeight:900, color:C.text, margin:"0 0 10px" }}>بانتظار الموافقة</h2>
         <p style={{ fontSize:14, color:C.muted, lineHeight:1.8, margin:"0 0 20px" }}>
           تم إنشاء حسابك بنجاح كـ <span style={{ color:C.warning, fontWeight:700 }}>{userData?.roleAr}</span>
@@ -9481,7 +9639,7 @@ const PendingApprovalScreen = () => {
           </div>
           <div style={{ display:"flex", justifyContent:"space-between", fontSize:13 }}>
             <span style={{ color:C.dim }}>الحالة:</span>
-            <span style={{ color:C.warning, fontWeight:600 }}>⏳ بانتظار الموافقة</span>
+            <span style={{ color:C.warning, fontWeight:600 }}>بانتظار الموافقة</span>
           </div>
         </div>
         <button onClick={logout} style={{ padding:"12px 30px", borderRadius:10, border:"1px solid #ef444440", background:"#ef444415", color:C.danger, cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:F }}>
@@ -9493,7 +9651,7 @@ const PendingApprovalScreen = () => {
 };
 
 // ============================================================
-// 👑 ADMIN PANEL — إدارة المستخدمين والصلاحيات
+// ADMIN PANEL — إدارة المستخدمين والصلاحيات
 // ============================================================
 const AdminPanel = ({ onBack }) => {
   const [users, setUsers] = useState([]);
@@ -9519,28 +9677,28 @@ const AdminPanel = ({ onBack }) => {
     const roleArMap = { executive: "متخذ القرار بالأمانة", manager: "متخذ القرار بالبلدية", employee: "موظف العمليات", driver: "فرد ميداني (سائق)", citizen: "مواطن" };
     const roleAr = roleArMap[newRole] || "مواطن";
     void roleAr;
-    try { await adminUserAction({ action: "setRole", uid, role: newRole }); setActionMsg("✅ تم تغيير الدور بنجاح"); }
+    try { await adminUserAction({ action: "setRole", uid, role: newRole }); setActionMsg("تم تغيير الدور بنجاح"); }
     catch (e) { setActionMsg("تعذر تغيير الدور: " + friendlyError(e)); }
     setTimeout(() => setActionMsg(""), 3000);
     fetchUsers();
   };
 
   const updateUserStatus = async (uid, newStatus) => {
-    try { await adminUserAction({ action: "setStatus", uid, status: newStatus }); setActionMsg(newStatus === "active" ? "✅ تم تفعيل الحساب" : "⛔ تم تعطيل الحساب"); }
+    try { await adminUserAction({ action: "setStatus", uid, status: newStatus }); setActionMsg(newStatus === "active" ? "تم تفعيل الحساب" : "تم تعطيل الحساب"); }
     catch (e) { setActionMsg("تعذر تغيير الحالة: " + friendlyError(e)); }
     setTimeout(() => setActionMsg(""), 3000);
     fetchUsers();
   };
 
   const approveUser = async (uid) => {
-    try { await adminUserAction({ action: "setStatus", uid, status: "active" }); setActionMsg("✅ تم قبول المستخدم"); }
+    try { await adminUserAction({ action: "setStatus", uid, status: "active" }); setActionMsg("تم قبول المستخدم"); }
     catch (e) { setActionMsg("تعذر قبول المستخدم: " + friendlyError(e)); }
     setTimeout(() => setActionMsg(""), 3000);
     fetchUsers();
   };
 
   const rejectUser = async (uid) => {
-    try { await adminUserAction({ action: "setStatus", uid, status: "rejected" }); setActionMsg("❌ تم رفض المستخدم"); }
+    try { await adminUserAction({ action: "setStatus", uid, status: "rejected" }); setActionMsg("تم رفض المستخدم"); }
     catch (e) { setActionMsg("تعذر رفض المستخدم: " + friendlyError(e)); }
     setTimeout(() => setActionMsg(""), 3000);
     fetchUsers();
@@ -9585,7 +9743,7 @@ const AdminPanel = ({ onBack }) => {
       {/* Header */}
       <header style={{ padding:"14px 28px", background:C.brand, borderBottom:`1px solid ${C.brandSoft}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
         <div style={{ display:"flex", alignItems:"center", gap:14 }}>
-          <div style={{ width:42, height:42, borderRadius:12, background:"linear-gradient(135deg,#8b5cf6,#6d28d9)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:22 }}>👑</div>
+          <div style={{ width:42, height:42, borderRadius:12, background:"#8b5cf6", display:"flex", alignItems:"center", justifyContent:"center", fontSize:22 }}><UiIcon e="👑" size={17} /></div>
           <div>
             <div style={{ fontSize:16, fontWeight:900, color:C.purple }}>لوحة إدارة النظام</div>
             <div style={{ fontSize:10, color:C.muted }}>إدارة المستخدمين والصلاحيات</div>
@@ -9609,7 +9767,7 @@ const AdminPanel = ({ onBack }) => {
             { label: "مواطنون", val: stats.citizens, icon: "🏠", color: C.accent },
           ].map((s, i) => (
             <div key={i} style={{ background:C.card, border:`1px solid ${s.color}25`, borderRadius:14, padding:16, textAlign:"center" }}>
-              <div style={{ fontSize:24, marginBottom:4 }}>{s.icon}</div>
+              <div style={{ fontSize:24, marginBottom:4 }}>{ico(s.icon)}</div>
               <div style={{ fontSize:24, fontWeight:900, color:s.color }}>{s.val}</div>
               <div style={{ fontSize:11, color:C.dim }}>{s.label}</div>
             </div>
@@ -9619,13 +9777,13 @@ const AdminPanel = ({ onBack }) => {
         {/* Pending Approvals */}
         {pendingUsers.length > 0 && (
           <div style={{ background:C.card, border:"1px solid #f59e0b30", borderRadius:16, padding:20, marginBottom:20 }}>
-            <div style={{ fontSize:15, fontWeight:700, color:C.warning, marginBottom:14 }}>⏳ طلبات بانتظار الموافقة ({pendingUsers.length})</div>
+            <div style={{ fontSize:15, fontWeight:700, color:C.warning, marginBottom:14 }}>طلبات بانتظار الموافقة ({pendingUsers.length})</div>
             <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
               {pendingUsers.map(u => (
                 <div key={u.id} style={{ background:C.bg, borderRadius:12, padding:"14px 18px", display:"flex", justifyContent:"space-between", alignItems:"center", border:"1px solid #1e293b" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:12 }}>
                     <div style={{ width:40, height:40, borderRadius:10, background:"#f59e0b15", display:"flex", alignItems:"center", justifyContent:"center", fontSize:20 }}>
-                      {u.role === "executive" ? "🏛️" : "👷"}
+                      {u.role === "executive" ? <UiIcon e="🏛️" size={16} /> : <UiIcon e="👷" size={16} />}
                     </div>
                     <div>
                       <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{u.fullName}</div>
@@ -9633,8 +9791,8 @@ const AdminPanel = ({ onBack }) => {
                     </div>
                   </div>
                   <div style={{ display:"flex", gap:8 }}>
-                    <button onClick={() => approveUser(u.id)} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:C.accent, color:"#fff", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F }}>✅ قبول</button>
-                    <button onClick={() => rejectUser(u.id)} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:C.danger, color:"#fff", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F }}>❌ رفض</button>
+                    <button onClick={() => approveUser(u.id)} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:C.accent, color:"#fff", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F }}>قبول</button>
+                    <button onClick={() => rejectUser(u.id)} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:C.danger, color:"#fff", cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:F }}>رفض</button>
                   </div>
                 </div>
               ))}
@@ -9651,7 +9809,7 @@ const AdminPanel = ({ onBack }) => {
               cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:F,
             }}>{f}{f==="بانتظار" && stats.pending > 0 ? ` (${stats.pending})` : ""}</button>
           ))}
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 بحث بالاسم أو البريد..." style={{ flex:1, minWidth:200, padding:"8px 14px", borderRadius:10, border:"1px solid #1e293b", background:C.bg, color:C.text, fontSize:12, fontFamily:F, outline:"none" }} />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث بالاسم أو البريد..." style={{ flex:1, minWidth:200, padding:"8px 14px", borderRadius:10, border:"1px solid #1e293b", background:C.bg, color:C.text, fontSize:12, fontFamily:F, outline:"none" }} />
         </div>
 
         {/* Users Table */}
@@ -9691,7 +9849,7 @@ const AdminPanel = ({ onBack }) => {
                             <option value="executive">إدارة عليا</option>
                           </select>
                           {(u.role === "manager" || u.role === "employee" || u.role === "driver") && (
-                            <select value={u.municipalityId || ""} onChange={async (e) => { try { await setUserMunicipality(u.id, e.target.value || null); } catch (err) { setActionMsg("تعذر تعديل البلدية: " + friendlyError(err)); return; } setActionMsg("✅ تم تحديث البلدية"); setTimeout(() => setActionMsg(""), 3000); fetchUsers(); }} title="البلدية الفرعية (نطاق البيانات)" style={{ padding:"4px 8px", borderRadius:6, border:`1px solid ${u.municipalityId ? C.border : C.warning}`, background:C.bg, color:C.text, fontSize:10, fontFamily:F, cursor:"pointer" }}>
+                            <select value={u.municipalityId || ""} onChange={async (e) => { try { await setUserMunicipality(u.id, e.target.value || null); } catch (err) { setActionMsg("تعذر تعديل البلدية: " + friendlyError(err)); return; } setActionMsg("تم تحديث البلدية"); setTimeout(() => setActionMsg(""), 3000); fetchUsers(); }} title="البلدية الفرعية (نطاق البيانات)" style={{ padding:"4px 8px", borderRadius:6, border:`1px solid ${u.municipalityId ? C.border : C.warning}`, background:C.bg, color:C.text, fontSize:10, fontFamily:F, cursor:"pointer" }}>
                               <option value="">بلا بلدية (غير منطاق)</option>
                               {MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.shortAr}</option>)}
                             </select>
@@ -9717,7 +9875,7 @@ const AdminPanel = ({ onBack }) => {
 };
 
 // ============================================================
-// 🚀 ROOT APP — ENTRY POINT
+// ROOT APP — ENTRY POINT
 // ============================================================
 // ======================== PUBLIC LANDING PAGE ========================
 /**
@@ -9930,7 +10088,7 @@ function AppRouter() {
         <div dir="rtl" style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Noto Kufi Arabic',sans-serif" }}>
           <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
           <div style={{ width:"100%", maxWidth:400, padding:"clamp(20px,5vw,40px)", background:C.card, borderRadius:24, textAlign:"center", border:"1px solid #ef444430" }}>
-            <div style={{ fontSize:48, marginBottom:16 }}>⛔</div>
+            <div style={{ fontSize:48, marginBottom:16 }}><UiIcon e="⛔" size={38} /></div>
             <h2 style={{ fontSize:20, fontWeight:900, color:C.danger, margin:"0 0 10px" }}>الحساب {userData?.status === "rejected" ? "مرفوض" : "معطّل"}</h2>
             <p style={{ fontSize:13, color:C.muted, lineHeight:1.7 }}>تواصل مع إدارة النظام لمزيد من المعلومات</p>
             <button onClick={doLogout} style={{ marginTop:20, padding:"10px 24px", borderRadius:10, border:"1px solid #ef444440", background:"#ef444415", color:C.danger, cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:"'Noto Kufi Arabic',sans-serif" }}>تسجيل خروج</button>
@@ -9972,7 +10130,7 @@ class ErrorBoundary extends React.Component {
           flexDirection: "column", alignItems: "center", justifyContent: "center",
           fontFamily: "'Noto Kufi Arabic', sans-serif", color: C.text, padding: 24, textAlign: "center",
         }}>
-          <div style={{ fontSize: 56, marginBottom: 16 }}>⚠️</div>
+          <div style={{ fontSize: 56, marginBottom: 16 }}><UiIcon e="⚠️" size={44} /></div>
           <div style={{ fontSize: 20, fontWeight: 800, color: C.danger, marginBottom: 8 }}>
             حدث خطأ غير متوقع
           </div>
@@ -9983,12 +10141,12 @@ class ErrorBoundary extends React.Component {
             onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
             style={{
               padding: "12px 28px", borderRadius: 12, border: "none",
-              background: "linear-gradient(135deg,#10b981,#059669)",
+              background: "#10b981",
               color: "#000", fontWeight: 700, fontSize: 14, cursor: "pointer",
               fontFamily: "'Noto Kufi Arabic', sans-serif",
             }}
           >
-            🔄 إعادة تحميل التطبيق
+            إعادة تحميل التطبيق
           </button>
         </div>
       );

@@ -139,7 +139,7 @@ export function computeNeighborhoodMapStats(binStates = [], opts = {}) {
     reasons.push(`متوسط الامتلاء ${avgFill}%`);
   } else { state = "normal"; reasons.push(`جميع الحاويات ضمن المعدل الطبيعي (متوسط ${avgFill}%)`); }
 
-  if (thermalAlert) reasons.push("🔥 تنبيه حراري نشط في الحي");
+  if (thermalAlert) reasons.push("تنبيه حراري نشط في الحي");
   if (invalidCount > 0 && state !== "no_data" && state !== "offline") reasons.push(`${invalidCount} قراءة مستبعدة من المتوسط (غير متصلة/خلل/بلا بيانات)`);
 
   return {
