@@ -14,7 +14,7 @@
  * ─────────────────────────────────────────────────────────────────────
  */
 
-import { THRESHOLDS } from "./config";
+import { THRESHOLDS } from "./config.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 

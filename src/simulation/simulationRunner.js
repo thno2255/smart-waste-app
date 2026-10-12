@@ -85,11 +85,13 @@ export async function installSimulation(cfg, { neighborhoods, featuresByKey, act
 }
 
 /** Loads the engine state from Firestore. Throws if any indexed bin is not flagged simulated (safety: never drive real bins). */
-export async function loadSimState() {
+export async function loadSimState({ municipalityId = null } = {}) {
   const snap = await getDoc(STATE_DOC());
   if (!snap.exists()) return null;
   const st = snap.data();
-  const binsSnap = await getDocs(query(collection(db, COLLECTIONS.BINS), where("simulated", "==", true)));
+  // A municipality-scoped user may only list their own municipality's bins (rules) — load just that slice.
+  const binsQ = municipalityId ? query(collection(db, COLLECTIONS.BINS), where("municipalityId", "==", municipalityId), where("simulated", "==", true)) : query(collection(db, COLLECTIONS.BINS), where("simulated", "==", true));
+  const binsSnap = await getDocs(binsQ);
   const byId = new Map(binsSnap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
   const bins = [];
   for (const { id, simId } of st.binIndex || []) {
@@ -103,7 +105,7 @@ export async function loadSimState() {
       lastReadingAt: d.lastReadingAt, lastCollectionAt: d.lastCollectionAt,
     });
   }
-  return { config: st.config, status: st.status, speed: st.speed || 1, clock: st.clock, tick: st.tick || 0, events: st.events || [], bins, lastEventSyncAt: st.lastEventSyncAt, leader: st.leader, summary: st.summary };
+  return { config: st.config, status: st.status, speed: st.speed || 1, clock: st.clock, tick: st.tick || 0, events: st.events || [], bins, lastEventSyncAt: st.lastEventSyncAt, leader: st.leader, summary: st.summary, partial: !!municipalityId };
 }
 
 /** Writes the bins + readings for a new engine state (only simulated bins by construction). */
@@ -115,7 +117,9 @@ async function persistState(state, { changedOnly = null, reason = "tick" } = {})
     ops.push((batch) => batch.set(doc(db, COLLECTIONS.BINS, b.id), binDocFrom(b, b.connectivity === "offline" ? b.lastReadingAt : at), { merge: true }));
     if (b.connectivity !== "offline") ops.push((batch) => batch.set(doc(collection(db, COLLECTIONS.SIMULATED_READINGS)), readingRow(b, at, { reason })));
   }
-  ops.push((batch) => batch.set(STATE_DOC(), { clock: state.clock, tick: state.tick, events: state.events || [], summary: summarize(state.bins), lastTickAt: ts(), lastEventSyncAt: state.lastEventSyncAt || null }, { merge: true }));
+  // A partial (one-municipality) state must not overwrite the city-wide summary or advance the shared clock.
+  if (state.partial) ops.push((batch) => batch.set(STATE_DOC(), { events: state.events || [], lastEventAt: ts() }, { merge: true }));
+  else ops.push((batch) => batch.set(STATE_DOC(), { clock: state.clock, tick: state.tick, events: state.events || [], summary: summarize(state.bins), lastTickAt: ts(), lastEventSyncAt: state.lastEventSyncAt || null }, { merge: true }));
   await commitInChunks(ops);
 }
 
@@ -156,7 +160,7 @@ export async function setSimulationStatus(status, { speed, leader = null } = {})
 /** Fire one demo event. `target` = { binId } | { municipalityId } | { neighborhoodId }; a bin is picked deterministically when not given. */
 export async function fireSimulationEvent(type, target = {}, actor) {
   if (!SIM_EVENTS[type]) throw new Error("حدث غير معروف");
-  const st = await loadSimState();
+  const st = await loadSimState({ municipalityId: target.binId ? null : target.municipalityId || null });
   if (!st) throw new Error("لم تُثبَّت المحاكاة بعد");
   const bin = target.binId ? st.bins.find((b) => b.id === target.binId || b.simId === target.binId) : pickBinFor(st, { type, municipalityId: target.municipalityId || null, neighborhoodId: target.neighborhoodId || null, salt: (st.events || []).length });
   if (!bin) throw new Error("لا توجد حاوية مناسبة لهذا الحدث في النطاق المحدد");

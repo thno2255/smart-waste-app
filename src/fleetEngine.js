@@ -14,7 +14,7 @@
  * never re-derive them.
  * ─────────────────────────────────────────────────────────────────────
  */
-import { normalizeNeighborhoodName } from "./config";
+import { normalizeNeighborhoodName } from "./config.js";
 
 export const ROLES = ["citizen", "employee", "manager", "executive", "driver"];
 /** Staff roles that act as operations management (scoped by municipality when users.municipalityId is set; "executive" is the platform admin). */

@@ -22,10 +22,13 @@
 import { getApps, initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { runDispatchCycle } from "../_lib/dispatchRunner.mjs";
 
 const BOUNDS = { fillMin: 0, fillMax: 100, tempMin: -10, tempMax: 120 }; // mirrors src/config.js THRESHOLDS.faultReadingBounds
 const MIN_SECONDS_BETWEEN_READINGS = 5; // per device — light abuse guard, not a production rate limiter
 const DEMO_KEY = "demo-key-not-for-production";
+const CRITICAL_FILL_PCT = 85; // mirrors src/config.js THRESHOLDS.fillCriticalPct
+const CRITICAL_TEMP_C = 60;   // mirrors src/config.js THRESHOLDS.tempCriticalC
 
 function admin() {
   if (!getApps().length) {
@@ -104,7 +107,19 @@ export default async function handler(req, res) {
   batch.update(devDoc.ref, { lastSeenAt: receivedAt, readingsCount: FieldValue.increment(1) });
   await batch.commit();
 
-  return res.status(201).json({ ok: true, bin_id: dev.binId, timestamp });
+  // Autonomous dispatch, server-side: a critical reading triggers an immediate cycle for the bin's
+  // municipality; any reading also acts as the periodic heartbeat (the cycle skips itself until
+  // periodMinutes have elapsed). Failures never reject the reading itself.
+  let dispatch = null;
+  try {
+    const binSnap = await db.collection("bins").doc(dev.binId).get();
+    const mid = binSnap.get("municipalityId") || null;
+    const critical = (fill != null && fill >= CRITICAL_FILL_PCT) || (temp != null && temp >= CRITICAL_TEMP_C);
+    if (critical && mid) dispatch = await runDispatchCycle(db, { trigger: "critical_reading", municipalityId: mid });
+    else dispatch = await runDispatchCycle(db, { trigger: "heartbeat" });
+  } catch (e) { console.error("[iot→dispatch]", e?.message || e); }
+
+  return res.status(201).json({ ok: true, bin_id: dev.binId, timestamp, dispatch: dispatch ? { runId: dispatch.runId || null, skipped: dispatch.skipped || null } : null });
 }
 
 function safeJson(s) { try { return JSON.parse(s); } catch { return {}; } }

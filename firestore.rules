@@ -80,6 +80,28 @@ service cloud.firestore {
     // Planner runs, decision simulations and recommendations: written by the role that ran them (scoped), readable by scoped staff; immutable afterwards.
     match /optimization_runs/{id}      { allow read: if isEmployee() && sameMun(resource.data); allow create: if isEmployee() && sameMun(request.resource.data); allow update, delete: if isAdmin() && resource.data.get("demo", false) == true; }
     match /simulation_scenarios/{id}   { allow read: if isEmployee(); allow create: if isEmployee() && role() in ["executive", "manager"]; allow update, delete: if isAdmin(); }
+    // ── Autonomous dispatch (written ONLY by the server runner via firebase-admin) ──
+    // Settings: every staff member may read the mode; only the Amanah decision maker switches it.
+    match /dispatch_settings/{id} {
+      allow read: if isEmployee();
+      allow write: if isAdmin() && request.resource.data.mode in ["off", "observe", "auto"] && request.resource.data.scope in ["demo_only", "all"];
+    }
+    // Decisions (one doc per idempotency key): scoped staff read; operations may only close an escalation.
+    match /dispatch_decisions/{id} {
+      allow read: if isEmployee() && sameMun(resource.data);
+      allow create, delete: if false;
+      allow update: if isEmployee() && sameMun(resource.data) && resource.data.status == "open"
+                    && request.resource.data.status in ["resolved", "dismissed"]
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "resolvedBy", "resolvedByName", "resolvedAt", "resolutionNote", "updatedAt"]);
+    }
+    match /dispatch_runs/{id}  { allow read: if isEmployee(); allow write: if false; }
+    match /dispatch_locks/{id} { allow read, write: if false; }
+    // Driver notifications: the driver reads and marks their own as read; staff of the municipality read.
+    match /driver_notifications/{id} {
+      allow read: if (isDriver() && resource.data.driverId == request.auth.uid) || (isEmployee() && sameMun(resource.data));
+      allow update: if isDriver() && resource.data.driverId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["read", "readAt"]);
+      allow create, delete: if false;
+    }
     match /decision_recommendations/{id} { allow read: if isEmployee() && sameMun(resource.data); allow create, update: if isEmployee() && sameMun(request.resource.data); allow delete: if false; }
 
     match /bins/{id} {

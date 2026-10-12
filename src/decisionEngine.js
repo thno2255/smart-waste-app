@@ -12,9 +12,9 @@
  * ─────────────────────────────────────────────────────────────────────
  */
 
-import { THRESHOLDS, STATE_LABELS, normalizeNeighborhoodName } from "./config";
-import { predictFullTime } from "./prediction";
-import { getSensorHealth } from "./sensorHealth";
+import { THRESHOLDS, STATE_LABELS, normalizeNeighborhoodName } from "./config.js";
+import { predictFullTime } from "./prediction.js";
+import { getSensorHealth } from "./sensorHealth.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 

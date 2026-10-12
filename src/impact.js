@@ -8,7 +8,7 @@
  * no React.
  * ─────────────────────────────────────────────────────────────────────
  */
-import { haversineDistanceKm, orderStopsFrom, getRouteEligibility } from "./decisionEngine";
+import { haversineDistanceKm, orderStopsFrom, getRouteEligibility } from "./decisionEngine.js";
 
 export const ASSUMPTIONS = {
   truckFuelLitersPerKm: 0.35,   // typical 6–8 ton rear-loader in urban stop-and-go traffic

@@ -237,6 +237,43 @@ await test("optimization runs + simulation scenarios: scoped creators, scoped re
   await assertFails(getDoc(doc(ctx("cit1", "citizen"), "simulation_scenarios/Z1")));
 });
 
+
+await test("dispatch: only the Amanah switches the mode; decisions/runs are server-written; operations may only close an open escalation of their municipality", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    const db = c.firestore();
+    await setDoc(doc(db, "dispatch_decisions/E1"), { municipalityId: "east", type: "escalate", status: "open", reason: "x" });
+    await setDoc(doc(db, "dispatch_decisions/X1"), { municipalityId: "east", type: "create_assign", status: "executed" });
+    await setDoc(doc(db, "dispatch_decisions/N1"), { municipalityId: "north", type: "escalate", status: "open" });
+    await setDoc(doc(db, "dispatch_runs/R1"), { trigger: "cron" });
+    await setDoc(doc(db, "driver_notifications/DN1"), { driverId: "drv1", municipalityId: "east", read: false, title: "x" });
+  });
+  await assertSucceeds(setDoc(doc(ctx("admin1", "executive"), "dispatch_settings/config"), { mode: "auto", scope: "demo_only" }));
+  await assertFails(setDoc(doc(ctx("admin1", "executive"), "dispatch_settings/config"), { mode: "yolo", scope: "demo_only" }));
+  await assertFails(setDoc(doc(ctx("mgrE", "manager"), "dispatch_settings/config"), { mode: "auto", scope: "all" }));
+  await assertFails(setDoc(doc(ctx("emp1", "employee"), "dispatch_settings/config"), { mode: "off", scope: "all" }));
+  await assertSucceeds(getDoc(doc(ctx("mgrE", "manager"), "dispatch_settings/config")));
+  await assertFails(getDoc(doc(ctx("drv1", "driver"), "dispatch_settings/config")));
+  const mgr = ctx("mgrE", "manager");
+  await assertFails(setDoc(doc(mgr, "dispatch_decisions/Z"), { municipalityId: "east", status: "executed" }));            // never client-created
+  await assertFails(updateDoc(doc(mgr, "dispatch_decisions/X1"), { status: "resolved" }));                                  // only open escalations
+  await assertFails(updateDoc(doc(mgr, "dispatch_decisions/E1"), { status: "executed" }));
+  await assertFails(updateDoc(doc(mgr, "dispatch_decisions/E1"), { status: "resolved", reason: "rewritten" }));             // cannot rewrite history
+  await assertSucceeds(updateDoc(doc(mgr, "dispatch_decisions/E1"), { status: "resolved", resolvedBy: "mgrE", resolvedAt: "now", resolutionNote: "أسند يدويًا" }));
+  await assertFails(getDoc(doc(mgr, "dispatch_decisions/N1")));
+  await assertFails(updateDoc(doc(ctx("empN", "employee"), "dispatch_decisions/E1"), { status: "dismissed" }));
+  await assertFails(deleteDoc(doc(ctx("admin1", "executive"), "dispatch_decisions/E1")));
+  await assertFails(setDoc(doc(ctx("admin1", "executive"), "dispatch_runs/R2"), { trigger: "fake" }));
+  await assertFails(getDoc(doc(ctx("admin1", "executive"), "dispatch_locks/east")));
+  // driver notifications: own only, mark-as-read only
+  await assertSucceeds(getDoc(doc(ctx("drv1", "driver"), "driver_notifications/DN1")));
+  await assertFails(getDoc(doc(ctx("drv2", "driver"), "driver_notifications/DN1")));
+  await assertSucceeds(updateDoc(doc(ctx("drv1", "driver"), "driver_notifications/DN1"), { read: true, readAt: "now" }));
+  await assertFails(updateDoc(doc(ctx("drv1", "driver"), "driver_notifications/DN1"), { title: "hack" }));
+  await assertFails(setDoc(doc(ctx("drv1", "driver"), "driver_notifications/DN2"), { driverId: "drv1", title: "fake" }));
+  await assertFails(getDocs(collection(ctx("drv1", "driver"), "driver_notifications")));
+  await assertSucceeds(getDocs(query(collection(ctx("drv1", "driver"), "driver_notifications"), where("driverId", "==", "drv1"))));
+});
+
 await env.cleanup();
 console.log(`\nRules tests: ${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);

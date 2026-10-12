@@ -14,7 +14,7 @@ import { useState, useEffect } from "react";
 import {
   collection, addDoc, updateDoc, deleteDoc,
   doc, onSnapshot, query, where, orderBy,
-  getDoc, getDocs, setDoc, writeBatch, arrayUnion,
+  getDoc, getDocs, setDoc, writeBatch, arrayUnion, limit,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { getStatus, getStatusColor, getBinStatus, THRESHOLDS } from "./config";
@@ -1295,3 +1295,68 @@ export const returnResourceTransfer = async (transfer, actor) => {
 export const saveOptimizationRun = (data, actor) => addItem(COLLECTIONS.OPTIMIZATION_RUNS, { ...data, createdBy: actor?.uid || "", createdByName: actor?.name || "" });
 export const saveSimulationScenario = (data, actor) => addItem(COLLECTIONS.SIMULATION_SCENARIOS, { ...data, createdBy: actor?.uid || "", createdByName: actor?.name || "" });
 export const saveDecisionRecommendation = (data, actor) => addItem(COLLECTIONS.DECISION_RECOMMENDATIONS, { ...data, createdBy: actor?.uid || "", status: "open" });
+
+// ══════════════════════════════════════════════════════════════════════
+// 28. Autonomous dispatch — settings, decisions, runs, driver notifications.
+//     Decisions/runs/notifications are written ONLY by the server runner
+//     (api/_lib/dispatchRunner.mjs). The client reads them, the Amanah switches
+//     the mode, and operations close escalations.
+// ══════════════════════════════════════════════════════════════════════
+COLLECTIONS.DISPATCH_SETTINGS = "dispatch_settings";
+COLLECTIONS.DISPATCH_DECISIONS = "dispatch_decisions";
+COLLECTIONS.DISPATCH_RUNS = "dispatch_runs";
+COLLECTIONS.DRIVER_NOTIFICATIONS = "driver_notifications";
+
+export function useDispatchSettings(enabled = true) {
+  const [settings, setSettings] = useState(null);
+  const [loading, setLoading] = useState(!!enabled);
+  useEffect(() => {
+    if (!enabled) return;
+    return onSnapshot(doc(db, COLLECTIONS.DISPATCH_SETTINGS, "config"), (snap) => { setSettings(snap.exists() ? snap.data() : {}); setLoading(false); }, () => { setSettings({}); setLoading(false); });
+  }, [enabled]);
+  return { settings, loading };
+}
+export function useDispatchDecisions(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.DISPATCH_DECISIONS, { enabled, municipalityId, sortField: "updatedAt" });
+  return { decisions: data, loading, error };
+}
+export function useDispatchRuns(enabled = true, max = 20) {
+  const [runs, setRuns] = useState([]);
+  useEffect(() => {
+    if (!enabled) return;
+    return onSnapshot(query(collection(db, COLLECTIONS.DISPATCH_RUNS), orderBy("startedAt", "desc"), limit(max)), (snap) => setRuns(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), () => setRuns([]));
+  }, [enabled, max]);
+  return { runs };
+}
+export function useDriverNotifications(driverId) {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    if (!driverId) return;
+    return onSnapshot(query(collection(db, COLLECTIONS.DRIVER_NOTIFICATIONS), where("driverId", "==", driverId)), (snap) => setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))), () => setItems([]));
+  }, [driverId]);
+  return { notifications: items };
+}
+export const markDriverNotificationRead = (id) => updateDoc(doc(db, COLLECTIONS.DRIVER_NOTIFICATIONS, id), { read: true, readAt: ts() });
+
+/** The Amanah switches the dispatch mode / scope / thresholds (rules: executive only). Audited. */
+export const saveDispatchSettings = async (data, actor) => {
+  await setDoc(doc(db, COLLECTIONS.DISPATCH_SETTINGS, "config"), { ...data, updatedAt: ts(), updatedBy: actor?.uid || "", updatedByName: actor?.name || "" }, { merge: true });
+  await addDoc(collection(db, COLLECTIONS.AUDIT_LOG), { action: "dispatch_settings_changed", actorId: actor?.uid || "", actorName: actor?.name || "", details: { mode: data.mode, scope: data.scope, periodMinutes: data.periodMinutes }, createdAt: ts() });
+};
+/** Operations closes an escalation (resolved = handled, dismissed = not needed). */
+export const resolveDispatchDecision = (id, actor, status, note = "") =>
+  updateDoc(doc(db, COLLECTIONS.DISPATCH_DECISIONS, id), { status, resolvedBy: actor?.uid || "", resolvedByName: actor?.name || "", resolvedAt: ts(), resolutionNote: note, updatedAt: ts() });
+
+/**
+ * Asks the SERVER to run a dispatch cycle now (urgent event / manual). The browser only sends the
+ * request with the user's ID token; all decisions and writes happen server-side.
+ */
+export async function requestDispatchCycle({ municipalityId = null, trigger = "manual" } = {}) {
+  const { auth } = await import("./firebase");
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) throw new Error("غير مسجل الدخول");
+  const res = await fetch("/api/dispatch/run", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ municipalityId, trigger }) });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+  return out;
+}

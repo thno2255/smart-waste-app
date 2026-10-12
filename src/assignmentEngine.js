@@ -19,9 +19,9 @@
  * distances/durations in the output come from inputs (OSRM or geometry).
  * ─────────────────────────────────────────────────────────────────────
  */
-import { eligibleDriversFor, locationFreshness, ACTIVE_ROUTE_STATUSES } from "./fleetEngine";
-import { haversineDistanceKm, estimateTravelMinutes } from "./decisionEngine";
-import { ASSUMPTIONS } from "./impact";
+import { eligibleDriversFor, locationFreshness, ACTIVE_ROUTE_STATUSES } from "./fleetEngine.js";
+import { haversineDistanceKm, estimateTravelMinutes } from "./decisionEngine.js";
+import { ASSUMPTIONS } from "./impact.js";
 
 /** Relative weights (sum 100). Documented so a reviewer can challenge them. */
 export const WEIGHTS = { travel: 45, capacity: 25, workload: 20, locationConfidence: 10 };

@@ -130,6 +130,14 @@ import {
   saveSimulationScenario,
   setVehicleStatusWithHistory,
   withdrawOpenSupportRequests,
+  useDispatchSettings,
+  useDispatchDecisions,
+  useDispatchRuns,
+  useDriverNotifications,
+  markDriverNotificationRead,
+  saveDispatchSettings,
+  resolveDispatchDecision,
+  requestDispatchCycle,
   useSupportRequests,
   useResourceTransfers,
   createSupportRequest,
@@ -180,6 +188,8 @@ import { INCIDENT_TYPES, canConfirmCollection, routeProgress, nextStopFor, reins
 import { createOfflineQueue } from "./offlineQueue";
 import { DEFAULT_SIM_CONFIG, SIM_EVENTS } from "./simulation/simulationEngine";
 import { buildCollectionPlan, explainRoute, suggestAdditions } from "./collectionPlanner";
+import { makeThermalAlertFor, makeBinContext } from "./binContext";
+import { DEFAULT_DISPATCH_SETTINGS, DISPATCH_MODES, DISPATCH_SCOPES, ACTION_LABELS, ESCALATION_LABELS } from "./autoDispatchEngine";
 import { simulateDecision, SCENARIO_TYPES } from "./decisionSimulator";
 import { municipalityPressure, recommendTransfers, compareMunicipalities, CREW_BINS_PER_HOUR } from "./interMunicipalEngine";
 import { installSimulation, subscribeSimState, tickSimulation, setSimulationStatus, fireSimulationEvent, realIntervalMs, resetSimulation } from "./simulation/simulationRunner";
@@ -1004,15 +1014,15 @@ const CircularGauge = ({ value, size = 80, strokeWidth = 6, color }) => {
   );
 };
 
-const StatCard = ({ title, value, unit, icon, gradient, trend }) => (
-  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: "20px 22px", position: "relative", overflow: "hidden" }}>
-    <div style={{ position: "absolute", top: 0, right: 0, width: 80, height: 80, background: gradient, opacity: 0.1, borderRadius: "0 16px 0 80px" }} />
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+// Flat metric card (no decorative gradients): the icon sits on a neutral tile; `gradient` is kept for API compatibility only.
+const StatCard = ({ title, value, unit, icon, trend }) => (
+  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
       <div>
-        <div style={{ fontSize: 13, color: C.muted, marginBottom: 6 }}>{title}</div>
-        <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{value}{unit && <span style={{ fontSize: 14, color: C.muted }}> {unit}</span>}</div>
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 24, fontWeight: 800, color: C.text }}>{value}{unit && <span style={{ fontSize: 13, color: C.muted }}> {unit}</span>}</div>
       </div>
-      <div style={{ width: 44, height: 44, borderRadius: 12, background: gradient, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>{icon}</div>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: C.brand, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{icon}</div>
     </div>
     {trend !== undefined && (
       <div style={{ fontSize: 12, color: trend > 0 ? C.accent : C.danger, marginTop: 8 }}>{trend > 0 ? "▲" : "▼"} {Math.abs(trend)}% عن الشهر الماضي</div>
@@ -1036,8 +1046,8 @@ const StatusBadge = ({ status }) => {
 };
 
 const Card = ({ children, title, icon, style: sx }) => (
-  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 22, ...sx }}>
-    {title && <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>{icon}{title}</div>}
+  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 18, ...sx }}>
+    {title && <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>{icon}{title}</div>}
     <div style={{ position: "relative", width: "100%" }}>{children}</div>
   </div>
 );
@@ -1087,6 +1097,121 @@ const EmptyState = ({ icon, title, desc }) => (
     <div style={{ fontSize: 34, marginBottom: 10, opacity: 0.6 }}>{icon}</div>
     <div style={{ fontSize: 14, fontWeight: 700, color: C.muted, marginBottom: 4 }}>{title}</div>
     {desc && <div style={{ fontSize: 12, color: C.dim }}>{desc}</div>}
+  </div>
+);
+
+
+// ======================== DESIGN SYSTEM (shared primitives) ========================
+// One vocabulary for every page: spacing 4/8/12/16/24 · type 11.5 meta / 13 body / 15 section / 18 page / 22 numbers
+// · radius 10–12 · status colours only for states (never decoration) · no gradients or motion.
+const SP = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 };
+const FS = { meta: 11.5, body: 13, section: 15, page: 18, num: 22 };
+const TONE = { danger: C.danger, warning: C.warning, info: C.info, ok: C.accent, neutral: C.muted, purple: C.purple };
+
+const Btn = ({ variant = "secondary", tone, children, style: sx, ...rest }) => {
+  const color = tone ? TONE[tone] || tone : C.brand;
+  const base = { padding: "8px 14px", borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: rest.disabled ? "not-allowed" : "pointer", fontFamily: ARABIC_FONT, display: "inline-flex", alignItems: "center", gap: 6, opacity: rest.disabled ? 0.6 : 1, whiteSpace: "nowrap" };
+  const v = variant === "primary" ? { background: color, color: "#fff", border: `1px solid ${color}` }
+    : variant === "ghost" ? { background: "transparent", color: tone ? color : C.muted, border: "1px solid transparent" }
+    : { background: C.card, color: tone ? color : C.text, border: `1px solid ${tone ? color + "66" : C.border}` };
+  return <button {...rest} style={{ ...base, ...v, ...sx }}>{children}</button>;
+};
+const Badge = ({ tone = "neutral", children, solid = false }) => {
+  const c = TONE[tone] || tone;
+  return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: solid ? c : c + "18", color: solid ? "#fff" : c, border: `1px solid ${c}40`, whiteSpace: "nowrap" }}>{children}</span>;
+};
+/** Every page answers: what is the situation? what needs my attention? what is the next action? */
+const PageHeader = ({ title, status, attention, attentionTone = "warning", onAttention, actions, children }) => (
+  <div style={{ display: "flex", flexDirection: "column", gap: SP.sm, marginBottom: SP.xs }}>
+    {(title || actions) && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: SP.md, flexWrap: "wrap" }}>
+      {title ? <div style={{ fontSize: FS.page, fontWeight: 800, color: C.text }}>{title}</div> : <span />}
+      {actions && <div style={{ display: "flex", gap: SP.sm, flexWrap: "wrap" }}>{actions}</div>}
+    </div>}
+    {(status || attention) && (
+      <div style={{ display: "flex", gap: SP.sm, flexWrap: "wrap", fontSize: FS.body }}>
+        {status && <span style={{ color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "6px 10px" }}><b style={{ color: C.text }}>الوضع:</b> {status}</span>}
+        {attention && <span onClick={onAttention} role={onAttention ? "button" : undefined} style={{ color: TONE[attentionTone], background: TONE[attentionTone] + "12", border: `1px solid ${TONE[attentionTone]}40`, borderRadius: 10, padding: "6px 10px", cursor: onAttention ? "pointer" : "default", fontWeight: 700 }}>{attention}</span>}
+      </div>
+    )}
+    {children}
+  </div>
+);
+const Section = ({ title, count, actions, children, collapsible = false, defaultOpen = true, hint }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: open ? 16 : "12px 16px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: SP.sm, marginBottom: open ? SP.md : 0, flexWrap: "wrap" }}>
+        <button onClick={() => collapsible && setOpen((o) => !o)} aria-expanded={open} style={{ display: "flex", alignItems: "center", gap: SP.sm, background: "none", border: "none", padding: 0, cursor: collapsible ? "pointer" : "default", fontFamily: ARABIC_FONT, color: C.text, fontSize: FS.section, fontWeight: 700 }}>
+          {collapsible && <span style={{ color: C.dim, fontSize: 12, width: 12 }}>{open ? "▾" : "◂"}</span>}
+          {title}{count != null && <Badge tone="neutral">{count}</Badge>}
+        </button>
+        {actions && open && <div style={{ display: "flex", gap: SP.sm, flexWrap: "wrap" }}>{actions}</div>}
+      </div>
+      {open && hint && <div style={{ fontSize: FS.meta, color: C.dim, marginTop: -6, marginBottom: SP.md }}>{hint}</div>}
+      {open && children}
+    </section>
+  );
+};
+const KpiTile = ({ label, value, unit, tone = "neutral", hint, onClick }) => (
+  <div onClick={onClick} role={onClick ? "button" : undefined} style={{ background: C.card, border: `1px solid ${C.border}`, borderInlineStart: `3px solid ${TONE[tone] || tone}`, borderRadius: 10, padding: "10px 14px", cursor: onClick ? "pointer" : "default", minWidth: 0 }}>
+    <div style={{ fontSize: FS.num, fontWeight: 800, color: tone === "neutral" ? C.text : TONE[tone] || tone }}>{value}{unit && <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}> {unit}</span>}</div>
+    <div style={{ fontSize: 12, color: C.muted }}>{label}</div>
+    {hint && <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>{hint}</div>}
+  </div>
+);
+const KpiRow = ({ children }) => <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: SP.sm }}>{children}</div>;
+/** Prioritised "needs attention" list: one line per item, an action button, details on demand. */
+const AttentionList = ({ items = [], empty = "لا شيء يحتاج انتباهك الآن", max = 6 }) => {
+  const [all, setAll] = useState(false);
+  const [openId, setOpenId] = useState(null);
+  if (items.length === 0) return <div style={{ fontSize: FS.body, color: C.accent, padding: "6px 2px" }}>✓ {empty}</div>;
+  const shown = all ? items : items.slice(0, max);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {shown.map((it) => (
+        <div key={it.id} style={{ border: `1px solid ${C.border}`, borderInlineStart: `3px solid ${TONE[it.tone] || C.border}`, borderRadius: 10, padding: "8px 12px", background: C.card }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: SP.sm, flexWrap: "wrap" }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: FS.body, fontWeight: 700, color: C.text }}>{it.title}</div>
+              {it.meta && <div style={{ fontSize: FS.meta, color: C.muted }}>{it.meta}</div>}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              {it.badge}
+              {it.detail && <Btn variant="ghost" onClick={() => setOpenId(openId === it.id ? null : it.id)} aria-expanded={openId === it.id}>{openId === it.id ? "إخفاء" : "التفاصيل"}</Btn>}
+              {it.actions}
+              {it.actionLabel && <Btn variant="primary" tone={it.tone === "danger" ? "danger" : undefined} onClick={it.onAction}>{it.actionLabel}</Btn>}
+            </div>
+          </div>
+          {openId === it.id && it.detail && <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, marginTop: 6, borderTop: `1px dashed ${C.border}`, paddingTop: 6 }}>{it.detail}</div>}
+        </div>
+      ))}
+      {items.length > max && <Btn variant="ghost" onClick={() => setAll((a) => !a)} style={{ alignSelf: "flex-start" }}>{all ? "عرض أقل" : `عرض الكل (${items.length})`}</Btn>}
+    </div>
+  );
+};
+const Disclosure = ({ summary = "التفاصيل", children, defaultOpen = false }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} style={{ background: "none", border: "none", padding: 0, color: C.info, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT }}>{open ? "▾" : "◂"} {summary}</button>
+      {open && <div style={{ marginTop: 6 }}>{children}</div>}
+    </div>
+  );
+};
+/** A page that groups related views as tabs (replaces separate sidebar entries). */
+const HubPage = ({ tabs, value, onChange, children }) => (
+  <div style={{ display: "flex", flexDirection: "column", gap: SP.md }}>
+    <Tabs tabs={tabs} value={value} onChange={onChange} />
+    {children}
+  </div>
+);
+const Tabs = ({ tabs, value, onChange }) => (
+  <div role="tablist" style={{ display: "flex", gap: 4, borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
+    {tabs.map((t) => (
+      <button key={t.key} role="tab" aria-selected={value === t.key} onClick={() => onChange(t.key)} style={{ padding: "8px 14px", border: "none", borderBottom: `2px solid ${value === t.key ? C.brand : "transparent"}`, background: "transparent", color: value === t.key ? C.brand : C.muted, fontWeight: value === t.key ? 800 : 600, fontSize: FS.body, cursor: "pointer", fontFamily: ARABIC_FONT, marginBottom: -1 }}>
+        {t.label}{t.count ? <span style={{ marginInlineStart: 6 }}><Badge tone={t.tone || "neutral"}>{t.count}</Badge></span> : null}
+      </button>
+    ))}
   </div>
 );
 
@@ -1213,6 +1338,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
   const bins = useMemo(() => { if (!municipalityFilter) return binsAll; const ids = new Set(neighborhoods.map((n) => n.id)); return binsAll.filter((b) => ids.has(b.neighborhoodId)); }, [binsAll, neighborhoods, municipalityFilter]);
   const routes = useMemo(() => { if (!municipalityFilter) return routesAll; const ids = new Set(neighborhoods.map((n) => n.id)); return routesAll.filter((r) => r.municipalityId === municipalityFilter || (r.neighborhoodIds || []).some((id) => ids.has(id))); }, [routesAll, neighborhoods, municipalityFilter]);
   const [horizon, setHorizon] = useState(0);
+  const [panelOpen, setPanelOpen] = useState(!compact);
   const [selectedKey, setSelectedKey] = useState(initialSelectedKey);
   const [flyTarget, setFlyTarget] = useState(null);
 
@@ -1314,42 +1440,22 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
   }
 
   const routeStatusNote = (route) => route ? `${ROUTE_STATUS_LABELS[route.status] || route.status}` : null;
-  const pill = (active, color) => ({
-    padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
-    border: `1px solid ${active ? color : C.border}`, background: active ? color + "20" : "transparent",
-    color: active ? color : C.muted, fontFamily: ARABIC_FONT,
-  });
 
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center" }}>
-        {HORIZONS.map((h) => (
-          <button key={h.key} onClick={() => setHorizon(h.key)} style={pill(horizon === h.key, C.info)}>{h.key === 0 ? "📡 " : "🔮 "}{h.label}</button>
+      <div role="toolbar" aria-label="أدوات الخريطة" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center", fontSize: 12, color: C.muted }}>
+        {[["الوقت", horizon, (v) => setHorizon(Number(v)), HORIZONS.map((h) => [h.key, h.label])], ["الطبقة", layer, setLayer, MAP_LAYERS.map((l) => [l.key, l.label.replace(/^\S+\s/, "")])], ["التصفية", filter, setFilter, MAP_FILTERS.map((f) => [f.key, f.label])]].map(([label, value, onChange, opts]) => (
+          <label key={label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>{label}
+            <select value={value} onChange={(e) => onChange(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 12.5, fontFamily: ARABIC_FONT }}>
+              {opts.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </label>
         ))}
-        {forecastSummary && (
-          <span style={{ fontSize: 11, color: C.info }}>
-            قيم متوقعة لـ {forecastSummary.predicted} حاوية · {forecastSummary.missing} بلا بيانات كافية للتنبؤ (تظهر رمادية)
-          </span>
-        )}
+        {forecastSummary && <Badge tone="info">متوقعة لـ {forecastSummary.predicted} حاوية · {forecastSummary.missing} بلا بيانات كافية</Badge>}
+        {filter !== "all" && <Badge tone="neutral">{visibleBins.length} حاوية · {neighborhoodStats.filter((n) => neighborhoodMatchesFilter(filter, n)).length} حي</Badge>}
+        <span style={{ marginInlineStart: "auto" }}><Btn variant="ghost" aria-expanded={panelOpen} onClick={() => setPanelOpen((o) => !o)}>{panelOpen ? "إخفاء لوحة التفاصيل" : "لوحة التفاصيل"}</Btn></span>
       </div>
-      {horizon > 0 && (
-        <div style={{ marginBottom: 8, fontSize: 11, color: C.dim }}>
-          🔮 الألوان الآن تمثل الامتلاء <b style={{ color: C.info }}>المتوقع {horizonLabel}</b> من محرك التنبؤ (معدل الامتلاء الفعلي لكل حاوية). الحاويات المتوقعة تُرسم بحلقة متقطعة، ولا تُختلق توقعات عند نقص البيانات.
-        </div>
-      )}
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center" }}>
-        <span style={{ fontSize: 11, color: C.dim }}>الطبقة:</span>
-        {MAP_LAYERS.map((l) => (
-          <button key={l.key} onClick={() => setLayer(l.key)} style={pill(layer === l.key, C.purple)}>{l.label}</button>
-        ))}
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-        {MAP_FILTERS.map((f) => (
-          <button key={f.key} onClick={() => setFilter(f.key)} style={pill(filter === f.key, C.accent)}>{f.label}</button>
-        ))}
-        {filter !== "all" && <span style={{ fontSize: 11, color: C.dim, alignSelf: "center" }}>{visibleBins.length} حاوية · {neighborhoodStats.filter((n) => neighborhoodMatchesFilter(filter, n)).length} حي مطابق</span>}
-      </div>
+      {horizon > 0 && <div style={{ marginBottom: 8, fontSize: 11.5, color: C.info }}>الألوان تمثل الامتلاء المتوقع {horizonLabel} من محرك التنبؤ؛ الحاويات بلا بيانات كافية تظهر رمادية.</div>}
 
       {!hasAnyGeo && neighborhoods.length > 0 && (
         <div style={{ marginBottom: 10, fontSize: 12, color: C.warning, background: C.warning + "15", border: `1px solid ${C.warning}40`, borderRadius: 10, padding: "8px 12px" }}>
@@ -1357,8 +1463,8 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 14, flexWrap: compact ? "nowrap" : "wrap-reverse" }}>
-        <div style={{ flex: "1 1 320px", minWidth: 260, height, borderRadius: 14, overflow: "hidden", border: `1px solid ${C.border}` }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: "999 1 420px", minWidth: 260, height, borderRadius: 12, overflow: "hidden", border: `1px solid ${C.border}` }}>
           <MapContainer center={BURAIDAH_CENTER} zoom={12} style={{ width: "100%", height: "100%", background: C.bg }} scrollWheelZoom preferCanvas>
             <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
             <FlyTo target={flyTarget} />
@@ -1461,7 +1567,7 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
           </MapContainer>
         </div>
 
-        <div style={{ flex: "1 1 240px", minWidth: 220 }}>
+        {(panelOpen || selectedStats) && <div style={{ flex: "1 1 300px", maxWidth: "100%", minWidth: 260 }}>
           <div style={{ fontSize: 11, color: C.dim, marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 10 }}>
             {layer === "municipalities" ? MUNICIPALITIES.map((m) => (
               <span key={m.id} style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 0, borderTop: `3px dashed ${m.color}`, display: "inline-block" }} />{m.shortAr}</span>
@@ -1548,10 +1654,10 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
             </div>
           )}
 
-          <div style={{ marginTop: 10, fontSize: 10.5, color: C.dim, lineHeight: 1.8 }}>
+          <div style={{ marginTop: 10 }}><Disclosure summary="كيف يُحسب لون الحي؟"><div style={{ fontSize: 11, color: C.dim, lineHeight: 1.8 }}>
             لون الحي يُحسب من حاوياته: نسبة وعدد الحاويات الحرجة ومتوسط الامتلاء (القراءات غير المتصلة/الخاطئة مستبعدة من المتوسط ومعدودة). حدود الأحياء من OpenStreetMap (حي السلامة موضع تقريبي)، والمواقع المعلَّمة "(موقع تقريبي)" لحاويات بلا إحداثيات مسجلة. خط الجولة على الطرق الفعلية عبر OSRM عند توفره.
-          </div>
-        </div>
+          </div></Disclosure></div>
+        </div>}
       </div>
     </div>
   );
@@ -1770,11 +1876,8 @@ const MapPage = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadin
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div>
-        <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>الخريطة التشغيلية لمدينة بريدة</div>
-        <div style={{ fontSize: 12, color: C.dim, marginTop: 2 }}>حالة الأحياء والحاويات الذكية لحظيًا — اضغط على حي لعرض الجولة المرتبطة به على الخريطة.</div>
-      </div>
-      <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={profiles} height={620} onViewBins={onViewBins} onAddToRoute={onAddToRoute} onOpenRoute={onOpenRoute} initialSelectedKey={initialSelectedKey} />
+      <div style={{ fontSize: 12.5, color: C.muted }}>اضغط على حي لعرض حالته والجولة المرتبطة به. أدوات التصفية في الشريط أعلى الخريطة، والتفاصيل في اللوحة الجانبية القابلة للإخفاء.</div>
+      <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={profiles} height="max(480px, calc(100vh - 230px))" onViewBins={onViewBins} onAddToRoute={onAddToRoute} onOpenRoute={onOpenRoute} initialSelectedKey={initialSelectedKey} />
     </div>
   );
 };
@@ -1878,35 +1981,7 @@ const NeedsCollectionBanner = ({ ranked = [], onShowOnMap, onOpenRoute, onGoToRo
   );
 };
 
-/** Shared helper: thermal-alert lookup for a neighborhood name from the fire_sensors feed. */
-const makeThermalAlertFor = (fireSensors = []) => (name) =>
-  fireSensors.some((s) => normalizeNeighborhoodName(s.district) === normalizeNeighborhoodName(name) && (s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط"));
-
-/**
- * Per-bin scoring context shared by every page: thermal alert for the bin's
- * neighborhood + open citizen reports pointing at the bin (or, for reports
- * without a bin id, at its neighborhood). Keeps all pages scoring identically.
- */
-const makeBinContext = (fireSensors = [], citizenReports = [], neighborhoods = []) => {
-  const thermalFor = makeThermalAlertFor(fireSensors);
-  const open = citizenReports.filter((r) => r.status !== "تم الحل" && r.status !== "مرفوض" && r.status !== "مغلق");
-  const byBin = {}, byNeighborhoodKey = {};
-  for (const r of open) {
-    if (r.binId) byBin[r.binId] = (byBin[r.binId] || 0) + 1;
-    else if (r.district) { const k = normalizeNeighborhoodName(r.district); byNeighborhoodKey[k] = (byNeighborhoodKey[k] || 0) + 1; }
-  }
-  const nameById = Object.fromEntries(neighborhoods.map((n) => [n.id, n.name]));
-  return {
-    forBin: (bin) => {
-      const name = nameById[bin.neighborhoodId] || "";
-      return { thermalAlert: name ? thermalFor(name) : false, citizenReportCount: byBin[bin.id] || 0 };
-    },
-    forNeighborhoodName: (name) => ({ thermalAlert: thermalFor(name), citizenReportCount: byNeighborhoodKey[normalizeNeighborhoodName(name)] || 0 }),
-    reportCountForBin: (binId) => byBin[binId] || 0,
-    reportCountForNeighborhood: (name) => (byNeighborhoodKey[normalizeNeighborhoodName(name)] || 0) + open.filter((r) => r.binId && nameById[r.binNeighborhoodId || ""] === name).length,
-    openCount: open.length,
-  };
-};
+// makeThermalAlertFor / makeBinContext live in ./binContext (shared with the server-side dispatch runner).
 
 /** Centroid of a neighborhood group's real polygon (null when the name has no polygon). */
 const centroidForGroup = (group) => {
@@ -1945,318 +2020,122 @@ const ImpactCard = ({ impact, compact = false, accent = C.accent }) => {
   );
 };
 
-// ======================== DASHBOARD ========================
-const DashboardPage = ({ weeklyData, monthlyTrend, alerts, neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], loadingBins, loadingNeighborhoods, onViewBins, onViewRoutes, onOpenRoute, onShowOnMap }) => {
-  const readingsByBin = useMemo(() => {
-    const map = {};
-    for (const r of recentReadings) { if (!r.bin_id) continue; (map[r.bin_id] ||= []).push(r); }
-    return map;
-  }, [recentReadings]);
+// ======================== DASHBOARD (operations: attention → few KPIs → map → details on demand) ========================
+const DashboardPage = ({ alerts = [], neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], profiles = [], incidents = [], loggedInUser, loadingBins, loadingNeighborhoods, onViewBins, onOpenRoute, onShowOnMap, onNavigate }) => {
+  const scope = scopeFor(loggedInUser);
+  const { decisions } = useDispatchDecisions(true, scope.all ? null : scope.municipalityId);
+  const { settings: dispatchSettings } = useDispatchSettings(true);
+  const dispatchAuto = dispatchSettings?.mode === "auto";
+  const go = (page, extra) => onNavigate && onNavigate(page, extra);
 
-  const isThermalAlert = (name) =>
-    fireSensors.some((s) => normalizeNeighborhoodName(s.district) === normalizeNeighborhoodName(name) && (s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط"));
-
+  const readingsByBin = useMemo(() => { const map = {}; for (const r of recentReadings) { if (r.bin_id) (map[r.bin_id] ||= []).push(r); } return map; }, [recentReadings]);
   const ctx = useMemo(() => makeBinContext(fireSensors, citizenReports, neighborhoods), [fireSensors, citizenReports, neighborhoods]);
-  const scoredBins = useMemo(() => bins.map((bin) => {
-    const n = neighborhoods.find((n2) => n2.id === bin.neighborhoodId);
-    return { bin, neighborhood: n, priority: getBinPriority(bin, null, readingsByBin[bin.id] || [], ctx.forBin(bin)) };
-  }), [bins, neighborhoods, readingsByBin, ctx]);
-
+  const scoredBins = useMemo(() => bins.map((bin) => ({ bin, neighborhood: neighborhoods.find((n) => n.id === bin.neighborhoodId), priority: getBinPriority(bin, null, readingsByBin[bin.id] || [], ctx.forBin(bin)) })), [bins, neighborhoods, readingsByBin, ctx]);
   const totalBins = bins.length;
   const criticalBins = scoredBins.filter((x) => x.priority.tier === "critical");
-  const warningBins = scoredBins.filter((x) => x.priority.tier === "high" || x.priority.tier === "medium");
-  const normalBins = scoredBins.filter((x) => x.priority.tier === "low");
   const offlineBins = bins.filter((b) => { const c = getSensorConnectivity(b); return c === "offline" || c === "fault"; });
-
-  const fillValues = bins.map((b) => b.lastFillLevelPercent).filter((v) => v != null);
+  const rankedNeighborhoods = useMemo(() => rankNeighborhoodsForCollection(groupNeighborhoodsByName(neighborhoods, bins), scoredBins, routes, { thermalAlertFor: makeThermalAlertFor(fireSensors), centroidFor: centroidForGroup }), [neighborhoods, bins, scoredBins, routes, fireSensors]);
+  const withoutRoute = rankedNeighborhoods.filter((r) => !r.openRoute);
+  const suggested = routes.filter((r) => r.status === "suggested");
+  const approved = routes.filter((r) => r.status === "approved");
+  const running = routes.filter((r) => r.status === "in_progress");
+  const busyDrivers = new Set([...approved, ...running].map((r) => r.driverId).filter(Boolean));
+  const freeDrivers = profiles.filter((p) => p.shiftStatus === "on_shift" && p.availability !== "unavailable" && !busyDrivers.has(p.uid)).length;
+  const openIncidents = incidents.filter((i) => i.status === "open");
+  const openReports = citizenReports.filter((r) => r.status !== "تم الحل" && r.status !== "مرفوض" && r.status !== "مغلق");
+  const thermal = rankedNeighborhoods.filter((r) => r.thermalAlert);
+  const escalations = decisions.filter((d) => d.type === "escalate" && d.status === "open");
+  const fillValues = bins.map((b) => b.lastFillLevelPercent).filter((v) => v != null && v <= 100);
   const avgFill = fillValues.length ? Math.round(fillValues.reduce((a, v) => a + v, 0) / fillValues.length) : null;
-
-  const fillDistribution = [
-    { name: "0-30%", value: bins.filter((b) => b.lastFillLevelPercent != null && b.lastFillLevelPercent <= 30).length, fill: C.accent },
-    { name: "31-60%", value: bins.filter((b) => b.lastFillLevelPercent > 30 && b.lastFillLevelPercent <= 60).length, fill: C.info },
-    { name: "61-85%", value: bins.filter((b) => b.lastFillLevelPercent > 60 && b.lastFillLevelPercent <= 85).length, fill: C.warning },
-    { name: "86-100%", value: bins.filter((b) => b.lastFillLevelPercent > 85).length, fill: C.danger },
-  ];
-
-  const neighborhoodFillBars = neighborhoods.map((n) => {
-    const nBins = bins.filter((b) => b.neighborhoodId === n.id);
-    const vals = nBins.map((b) => b.lastFillLevelPercent).filter((v) => v != null);
-    return {
-      name: normalizeNeighborhoodName(n.name),
-      متوسط_الامتلاء: vals.length ? Math.round(vals.reduce((a, v) => a + v, 0) / vals.length) : 0,
-    };
-  }).sort((a, b) => b.متوسط_الامتلاء - a.متوسط_الامتلاء).slice(0, 10);
-
-  const criticalList = [...scoredBins]
-    .filter((x) => x.priority.tier === "critical" || x.priority.tier === "high")
-    .sort((a, b) => b.priority.score - a.priority.score)
-    .slice(0, 6);
-
-  // "ماذا نبدأ به الآن؟" (§10) — top-ranked, cross-cutting operational priorities:
-  // critical neighborhoods, soon-to-be-full bins, and active thermal alerts,
-  // merged into one ranked list rather than three separate disconnected widgets.
-  const neighborhoodPriorities = useMemo(() => neighborhoods.map((n) => {
-    const nScored = scoredBins.filter((x) => x.bin.neighborhoodId === n.id);
-    return { neighborhood: n, priority: getNeighborhoodPriority(nScored, { thermalAlert: isThermalAlert(n.name) }) };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [neighborhoods, scoredBins, fireSensors]);
-
-  const nowPriorities = useMemo(() => {
-    const items = [];
-    neighborhoodPriorities
-      .filter((x) => x.priority.tier === "critical" && x.priority.criticalCount > 0)
-      .forEach((x) => items.push({ kind: "neighborhood", score: x.priority.score, text: `${x.neighborhood.name} — ${x.priority.criticalCount} حاوية حرجة` }));
-    scoredBins
-      .filter((x) => x.priority.prediction?.predictionAvailable && x.priority.prediction.hoursToFull <= THRESHOLDS.predictedFullSoonHours)
-      .forEach((x) => items.push({ kind: "bin", score: x.priority.score, text: `${x.bin.name} — متوقع الامتلاء خلال ${x.priority.prediction.hoursToFull.toFixed(1)} ساعة` }));
-    neighborhoodPriorities
-      .filter((x) => x.priority.reasons.some((r) => r.includes("تنبيه حراري")))
-      .forEach((x) => items.push({ kind: "thermal", score: x.priority.score + 5, text: `${x.neighborhood.name} — تنبيه حراري مرتفع` }));
-    return items.sort((a, b) => b.score - a.score).slice(0, 8);
-  }, [neighborhoodPriorities, scoredBins]);
-
-  const suggestedRoutes = routes.filter((r) => r.status === "suggested");
-  const approvedRoutesCount = routes.filter((r) => r.status === "approved").length;
-  const activeRoutesCount = routes.filter((r) => r.status === "in_progress").length;
-
-  // The single "needs collection now" ranking shared with the driver portal —
-  // per real neighborhood (duplicate docs merged), with its linked open route.
-  const rankedNeighborhoods = useMemo(() => {
-    const groups = groupNeighborhoodsByName(neighborhoods, bins);
-    return rankNeighborhoodsForCollection(groups, scoredBins, routes, { thermalAlertFor: makeThermalAlertFor(fireSensors), centroidFor: centroidForGroup });
-  }, [neighborhoods, bins, scoredBins, routes, fireSensors]);
-  const eligibleOutsideRoutes = useMemo(
-    () => rankedNeighborhoods.flatMap((r) => r.eligibleBins).filter((s) => !findOpenRouteForBin(s.bin.id, routes)).length,
-    [rankedNeighborhoods, routes]
-  );
-  const binById = useMemo(() => Object.fromEntries(bins.map((b) => [b.id, b])), [bins]);
   const impact = useMemo(() => computeImpactMetrics(groupNeighborhoodsByName(neighborhoods, bins), scoredBins, routes, { depot: DEFAULT_DEPOT }), [neighborhoods, bins, scoredBins, routes]);
-
   const loading = loadingBins || loadingNeighborhoods;
 
+  // ── What needs attention, ranked: dispatch exceptions → uncovered demand → safety → field → data quality → citizens.
+  const attention = [];
+  for (const d of escalations.slice(0, 6)) attention.push({ id: "esc_" + d.id, tone: ["thermal", "vehicle_down", "driver_unavailable"].includes(d.kind) ? "danger" : "warning", title: `${ESCALATION_LABELS[d.kind] || d.kind}${d.routeName ? ` — ${d.routeName}` : ""}`, meta: `رفعه الإسناد الذاتي · ${getReadingAgeLabel(d.createdAt)}`, detail: <>{d.reason}{d.suggestion && <div style={{ color: C.text }}><b>المقترح:</b> {d.suggestion}</div>}</>, actionLabel: "معالجة", onAction: () => go("control", { tab: "dispatch" }) });
+  if (escalations.length > 6) attention.push({ id: "esc_more", tone: "warning", title: `${escalations.length - 6} حالة أخرى من الإسناد الذاتي`, actionLabel: "عرضها", onAction: () => go("control", { tab: "dispatch" }) });
+  for (const r of thermal) attention.push({ id: "th_" + r.group.key, tone: "danger", title: `تنبيه حراري — ${r.group.name}`, meta: "لا تُجمع الحاويات الساخنة بمكبس قبل تقييم الخطر", actionLabel: "التنبيهات الحرارية", onAction: () => go("fire") });
+  for (const r of withoutRoute.slice(0, 4)) attention.push({ id: "nr_" + r.group.key, tone: r.priority.tier === "critical" ? "danger" : "warning", title: `${r.group.name}: ${r.eligibleBins.length} حاوية تحتاج جمعًا بلا جولة`, meta: r.priority.reasons?.[0] || "", detail: r.eligibleBins.slice(0, 8).map((s) => `${s.bin.name} (${s.bin.lastFillLevelPercent ?? "—"}%)`).join("، "),
+    actions: onShowOnMap ? <Btn variant="ghost" onClick={() => onShowOnMap(r.group.key)}>على الخريطة</Btn> : null, actionLabel: dispatchAuto ? "الإسناد الذاتي" : "إنشاء جولة", onAction: () => go("control", { tab: dispatchAuto ? "dispatch" : "routes" }) });
+  if (withoutRoute.length > 4) attention.push({ id: "nr_more", tone: "warning", title: `${withoutRoute.length - 4} حي آخر يحتاج جمعًا بلا جولة`, actionLabel: "الجولات", onAction: () => go("control") });
+  if (!dispatchAuto && suggested.length) attention.push({ id: "sugg", tone: "info", title: `${suggested.length} جولة مقترحة بانتظار الاعتماد والإسناد`, actionLabel: "مراجعة", onAction: () => go("control", { tab: "routes" }) });
+  if (openIncidents.length) attention.push({ id: "inc", tone: "danger", title: `${openIncidents.length} بلاغ ميداني مفتوح من السائقين`, detail: openIncidents.slice(0, 6).map((i) => `${(INCIDENT_TYPES[i.type] || {}).label || i.type} — ${i.routeName || ""}`).join(" · "), actionLabel: "متابعة الأسطول", onAction: () => go("drivers", { tab: "live" }) });
+  if (offlineBins.length) attention.push({ id: "off", tone: "warning", title: `${offlineBins.length} مستشعر غير متصل أو بقراءة غير موثوقة`, meta: "لا تُسند حاوياتها تلقائيًا", actionLabel: "الحاويات", onAction: () => go("bins") });
+  if (openReports.length) attention.push({ id: "rep", tone: "info", title: `${openReports.length} بلاغ مواطن مفتوح`, actionLabel: "البلاغات", onAction: () => go("requests") });
+  const rank = { danger: 0, warning: 1, info: 2 };
+  attention.sort((a, b) => rank[a.tone] - rank[b.tone]);
+
+  if (loading) return <EmptyState icon="⏳" title="جاري تحميل الوضع التشغيلي…" />;
+  if (totalBins === 0) return <EmptyState icon="🗺️" title="لا توجد حاويات بعد" desc="هيّئ الأحياء والحاويات من الإعدادات." />;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      {!loading && totalBins > 0 && (
-        <NeedsCollectionBanner ranked={rankedNeighborhoods} onShowOnMap={onShowOnMap} onOpenRoute={onOpenRoute} onGoToRoutes={onViewRoutes} />
-      )}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-        <StatCard title="إجمالي الأحياء" value={groupNeighborhoodsByName(neighborhoods, bins).length} icon={<Home size={22} color="#fff" />} gradient={C.g1} />
-        <StatCard title="إجمالي الحاويات" value={totalBins} icon={<Trash2 size={22} color="#fff" />} gradient={C.g2} />
-        <StatCard title="الحاويات الحرجة" value={criticalBins.length} icon={<AlertTriangle size={22} color="#fff" />} gradient={C.g4} />
-        <StatCard title="متوسط الامتلاء" value={avgFill ?? "—"} unit={avgFill != null ? "%" : ""} icon={<BarChart2 size={22} color="#fff" />} gradient={C.g2} />
-        <StatCard title="كفاءة الجمع" value="—" icon={<Zap size={22} color="#fff" />} gradient={C.g3} />
-        <StatCard title="الأجهزة غير المتصلة" value={offlineBins.length} icon={<WifiOff size={22} color="#fff" />} gradient={C.g4} />
-      </div>
-      {!loading && totalBins === 0 && (
-        <div style={{ fontSize: 12, color: C.muted, background: C.panel2 || C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px" }}>
-          "كفاءة الجمع" غير متاحة بعد لعدم وجود بيانات جولات جمع حقيقية — ستُفعَّل في مرحلة إدارة الجولات.
-        </div>
-      )}
+    <div style={{ display: "flex", flexDirection: "column", gap: SP.lg }}>
+      <PageHeader
+        status={<><b style={{ color: C.text }}>{scope.all ? "المدينة" : municipalityById(scope.municipalityId)?.shortAr || ""}</b> · {criticalBins.length} حاوية حرجة · {running.length} جولة جارية · {approved.length} معتمدة · {freeDrivers} سائق متاح · <DispatchModeBadge settings={dispatchSettings} /></>}
+        attention={attention.length ? `${attention.length} أمر يحتاج انتباهك` : "لا شيء عاجل"} attentionTone={attention.some((a) => a.tone === "danger") ? "danger" : attention.length ? "warning" : "ok"}
+        actions={<><Btn variant="primary" onClick={() => go("control")}>الجولات والإسناد</Btn><Btn onClick={() => go("map")}>الخريطة</Btn></>} />
 
-      <Card title="🗺️ الخريطة التشغيلية لمدينة بريدة" icon={<MapGlyph size={16} color={C.muted} />}>
-        {loading ? (
-          <EmptyState icon="⏳" title="جاري تحميل بيانات الأحياء والحاويات…" />
-        ) : neighborhoods.length === 0 ? (
-          <EmptyState icon="🗺️" title="لا توجد أحياء مسجلة بعد" desc="شغّل الترحيل من صفحة الإعدادات لإنشاء الأحياء والحاويات من بيانات المحطات القديمة." />
-        ) : (
-          <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} height={380} compact onViewBins={onViewBins} onOpenRoute={onOpenRoute} />
+      <Section title="يحتاج انتباهك الآن" count={attention.length}>
+        <AttentionList items={attention} max={6} />
+      </Section>
+
+      <KpiRow>
+        <KpiTile label="حاويات حرجة الآن" value={criticalBins.length} tone={criticalBins.length ? "danger" : "ok"} onClick={() => go("bins")} />
+        <KpiTile label="أحياء تحتاج جمعًا بلا جولة" value={withoutRoute.length} tone={withoutRoute.length ? "warning" : "ok"} onClick={() => go("control")} />
+        <KpiTile label="جولات جارية / معتمدة" value={`${running.length} / ${approved.length}`} tone="info" onClick={() => go("control", { tab: "routes" })} />
+        <KpiTile label="سائقون متاحون الآن" value={freeDrivers} tone={freeDrivers ? "ok" : "warning"} onClick={() => go("drivers", { tab: "live" })} />
+        <KpiTile label="مستشعرات غير متصلة" value={offlineBins.length} tone={offlineBins.length ? "warning" : "ok"} hint={avgFill != null ? `متوسط الامتلاء ${avgFill}%` : null} />
+      </KpiRow>
+
+      <Section title="الخريطة التشغيلية" actions={<Btn variant="ghost" onClick={() => go("map")}>فتح بالحجم الكامل</Btn>}>
+        <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={profiles} height={360} compact onViewBins={onViewBins} onOpenRoute={onOpenRoute} />
+      </Section>
+
+      <Section title="أولويات الأحياء" count={rankedNeighborhoods.length} collapsible defaultOpen={rankedNeighborhoods.length > 0} hint="مرتبة حسب الأولوية المحسوبة من الامتلاء والتنبؤ والحرارة والبلاغات">
+        {rankedNeighborhoods.length === 0 ? <div style={{ fontSize: FS.body, color: C.accent }}>✓ لا أحياء تحتاج جمعًا الآن</div> : (
+          <AttentionList max={5} items={rankedNeighborhoods.map((r) => ({ id: "rk_" + r.group.key, tone: r.priority.tier === "critical" ? "danger" : r.priority.tier === "high" ? "warning" : "info",
+            title: `${r.group.name} — ${r.eligibleBins.length} حاوية مؤهلة`, meta: r.openRoute ? `${ROUTE_STATUS_LABELS[r.openRoute.status] || r.openRoute.status}: ${r.openRoute.routeName}${r.openRoute.driverName ? ` ← ${r.openRoute.driverName}` : ""}` : "بلا جولة",
+            badge: <StateBadge state={r.priority.tier} />, detail: (r.priority.reasons || []).join(" · "),
+            actions: <>{onShowOnMap && <Btn variant="ghost" onClick={() => onShowOnMap(r.group.key)}>الخريطة</Btn>}{r.openRoute && onOpenRoute && <Btn onClick={() => onOpenRoute(r.openRoute.id)}>الجولة</Btn>}</> }))} />
         )}
-      </Card>
+      </Section>
 
-      <Card title="🎯 أولويات التشغيل الآن — ماذا نبدأ به؟" icon={<Target size={16} color={C.muted} />}>
-        {nowPriorities.length === 0 ? (
-          <EmptyState icon="✅" title="لا توجد أولويات تشغيلية عاجلة الآن" />
-        ) : (
-          <ol style={{ margin: 0, paddingInlineStart: 20, display: "flex", flexDirection: "column", gap: 8 }}>
-            {nowPriorities.map((p, i) => (
-              <li key={i} style={{ fontSize: 13, color: C.text, paddingBottom: i < nowPriorities.length - 1 ? 8 : 0, borderBottom: i < nowPriorities.length - 1 ? `1px solid ${C.border}` : "none" }}>
-                {p.text}
-              </li>
-            ))}
-          </ol>
-        )}
-      </Card>
-
-      <Card title="🧭 الجولات المقترحة الآن — وما الحاويات التي تغطيها" icon={<RouteIcon size={16} color={C.muted} />}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: suggestedRoutes.length > 0 ? 12 : 0 }}>
-          <div style={{ fontSize: 13, color: C.muted }}>
-            مقترحة: <b style={{ color: C.text }}>{suggestedRoutes.length}</b> · معتمدة بانتظار البدء: <b style={{ color: C.text }}>{approvedRoutesCount}</b> · نشطة: <b style={{ color: C.text }}>{activeRoutesCount}</b>
-            {eligibleOutsideRoutes > 0 && <span style={{ color: C.warning, fontWeight: 700 }}> · {eligibleOutsideRoutes} حاوية مؤهلة خارج أي جولة</span>}
-          </div>
-          {onViewRoutes && (
-            <button onClick={onViewRoutes} style={{ padding: "8px 16px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>
-              {eligibleOutsideRoutes > 0 ? "توليد/تحديث الجولات" : "فتح إدارة الجولات"}
-            </button>
-          )}
-        </div>
-        {suggestedRoutes.length === 0 ? (
-          <div style={{ fontSize: 12, color: C.dim }}>لا توجد جولات مقترحة حاليًا{eligibleOutsideRoutes > 0 ? " — رغم وجود حاويات مؤهلة للجمع. ولّد الجولات من صفحة إدارة الجولات." : "."}</div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
-            {suggestedRoutes.slice(0, 6).map((r) => (
-              <div key={r.id} onClick={onOpenRoute ? () => onOpenRoute(r.id) : undefined} style={{ background: C.bg, border: `1px solid ${STATUS_COLORS[r.priorityTier] || C.border}50`, borderRadius: 12, padding: "10px 12px", cursor: onOpenRoute ? "pointer" : "default" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.routeName}</div>
-                  <StateBadge state={r.priorityTier} />
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                  {(r.orderedStops || []).slice(0, 4).map((st) => {
-                    const b = binById[st.binId];
-                    return (
-                      <div key={st.binId} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: C.muted }}>
-                        <span>#{st.order} {st.binName}</span>
-                        <span style={{ color: STATUS_COLORS[st.priorityTier] || C.text, fontWeight: 700 }}>{b?.lastFillLevelPercent != null ? `${b.lastFillLevelPercent}%` : "—"}</span>
-                      </div>
-                    );
-                  })}
-                  {(r.orderedStops || []).length > 4 && <div style={{ fontSize: 11, color: C.dim }}>+{r.orderedStops.length - 4} حاوية أخرى</div>}
-                </div>
-                <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6 }}>{r.binIds?.length || 0} حاوية · {r.estimatedDistanceKm} كم تقريبًا · بانتظار اعتماد موظف</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {!loading && totalBins > 0 && <ImpactCard impact={impact} />}
-
-      <Card title="أبرز الحاويات الحرجة الآن" icon={<AlertTriangle size={16} color={C.muted} />}>
-        {criticalList.length === 0 ? (
-          <EmptyState icon="✅" title="لا توجد حاويات بأولوية حرجة أو مرتفعة حاليًا" />
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {criticalList.map(({ bin, neighborhood: n, priority }) => (
-              <div key={bin.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: 10, background: C.bg, border: `1px solid ${C.border}`, fontSize: 12, gap: 10, flexWrap: "wrap" }}>
-                <div>
-                  <div style={{ fontWeight: 700, color: C.text }}>{bin.name} <span style={{ color: C.dim, fontWeight: 400 }}>· {n?.name || "—"}</span></div>
-                  <div style={{ color: C.muted, marginTop: 2 }}>
-                    الامتلاء: {bin.lastFillLevelPercent != null ? `${bin.lastFillLevelPercent}%` : "—"} ·
-                    {" "}الحرارة: {bin.lastTemperatureCelsius != null ? `${bin.lastTemperatureCelsius}°` : "—"} ·
-                    {" "}{getReadingAgeLabel(bin.lastReadingAt)}
-                  </div>
-                </div>
-                <StateBadge state={priority.sensorHealth.status !== "healthy" ? priority.sensorHealth.connectivity : priority.tier} />
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-        <Card title="توزيع النفايات الأسبوعي (كجم)" icon={<BarChart2 size={16} color={C.muted} />}>
-          <ChartBox height={280}><ResponsiveContainer>
-            <BarChart data={weeklyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-              <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 11, fontFamily: ARABIC_FONT }} />
-              <YAxis tick={{ fill: C.muted, fontSize: 11 }} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11, color: C.muted }} />
-              {Object.entries(WASTE_COLORS).map(([key, color]) => (
-                <Bar key={key} dataKey={key} stackId="a" fill={color} radius={key === "معادن" ? [4, 4, 0, 0] : [0, 0, 0, 0]} />
-              ))}
-            </BarChart>
-          </ResponsiveContainer></ChartBox>
-        </Card>
-
-        <Card title="توزيع مستويات الامتلاء (الحاويات)" icon={<Target size={16} color={C.muted} />}>
-          {totalBins === 0 ? <EmptyState icon="📦" title="لا توجد حاويات بعد" /> : (
-            <>
+      <Section title="المؤشرات والتحليلات" collapsible defaultOpen={false} hint="محسوبة من حالة الحاويات والجولات الحالية">
+        <div style={{ display: "flex", flexDirection: "column", gap: SP.md }}>
+          <ImpactCard impact={impact} compact />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: SP.md }}>
+            <Card title="توزيع مستويات الامتلاء">
               <ChartBox height={220}><ResponsiveContainer>
                 <PieChart>
-                  <Pie data={fillDistribution} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={4}
-                    label={({ name, value }) => `${name}: ${value}`}>
-                    {fillDistribution.map((e, i) => <Cell key={i} fill={e.fill} />)}
+                  <Pie data={[["0-30%", (v) => v <= 30, C.accent], ["31-60%", (v) => v > 30 && v <= 60, C.info], ["61-85%", (v) => v > 60 && v <= 85, C.warning], ["86-100%", (v) => v > 85 && v <= 100, C.danger]].map(([name, f, fill]) => ({ name, value: fillValues.filter(f).length, fill }))} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={3} label={({ name, value }) => `${name}: ${value}`}>
+                    {[C.accent, C.info, C.warning, C.danger].map((c, i) => <Cell key={i} fill={c} />)}
                   </Pie>
                   <Tooltip content={<CustomTooltip />} />
                 </PieChart>
               </ResponsiveContainer></ChartBox>
-              <div style={{ display: "flex", justifyContent: "center", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
-                {fillDistribution.map((d, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: C.muted }}>
-                    <div style={{ width: 8, height: 8, borderRadius: 2, background: d.fill }} /> {d.name}
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </Card>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-        <Card title="الاتجاه الشهري - الجمع والكفاءة" icon={<TrendingUp size={16} color={C.muted} />}>
-          <ChartBox height={260}><ResponsiveContainer>
-            <ComposedChart data={monthlyTrend} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-              <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-              <YAxis yAxisId="left" tick={{ fill: C.muted, fontSize: 10 }} />
-              <YAxis yAxisId="right" orientation="left" tick={{ fill: C.muted, fontSize: 10 }} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-              <Bar yAxisId="left" dataKey="عمليات_الجمع" fill={C.accent} radius={[4, 4, 0, 0]} opacity={0.8} name="عمليات الجمع" />
-              <Line yAxisId="right" type="monotone" dataKey="الكفاءة" stroke={C.info} strokeWidth={3} dot={{ r: 4, fill: C.info }} name="الكفاءة %" />
-            </ComposedChart>
-          </ResponsiveContainer></ChartBox>
-        </Card>
-
-        <Card title="نشاط عمليات الجمع على مدار الساعة" icon={<Clock size={16} color={C.muted} />}>
-          {/* لا توجد بعد بيانات collection_events حقيقية (تأتي في مرحلة إدارة الجولات) —
-              عُرض Empty State بدل اختلاق رقم إنتاجي، بدلاً من إعادة تسمية الرسم القديم "نشاط الشفط" فقط. */}
-          <EmptyState icon="🚚" title="لا تتوفر بيانات عمليات جمع حقيقية بعد" desc="سيظهر هذا الرسم بمجرد تفعيل تتبع الجولات والجمع في مرحلة إدارة الجولات." />
-        </Card>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-        <Card title="متوسط الامتلاء حسب الحي" icon={<Target size={16} color={C.muted} />}>
-          {neighborhoodFillBars.length === 0 ? <EmptyState icon="🏘️" title="لا توجد أحياء بعد" /> : (
-            <ChartBox height={300}><ResponsiveContainer>
-              <BarChart data={neighborhoodFillBars} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
-                <YAxis type="category" dataKey="name" width={80} tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="متوسط_الامتلاء" radius={[0, 4, 4, 0]}>
-                  {neighborhoodFillBars.map((d, i) => (
-                    <Cell key={i} fill={d.متوسط_الامتلاء >= THRESHOLDS.fillCriticalPct ? C.danger : d.متوسط_الامتلاء >= THRESHOLDS.fillWarningPct ? C.warning : C.accent} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer></ChartBox>
-          )}
-        </Card>
-
-        <Card title="التنبيهات" icon={<Bell size={16} color={C.muted} />}>
-          {criticalBins.length > 0 && (
-            <span style={{ background: C.danger + "30", color: C.danger, fontSize: 11, padding: "2px 8px", borderRadius: 10, fontWeight: 600, marginBottom: 12, display: "inline-block" }}>
-              {criticalBins.length} حرج
-            </span>
-          )}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 280, overflowY: "auto" }}>
-            {alerts.length === 0 ? <EmptyState icon="🔔" title="لا توجد تنبيهات حاليًا" /> : alerts.map((a) => (
-              <div key={a.id} style={{ padding: "10px 12px", borderRadius: 10, background: C.bg, border: `1px solid ${C.border}`, fontSize: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ fontWeight: 600, color: C.text }}>{a.icon} {a.type}</span>
-                  <span style={{ color: C.dim, fontSize: 10 }}>{a.time}</span>
-                </div>
-                <div style={{ color: C.muted, lineHeight: 1.5 }}>{a.message}</div>
-              </div>
-            ))}
+            </Card>
+            <Card title="أعلى الأحياء امتلاءً (متوسط)">
+              <ChartBox height={220}><ResponsiveContainer>
+                <BarChart data={neighborhoods.map((n) => { const v = bins.filter((b) => b.neighborhoodId === n.id).map((b) => b.lastFillLevelPercent).filter((x) => x != null && x <= 100); return { name: normalizeNeighborhoodName(n.name), متوسط_الامتلاء: v.length ? Math.round(v.reduce((a, x) => a + x, 0) / v.length) : 0 }; }).sort((a, b) => b.متوسط_الامتلاء - a.متوسط_الامتلاء).slice(0, 8)} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
+                  <YAxis type="category" dataKey="name" width={80} tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="متوسط_الامتلاء" fill={C.brandSoft} radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer></ChartBox>
+            </Card>
           </div>
-        </Card>
-      </div>
+          <div style={{ fontSize: FS.meta, color: C.dim }}>رسوم الاتجاه الأسبوعي والشهري في «التقارير» (بيانات مرجعية من التهيئة، لا تُشتق من التشغيل).</div>
+        </div>
+      </Section>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
-        {[
-          { label: "حاويات طبيعية", count: normalBins.length, color: C.accent, icon: <CheckCircle size={32} color={C.accent} /> },
-          { label: "حاويات تحتاج متابعة", count: warningBins.length, color: C.warning, icon: <AlertTriangle size={32} color={C.warning} /> },
-          { label: "حاويات حرجة", count: criticalBins.length, color: C.danger, icon: <AlertTriangle size={32} color={C.danger} /> },
-        ].map((item, i) => (
-          <div key={i} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 16, padding: 20, textAlign: "center" }}>
-            <div style={{ marginBottom: 6, display: "flex", justifyContent: "center" }}>{item.icon}</div>
-            <div style={{ fontSize: 36, fontWeight: 800, color: item.color }}>{item.count}</div>
-            <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{item.label}</div>
+      {alerts.length > 0 && (
+        <Section title="سجل التنبيهات" count={alerts.length} collapsible defaultOpen={false}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+            {alerts.map((a) => <div key={a.id} style={{ fontSize: 12, color: C.muted, borderBottom: `1px solid ${C.border}`, padding: "6px 2px" }}><b style={{ color: C.text }}>{a.icon} {a.type}</b> · {a.time} — {a.message}</div>)}
           </div>
-        ))}
-      </div>
+        </Section>
+      )}
     </div>
   );
 };
@@ -2694,7 +2573,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {[{ key: "performance", label: "📊 تقرير الأداء" }, { key: "operations", label: "🧭 الجولات والتشغيل" }, { key: "fleet", label: "🚛 السائقون والمركبات" }, { key: "impact", label: "💡 الأثر والتوفير" }, { key: "waste", label: "♻️ تقرير النفايات" }, { key: "cost", label: "💰 تقرير التكاليف" }, { key: "environment", label: "🌱 التأثير البيئي" }].map((t) => (
+        {[{ key: "performance", label: "📊 تقرير الأداء" }, { key: "operations", label: "🧭 الجولات والتشغيل" }, { key: "fleet", label: "🚛 السائقون والمركبات" }, { key: "impact", label: "💡 الأثر والتوفير" }, { key: "waste", label: "♻️ تقرير النفايات · توضيحي" }, { key: "cost", label: "💰 تقرير التكاليف · توضيحي" }, { key: "environment", label: "🌱 التأثير البيئي · توضيحي" }].map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             padding: "10px 20px", borderRadius: 10, border: `1px solid ${tab === t.key ? C.accent : C.border}`,
             background: tab === t.key ? C.accent + "15" : "transparent", color: tab === t.key ? C.accent : C.muted,
@@ -2881,6 +2760,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
 
       {tab === "waste" && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
+        <div role="note" style={{ fontSize: 12.5, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}50`, borderRadius: 10, padding: "8px 12px" }}><b>بيانات توضيحية:</b> أوزان النفايات والتكاليف هنا من بيانات التهيئة (أو مولّدة عند غيابها)، وليست قياسًا تشغيليًا. التقارير المحسوبة من التشغيل: الأداء، الجولات، السائقون، الأثر.</div>
           <Card title="توزيع النفايات حسب النوع" icon={<Trash2 size={16} color={C.muted} />}>
             <ChartBox height={280}><ResponsiveContainer>
               <PieChart>
@@ -2912,6 +2792,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
 
       {tab === "cost" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div role="note" style={{ fontSize: 12.5, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}50`, borderRadius: 10, padding: "8px 12px" }}><b>بيانات توضيحية:</b> أوزان النفايات والتكاليف هنا من بيانات التهيئة (أو مولّدة عند غيابها)، وليست قياسًا تشغيليًا. التقارير المحسوبة من التشغيل: الأداء، الجولات، السائقون، الأثر.</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
             <StatCard title="إجمالي التكلفة السنوية" value={monthlyTrend.reduce((a, m) => a + m.التكلفة, 0).toLocaleString()} unit="ر.س" icon={<DollarSign size={22} color="#fff" />} gradient={C.g3} />
             <StatCard title="متوسط التكلفة الشهرية" value={Math.round(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12).toLocaleString()} unit="ر.س" icon={<Calendar size={22} color="#fff" />} gradient={C.g2} trend={-8.5} />
@@ -2936,6 +2817,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
 
       {tab === "environment" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div role="note" style={{ fontSize: 12.5, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}50`, borderRadius: 10, padding: "8px 12px" }}><b>بيانات توضيحية:</b> مؤشرات هذا التبويب من بيانات التهيئة وليست محسوبة من التشغيل. الأثر البيئي المحسوب فعليًا في تبويب «الأثر والتوفير».</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
             {envMetrics.map((item, i) => (
               <div key={i} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 16, padding: 20, textAlign: "center" }}>
@@ -4611,6 +4493,8 @@ const ApiKeyCard = () => {
 };
 
 const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggleAutoSync }) => {
+  // System tools are for the municipality manager and the Amanah; an operations employee sees only their preferences (UI scope — server rules unchanged).
+  const adminTools = loggedInUser?.role === "manager" || loggedInUser?.role === "executive";
   const [demoBinId, setDemoBinId] = useState("");
   const [munSeedBusy, setMunSeedBusy] = useState(false);
   const [munSeedMsg, setMunSeedMsg] = useState("");
@@ -4697,7 +4581,10 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 600 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 760 }}>
+      <PageHeader status={adminTools ? "تفضيلاتك أولًا، ثم إعدادات الإسناد، ثم أدوات النظام عند الحاجة" : "تفضيلات حسابك وحالة الاتصال"} />
+      <Section title="تفضيلاتي" collapsible defaultOpen>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Card title="إعدادات النظام" icon={<SettingsIcon size={16} color={C.muted} />}>
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           {[{ label: "التنبيهات الفورية", desc: "استقبال إشعارات عند تجاوز الحدود", val: notif, set: setNotif },
@@ -4736,7 +4623,143 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
           ))}
         </div>
       </Card>
+        </div>
+      </Section>
+      {adminTools && <DispatchSettingsCard loggedInUser={loggedInUser} />}
+      {adminTools && (
+        <Section title="مزامنة الاقتراحات من المتصفح (النمط القديم)" collapsible defaultOpen={false} hint="تعمل فقط حين يكون الإسناد الذاتي متوقفًا">
+      <Card title="🔄 مزامنة الجولات المقترحة تلقائيًا" icon={<RouteIcon size={16} color={C.muted} />}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
+            عند التفعيل يعيد النظام حساب الجولات <b style={{ color: C.text }}>المقترحة</b> تلقائيًا كلما تغيرت حالة الحاويات (حاوية امتلأت → تُضاف للجولة، فُرّغت → تُسحب).
+            لا يعتمد ولا يرسل أي مركبة تلقائيًا — الاعتماد يبقى قرارًا بشريًا.
+          </div>
+          <Toggle value={autoSyncRoutes} onChange={(v) => onToggleAutoSync && onToggleAutoSync(v)} />
+        </div>
+      </Card>
+        </Section>
+      )}
+      {adminTools && (
+        <Section title="البلديات والبيانات والتكامل" collapsible defaultOpen={false} hint="تهيئة وترحيل ومصادر البيانات وأجهزة IoT والتصدير">
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {can(loggedInUser?.role, "municipalities.manage") && (
+        <Card title="🏛️ البلديات الفرعية وتبعية الأحياء" icon={<Landmark size={16} color={C.muted} />}>
+          <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 10px" }}>
+            يكتب البلديات الست (الأسماء والهواتف والمساحات من المصادر الرسمية) ويسند كل حي بلا تبعية إلى بلديته وفق القراءة البصرية لخرائط النطاق الرسمية (موسومة «غير متحقق منها»)، ثم ينسخ معرّف البلدية على الحاويات والجولات والمركبات والسائقين والبلاغات لتفعيل عزل البيانات. لا يستبدل أي تبعية حُددت يدويًا.
+          </p>
+          <button disabled={munSeedBusy} onClick={async () => { setMunSeedBusy(true); try { const r = await seedMunicipalitiesAndBackfill({ municipalities: MUNICIPALITIES, defaultAssignmentFor, municipalityForNeighborhood, provenance: DATA_PROVENANCE }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); setMunSeedMsg(`✅ ${r.municipalities} بلديات · ${r.neighborhoodsAssigned} حي أُسند · ${r.bins} حاوية · ${r.routes} جولة · ${r.vehicles} مركبة · ${r.profiles} سائق · ${r.incidents} بلاغ${r.unassignedNeighborhoods.length ? ` · بلا تبعية: ${r.unassignedNeighborhoods.join("، ")}` : ""}`); } catch (e) { setMunSeedMsg("❌ " + (e?.message || e)); } finally { setMunSeedBusy(false); } }} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #06b6d4, #0e7490)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{munSeedBusy ? "جاري التهيئة…" : "🏛️ تهيئة البلديات وتوزيع الأحياء"}</button>
+          {munSeedMsg && <div style={{ fontSize: 12, color: C.text, marginTop: 8 }}>{munSeedMsg}</div>}
+        </Card>
+      )}
+      <Card title="📚 مصادر البيانات وحالة كل مصدر" icon={<FileText size={16} color={C.muted} />}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+          {[
+            ["البلديات الفرعية (الأسماء، الهواتف، خرائط النطاق)", "أمانة منطقة القصيم — صفحة البلديات الفرعية", "رسمي", C.accent, DATA_PROVENANCE.sources[0].url],
+            ["مساحات البلديات وإحصاءات النظافة 2024", "التقرير السنوي لأمانة منطقة القصيم 2024", "رسمي", C.accent, DATA_PROVENANCE.sources[2].url],
+            ["أسماء أحياء بريدة (130 حيًا)", OFFICIAL_NAMES_SOURCE.source, "رسمي", C.accent, OFFICIAL_NAMES_SOURCE.url],
+            ["حدود الأحياء (13 مضلعًا)", "OpenStreetMap", "مفتوح", C.info, "https://www.openstreetmap.org/"],
+            ["حدود البلديات", "خرائط PDF مصوّرة فقط (UTM 38N) — لا ملفات متجهة؛ النطاقات المرسومة تشغيلية تجريبية", "غير متحقق", C.warning, null],
+            ["تبعية الأحياء للبلديات", NEIGHBORHOOD_ASSIGNMENT_PROVENANCE.method, "غير متحقق", C.warning, null],
+            ["بيانات الحاويات والقراءات", "مولّد/محاكي تجريبي — كل قراءة موسومة SIMULATED ومنفصلة عن sensor_readings", "تجريبي", C.purple, null],
+          ].map(([what, src, status, color, url]) => (
+            <div key={what} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", background: C.bg, borderRadius: 8, padding: "8px 12px", flexWrap: "wrap" }}>
+              <div><b style={{ color: C.text }}>{what}</b><div style={{ color: C.muted, fontSize: 11 }}>{url ? <a href={url} target="_blank" rel="noreferrer" style={{ color: C.info }}>{src}</a> : src}</div></div>
+              <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 10, background: color + "20", color }}>{status}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
 
+      <Card title="🔐 أجهزة IoT ومفاتيح الدخول" icon={<KeyRound size={16} color={C.muted} />}>
+        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 12px" }}>
+          كل جهاز ESP32 يحتاج مفتاحًا خاصًا به يُرسل في ترويسة <code>x-device-key</code> إلى <code>/api/iot/readings</code>.
+          المفتاح يُعرض مرة واحدة فقط هنا ويُخزَّن تجزئته (SHA-256) فقط؛ الجهاز لا يستطيع الكتابة إلا لحاويته. المفتاح التجريبي للمولّد مرفوض من الخادم.
+        </p>
+        {revealedKey && (
+          <div style={{ background: C.warning + "15", border: `1px solid ${C.warning}60`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.warning, marginBottom: 6 }}>⚠️ انسخ المفتاح الآن — لن يُعرض مرة أخرى ({revealedKey.deviceId})</div>
+            <code style={{ display: "block", fontSize: 11, color: C.text, background: C.bg, padding: 8, borderRadius: 8, wordBreak: "break-all", direction: "ltr", textAlign: "left" }}>{revealedKey.key}</code>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={() => navigator.clipboard?.writeText(revealedKey.key)} style={{ padding: "6px 12px", borderRadius: 8, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>نسخ</button>
+              <button onClick={() => setRevealedKey(null)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>تم الحفظ — إخفاء</button>
+            </div>
+          </div>
+        )}
+        {(iotDevices || []).length === 0 ? <EmptyState icon="📟" title="لا توجد أجهزة مسجّلة بعد" /> : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+            {(iotDevices || []).map((d) => {
+              const bin = bins.find((b) => b.id === d.binId);
+              return (
+                <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ color: C.text, fontWeight: 600 }}>{d.deviceId || d.label} {d.demo && <DemoBadge />} {d.disabled && <span style={{ color: C.danger, fontSize: 10 }}>(معطّل)</span>}</div>
+                    <div style={{ color: C.dim, fontSize: 11 }}>{bin?.name || "غير مرتبط بحاوية"} · {d.deviceKeyHash ? "🔑 مفتاح فعّال" : "⚠️ بلا مفتاح فعّال (مفتاح تجريبي فقط)"} · آخر اتصال: {getReadingAgeLabel(d.lastSeenAt)}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button disabled={deviceBusy === d.id} onClick={async () => {
+                      if (!window.confirm(`توليد مفتاح جديد لـ ${d.deviceId || d.label}؟ المفتاح القديم سيتوقف فورًا.`)) return;
+                      setDeviceBusy(d.id);
+                      try {
+                        const key = await rotateDeviceKey(d.id);
+                        setRevealedKey({ deviceId: d.deviceId || d.label, key });
+                        await writeAuditLog("device_key_rotated", loggedInUser?.uid, loggedInUser?.name, { deviceDocId: d.id, deviceId: d.deviceId || d.label });
+                      } finally { setDeviceBusy(""); }
+                    }} style={{ padding: "6px 10px", borderRadius: 8, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>توليد مفتاح</button>
+                    <button onClick={async () => {
+                      await setDeviceDisabled(d.id, !d.disabled);
+                      await writeAuditLog(d.disabled ? "device_enabled" : "device_disabled", loggedInUser?.uid, loggedInUser?.name, { deviceDocId: d.id, deviceId: d.deviceId || d.label });
+                    }} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${d.disabled ? C.accent : C.danger}`, background: "transparent", color: d.disabled ? C.accent : C.danger, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>{d.disabled ? "تفعيل" : "تعطيل"}</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
+          ما يلزم لتشغيل الربط الحقيقي: ضبط <code>FIREBASE_SERVICE_ACCOUNT_JSON</code> و<code>IOT_INGEST_ENABLED=true</code> في بيئة Vercel، نشر <code>firestore.rules</code>، ثم تحميل <code>firmware/esp32_smart_bin</code> على الجهاز بمفتاحه.
+        </div>
+      </Card>
+
+      <ApiKeyCard />
+
+      <Card title="تصدير قاعدة البيانات" icon={<BarChart2 size={16} color={C.muted} />}>
+        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
+          يُصدِّر جميع البيانات من Firestore (10 مجموعات) إلى ملف Excel واحد.
+          كل مجموعة في Sheet منفصل — جاهز للتحليل في Power BI أو Excel.
+        </p>
+        {exportStatus === "done" && (
+          <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.accent }}>
+            ✅ تم تحميل الملف بنجاح — تحقق من مجلد التنزيلات.
+          </div>
+        )}
+        {exportStatus === "error" && (
+          <div style={{ background: C.danger + "15", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.danger }}>
+            ❌ حدث خطأ أثناء التصدير — تحقق من Console.
+          </div>
+        )}
+        <button
+          disabled={exportStatus === "running"}
+          onClick={async () => {
+            setExportStatus("running");
+            try {
+              await exportAllDataToExcel("full_database.xlsx");
+              setExportStatus("done");
+            } catch (e) {
+              console.error("[export]", e);
+              setExportStatus("error");
+            }
+          }}
+          style={{
+            padding: "11px 24px", borderRadius: 10, border: "none",
+            background: exportStatus === "running" ? C.border : "linear-gradient(135deg, #10b981, #059669)",
+            color: exportStatus === "running" ? C.dim : "#fff",
+            fontWeight: 700, cursor: exportStatus === "running" ? "not-allowed" : "pointer",
+            fontSize: 13, fontFamily: ARABIC_FONT,
+          }}
+        >
+          {exportStatus === "running" ? "جاري التصدير…" : "⬇️ تحميل قاعدة البيانات Excel"}
+        </button>
+      </Card>
       <Card title="تهيئة قاعدة البيانات" icon={<Database size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
           يُنشئ هذا الإجراء مستندًا تجريبيًا لكل مجموعة غير موجودة في Firestore
@@ -4823,7 +4846,12 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
           {migrateStatus === "running" ? "جاري الترحيل…" : "🔄 ترحيل المحطات إلى أحياء وحاويات ذكية"}
         </button>
       </Card>
-
+          </div>
+        </Section>
+      )}
+      {adminTools && (
+        <Section title="بيئة العرض التجريبية" collapsible defaultOpen={false} hint="بيانات محاكاة فقط — لا تُستخدم في بيئة الإنتاج">
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Card title="بيانات تجريبية للعرض — محاكاة مدينة كاملة (Demo)" icon={<Sparkles size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
           يبني مشهد مدينة كاملًا: ~100 حاوية ذكية موزّعة داخل الحدود الحقيقية لأحياء بريدة الـ14
@@ -4936,136 +4964,9 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
           </div>
         )}
       </Card>
-
-      <Card title="🔄 مزامنة الجولات المقترحة تلقائيًا" icon={<RouteIcon size={16} color={C.muted} />}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
-            عند التفعيل يعيد النظام حساب الجولات <b style={{ color: C.text }}>المقترحة</b> تلقائيًا كلما تغيرت حالة الحاويات (حاوية امتلأت → تُضاف للجولة، فُرّغت → تُسحب).
-            لا يعتمد ولا يرسل أي مركبة تلقائيًا — الاعتماد يبقى قرارًا بشريًا.
           </div>
-          <Toggle value={autoSyncRoutes} onChange={(v) => onToggleAutoSync && onToggleAutoSync(v)} />
-        </div>
-      </Card>
-
-      {can(loggedInUser?.role, "municipalities.manage") && (
-        <Card title="🏛️ البلديات الفرعية وتبعية الأحياء" icon={<Landmark size={16} color={C.muted} />}>
-          <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 10px" }}>
-            يكتب البلديات الست (الأسماء والهواتف والمساحات من المصادر الرسمية) ويسند كل حي بلا تبعية إلى بلديته وفق القراءة البصرية لخرائط النطاق الرسمية (موسومة «غير متحقق منها»)، ثم ينسخ معرّف البلدية على الحاويات والجولات والمركبات والسائقين والبلاغات لتفعيل عزل البيانات. لا يستبدل أي تبعية حُددت يدويًا.
-          </p>
-          <button disabled={munSeedBusy} onClick={async () => { setMunSeedBusy(true); try { const r = await seedMunicipalitiesAndBackfill({ municipalities: MUNICIPALITIES, defaultAssignmentFor, municipalityForNeighborhood, provenance: DATA_PROVENANCE }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); setMunSeedMsg(`✅ ${r.municipalities} بلديات · ${r.neighborhoodsAssigned} حي أُسند · ${r.bins} حاوية · ${r.routes} جولة · ${r.vehicles} مركبة · ${r.profiles} سائق · ${r.incidents} بلاغ${r.unassignedNeighborhoods.length ? ` · بلا تبعية: ${r.unassignedNeighborhoods.join("، ")}` : ""}`); } catch (e) { setMunSeedMsg("❌ " + (e?.message || e)); } finally { setMunSeedBusy(false); } }} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #06b6d4, #0e7490)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{munSeedBusy ? "جاري التهيئة…" : "🏛️ تهيئة البلديات وتوزيع الأحياء"}</button>
-          {munSeedMsg && <div style={{ fontSize: 12, color: C.text, marginTop: 8 }}>{munSeedMsg}</div>}
-        </Card>
+        </Section>
       )}
-
-      <Card title="📚 مصادر البيانات وحالة كل مصدر" icon={<FileText size={16} color={C.muted} />}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
-          {[
-            ["البلديات الفرعية (الأسماء، الهواتف، خرائط النطاق)", "أمانة منطقة القصيم — صفحة البلديات الفرعية", "رسمي", C.accent, DATA_PROVENANCE.sources[0].url],
-            ["مساحات البلديات وإحصاءات النظافة 2024", "التقرير السنوي لأمانة منطقة القصيم 2024", "رسمي", C.accent, DATA_PROVENANCE.sources[2].url],
-            ["أسماء أحياء بريدة (130 حيًا)", OFFICIAL_NAMES_SOURCE.source, "رسمي", C.accent, OFFICIAL_NAMES_SOURCE.url],
-            ["حدود الأحياء (13 مضلعًا)", "OpenStreetMap", "مفتوح", C.info, "https://www.openstreetmap.org/"],
-            ["حدود البلديات", "خرائط PDF مصوّرة فقط (UTM 38N) — لا ملفات متجهة؛ النطاقات المرسومة تشغيلية تجريبية", "غير متحقق", C.warning, null],
-            ["تبعية الأحياء للبلديات", NEIGHBORHOOD_ASSIGNMENT_PROVENANCE.method, "غير متحقق", C.warning, null],
-            ["بيانات الحاويات والقراءات", "مولّد/محاكي تجريبي — كل قراءة موسومة SIMULATED ومنفصلة عن sensor_readings", "تجريبي", C.purple, null],
-          ].map(([what, src, status, color, url]) => (
-            <div key={what} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", background: C.bg, borderRadius: 8, padding: "8px 12px", flexWrap: "wrap" }}>
-              <div><b style={{ color: C.text }}>{what}</b><div style={{ color: C.muted, fontSize: 11 }}>{url ? <a href={url} target="_blank" rel="noreferrer" style={{ color: C.info }}>{src}</a> : src}</div></div>
-              <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 10, background: color + "20", color }}>{status}</span>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      <Card title="🔐 أجهزة IoT ومفاتيح الدخول" icon={<KeyRound size={16} color={C.muted} />}>
-        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 12px" }}>
-          كل جهاز ESP32 يحتاج مفتاحًا خاصًا به يُرسل في ترويسة <code>x-device-key</code> إلى <code>/api/iot/readings</code>.
-          المفتاح يُعرض مرة واحدة فقط هنا ويُخزَّن تجزئته (SHA-256) فقط؛ الجهاز لا يستطيع الكتابة إلا لحاويته. المفتاح التجريبي للمولّد مرفوض من الخادم.
-        </p>
-        {revealedKey && (
-          <div style={{ background: C.warning + "15", border: `1px solid ${C.warning}60`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.warning, marginBottom: 6 }}>⚠️ انسخ المفتاح الآن — لن يُعرض مرة أخرى ({revealedKey.deviceId})</div>
-            <code style={{ display: "block", fontSize: 11, color: C.text, background: C.bg, padding: 8, borderRadius: 8, wordBreak: "break-all", direction: "ltr", textAlign: "left" }}>{revealedKey.key}</code>
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button onClick={() => navigator.clipboard?.writeText(revealedKey.key)} style={{ padding: "6px 12px", borderRadius: 8, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>نسخ</button>
-              <button onClick={() => setRevealedKey(null)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>تم الحفظ — إخفاء</button>
-            </div>
-          </div>
-        )}
-        {(iotDevices || []).length === 0 ? <EmptyState icon="📟" title="لا توجد أجهزة مسجّلة بعد" /> : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
-            {(iotDevices || []).map((d) => {
-              const bin = bins.find((b) => b.id === d.binId);
-              return (
-                <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12, flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ color: C.text, fontWeight: 600 }}>{d.deviceId || d.label} {d.demo && <DemoBadge />} {d.disabled && <span style={{ color: C.danger, fontSize: 10 }}>(معطّل)</span>}</div>
-                    <div style={{ color: C.dim, fontSize: 11 }}>{bin?.name || "غير مرتبط بحاوية"} · {d.deviceKeyHash ? "🔑 مفتاح فعّال" : "⚠️ بلا مفتاح فعّال (مفتاح تجريبي فقط)"} · آخر اتصال: {getReadingAgeLabel(d.lastSeenAt)}</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button disabled={deviceBusy === d.id} onClick={async () => {
-                      if (!window.confirm(`توليد مفتاح جديد لـ ${d.deviceId || d.label}؟ المفتاح القديم سيتوقف فورًا.`)) return;
-                      setDeviceBusy(d.id);
-                      try {
-                        const key = await rotateDeviceKey(d.id);
-                        setRevealedKey({ deviceId: d.deviceId || d.label, key });
-                        await writeAuditLog("device_key_rotated", loggedInUser?.uid, loggedInUser?.name, { deviceDocId: d.id, deviceId: d.deviceId || d.label });
-                      } finally { setDeviceBusy(""); }
-                    }} style={{ padding: "6px 10px", borderRadius: 8, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>توليد مفتاح</button>
-                    <button onClick={async () => {
-                      await setDeviceDisabled(d.id, !d.disabled);
-                      await writeAuditLog(d.disabled ? "device_enabled" : "device_disabled", loggedInUser?.uid, loggedInUser?.name, { deviceDocId: d.id, deviceId: d.deviceId || d.label });
-                    }} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${d.disabled ? C.accent : C.danger}`, background: "transparent", color: d.disabled ? C.accent : C.danger, fontSize: 11, cursor: "pointer", fontFamily: ARABIC_FONT }}>{d.disabled ? "تفعيل" : "تعطيل"}</button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <div style={{ fontSize: 11, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
-          ما يلزم لتشغيل الربط الحقيقي: ضبط <code>FIREBASE_SERVICE_ACCOUNT_JSON</code> و<code>IOT_INGEST_ENABLED=true</code> في بيئة Vercel، نشر <code>firestore.rules</code>، ثم تحميل <code>firmware/esp32_smart_bin</code> على الجهاز بمفتاحه.
-        </div>
-      </Card>
-
-      <ApiKeyCard />
-
-      <Card title="تصدير قاعدة البيانات" icon={<BarChart2 size={16} color={C.muted} />}>
-        <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 16px" }}>
-          يُصدِّر جميع البيانات من Firestore (10 مجموعات) إلى ملف Excel واحد.
-          كل مجموعة في Sheet منفصل — جاهز للتحليل في Power BI أو Excel.
-        </p>
-        {exportStatus === "done" && (
-          <div style={{ background: C.accent + "15", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.accent }}>
-            ✅ تم تحميل الملف بنجاح — تحقق من مجلد التنزيلات.
-          </div>
-        )}
-        {exportStatus === "error" && (
-          <div style={{ background: C.danger + "15", border: `1px solid ${C.danger}40`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.danger }}>
-            ❌ حدث خطأ أثناء التصدير — تحقق من Console.
-          </div>
-        )}
-        <button
-          disabled={exportStatus === "running"}
-          onClick={async () => {
-            setExportStatus("running");
-            try {
-              await exportAllDataToExcel("full_database.xlsx");
-              setExportStatus("done");
-            } catch (e) {
-              console.error("[export]", e);
-              setExportStatus("error");
-            }
-          }}
-          style={{
-            padding: "11px 24px", borderRadius: 10, border: "none",
-            background: exportStatus === "running" ? C.border : "linear-gradient(135deg, #10b981, #059669)",
-            color: exportStatus === "running" ? C.dim : "#fff",
-            fontWeight: 700, cursor: exportStatus === "running" ? "not-allowed" : "pointer",
-            fontSize: 13, fontFamily: ARABIC_FONT,
-          }}
-        >
-          {exportStatus === "running" ? "جاري التصدير…" : "⬇️ تحميل قاعدة البيانات Excel"}
-        </button>
-      </Card>
     </div>
   );
 };
@@ -5289,6 +5190,12 @@ const RouteDetailModal = ({ route, bins, neighborhoods, vehicles, routes = [], d
           <button onClick={onClose} style={{ background: "none", border: "none", color: C.dim, fontSize: 20, cursor: "pointer" }}>✕</button>
         </div>
 
+        {route.dispatch?.auto && (
+          <div style={{ background: C.accent + "10", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: C.text, lineHeight: 1.8 }}>
+            <b>🤖 أُسندت تلقائيًا</b> · {getReadingAgeLabel(route.dispatch.at)}{route.dispatch.urgent ? " · عاجلة" : ""}
+            <Disclosure summary="سبب الاختيار والبدائل"><div style={{ color: C.muted }}>{route.dispatch.reason}{route.dispatch.nearestOverridden ? <div>{route.dispatch.nearestOverridden}</div> : null}{(route.dispatch.alternatives || []).length > 0 && <div>البدائل: {route.dispatch.alternatives.map((a) => `${a.driverName} (${a.why})`).join(" · ")}</div>}{(route.dispatch.insertions || []).length > 0 && <div>إضافات لاحقة: {route.dispatch.insertions.length} حاوية</div>}{(route.dispatch.reassignments || []).length > 0 && <div>إعادة إسناد: {route.dispatch.reassignments.map((x) => x.reason).join(" · ")}</div>}</div></Disclosure>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
           <StateBadge state={route.priorityTier} />
           <span style={{ fontSize: 12, color: C.muted }}>{route.estimatedDistanceKm} كم تقريبًا · تقدير حجمي {route.estimatedWasteLiters} لتر · {ROUTE_STATUS_LABELS[route.status] || route.status}</span>
@@ -5652,7 +5559,16 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
     const r = await installSimulation(cfg, { neighborhoods, featuresByKey: FEATURE_BY_KEY, actor, withHistory: true, vehicleIds: vehicles.filter((v) => v.demo).map((v) => v.id) });
     return `✅ ثُبّت المشهد: ${r.bins} حاوية (${r.summary.online} متصلة بالمحاكي · ${r.summary.offline} منقطعة · ${r.summary.fault} معطلة · ${r.summary.critical} حرجة · ${r.summary.thermal} تنبيه حراري) · حُذف ${r.cleaned} صف تجريبي سابق · ${r.historyRoutes} جولة تاريخية${r.warnings.length ? " · " + r.warnings.join("، ") : ""}`;
   });
-  const fire = (type) => run(type, async () => { const r = await fireSimulationEvent(type, evBin ? { binId: evBin } : { municipalityId: evMun || scope.municipalityId || null }, actor); return `${SIM_EVENTS[type].icon} ${SIM_EVENTS[type].label} → ${r.bin.name}`; });
+  const fire = (type) => run(type, async () => {
+    const r = await fireSimulationEvent(type, evBin ? { binId: evBin } : { municipalityId: evMun || scope.municipalityId || null }, actor);
+    // Urgent event → the server runs a dispatch cycle for that municipality (no-op when dispatch is off).
+    let dispatchNote = "";
+    const evMid = r.bin?.municipalityId || evMun || scope.municipalityId || null;
+    if (["critical_fill", "heat_spike"].includes(type) && evMid) {
+      try { const d = await requestDispatchCycle({ municipalityId: evMid, trigger: "simulator_event" }); const t = d.municipalities?.[evMid]; dispatchNote = d.skipped ? "" : t ? ` · الإسناد الذاتي: ${d.mode === "auto" ? `${t.executed} قرار نُفّذ` : `${t.observed} توصية (مراقبة)`}${t.escalated ? `، ${t.escalated} مرفوعة` : ""}` : ""; } catch { dispatchNote = " · تعذر الاتصال بخادم الإسناد"; }
+    }
+    return `${SIM_EVENTS[type].icon} ${SIM_EVENTS[type].label} → ${r.bin.name}${dispatchNote}`;
+  });
   const summary = sim?.summary;
   const num = (k, label, min, max) => (
     <label style={{ fontSize: 11, color: C.muted }}>{label}<input type="number" min={min} max={max} value={cfg[k]} disabled={!canInstall} onChange={(e) => setCfg({ ...cfg, [k]: Number(e.target.value) })} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT, boxSizing: "border-box" }} /></label>
@@ -5806,6 +5722,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
     fill: run("fill", async () => {
       const names = [];
       for (let i = 0; i < 3; i++) { const r = await fireSimulationEvent("critical_fill", { municipalityId: mid }, actor); names.push(r.bin.name); }
+      requestDispatchCycle({ municipalityId: mid, trigger: "simulator_event" }).catch(() => {}); // server-side; a no-op while dispatch is off
       await patch({ firedEvents: (session?.firedEvents || 0) + 3 });
       return `🔴 امتلاء حرج: ${names.join("، ")}`;
     }),
@@ -6281,8 +6198,148 @@ const AuditLogPage = ({ auditLog = [] }) => {
   );
 };
 
-const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [], fireSensors = [], citizenReports = [], vehicles = [], routes = [], driverProfiles = [], loadingVehicles, loadingRoutes, loggedInUser, draftBinId, onConsumeDraftBin, initialRouteId = null, onConsumeInitialRoute, onShowOnMap }) => {
-  const [tab, setTab] = useState("suggested");
+// ======================== AUTONOMOUS DISPATCH — operations center + Amanah settings ========================
+const DISPATCH_STATUS = {
+  executed: ["نُفّذ تلقائيًا", "ok"], observed: ["توصية — لم تُنفَّذ (مراقبة)", "info"], open: ["يحتاج قرارك", "danger"],
+  resolved: ["عولج", "ok"], dismissed: ["تُجوهل", "neutral"], rejected_at_commit: ["رُفض عند التنفيذ", "warning"],
+};
+const DispatchModeBadge = ({ settings }) => {
+  const s = { ...DEFAULT_DISPATCH_SETTINGS, ...(settings || {}) };
+  const tone = s.mode === "auto" ? "ok" : s.mode === "observe" ? "info" : "neutral";
+  return <Badge tone={tone} solid={s.mode === "auto"}>{s.mode === "auto" ? "🤖 " : ""}{DISPATCH_MODES[s.mode] || s.mode}{s.mode !== "off" ? ` · ${s.scope === "all" ? "كل الحاويات" : "بيئة العرض فقط"}` : ""}</Badge>;
+};
+
+const DispatchCenter = ({ loggedInUser, onOpenRoute }) => {
+  const scope = scopeFor(loggedInUser);
+  const mid = scope.all ? null : scope.municipalityId;
+  const { settings } = useDispatchSettings(true);
+  const { decisions } = useDispatchDecisions(true, mid);
+  const { runs } = useDispatchRuns(true, 10);
+  const [tab, setTab] = useState("attention");
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
+  const s = { ...DEFAULT_DISPATCH_SETTINGS, ...(settings || {}) };
+  const escalations = decisions.filter((d) => d.type === "escalate" && (d.status === "open" || d.status === "observed"));
+  const log = decisions.filter((d) => d.type !== "escalate").slice(0, 40);
+  const runNow = async () => {
+    setBusy("run"); setMsg("");
+    try {
+      const r = await requestDispatchCycle({ municipalityId: mid, trigger: "manual" });
+      if (r.skipped) setMsg(r.skipped === "off" ? "الإسناد الذاتي متوقف من الإعدادات." : "لم يحن موعد الدورة.");
+      else { const t = Object.values(r.municipalities || {}).reduce((a, x) => ({ c: a.c + x.created, i: a.i + x.inserted, e: a.e + x.escalated, x: a.x + x.executed, o: a.o + x.observed }), { c: 0, i: 0, e: 0, x: 0, o: 0 });
+        setMsg(r.mode === "auto" ? `اكتملت الدورة: ${t.x} قرار نُفّذ (${t.c} جولة جديدة، ${t.i} إضافة)، ${t.e} حالة رُفعت لك.` : `اكتملت دورة المراقبة: ${t.o} توصية سُجلت دون تنفيذ، ${t.e} حالة استثنائية.`); }
+    } catch (e) { setMsg("تعذر تشغيل الدورة: " + (e?.message || e)); } finally { setBusy(""); }
+  };
+  const close = (d, status) => async () => {
+    const note = window.prompt(status === "resolved" ? "كيف عولجت الحالة؟" : "سبب التجاهل:", "") ?? null; if (note === null) return;
+    setBusy(d.id); try { await resolveDispatchDecision(d.id, actor, status, note); await writeAuditLog("dispatch_escalation_closed", actor.uid, actor.name, { decisionId: d.id, status, kind: d.kind }); } finally { setBusy(""); }
+  };
+  const items = escalations.map((d) => ({
+    id: d.id, tone: d.status === "open" ? (["thermal", "vehicle_down", "driver_unavailable"].includes(d.kind) ? "danger" : "warning") : "info",
+    title: `${ESCALATION_LABELS[d.kind] || d.kind}${d.routeName ? ` — ${d.routeName}` : ""}`,
+    meta: `${(d.binIds || []).length} حاوية · ${getReadingAgeLabel(d.createdAt)}${d.status === "observed" ? " · وضع المراقبة: كان سيُرفع لك" : ""}`,
+    badge: d.status === "observed" ? <Badge tone="info">مراقبة</Badge> : null,
+    detail: <div><div>{d.reason}</div>{d.suggestion && <div style={{ color: C.text, marginTop: 4 }}><b>المقترح:</b> {d.suggestion}</div>}{(d.alternatives || []).length > 0 && <div style={{ marginTop: 4 }}>البدائل: {d.alternatives.map((a) => `${a.driverName} (${a.why})`).join(" · ")}</div>}</div>,
+    actions: d.status === "open" ? <>{d.routeId && onOpenRoute && <Btn onClick={() => onOpenRoute(d.routeId)}>فتح الجولة</Btn>}<Btn tone="ok" disabled={busy === d.id} onClick={close(d, "resolved")}>تم التعامل</Btn><Btn variant="ghost" disabled={busy === d.id} onClick={close(d, "dismissed")}>تجاهل</Btn></> : null,
+  }));
+  const lastRun = runs[0];
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: SP.md }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: SP.sm, flexWrap: "wrap", background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 14px" }}>
+        <div style={{ display: "flex", gap: SP.sm, alignItems: "center", flexWrap: "wrap", fontSize: FS.body, color: C.muted }}>
+          <b style={{ color: C.text }}>الإسناد الذاتي:</b> <DispatchModeBadge settings={settings} />
+          <span>آخر دورة: {lastRun ? `${getReadingAgeLabel(lastRun.startedAt)} (${({ cron: "دورية", heartbeat: "دورية", critical_reading: "قراءة حرجة", simulator_event: "حدث محاكاة", manual: "يدوية" })[lastRun.trigger] || lastRun.trigger})` : "لم تعمل بعد"}</span>
+          <span>· كل {s.periodMinutes} د، والحالات الحرجة فورًا</span>
+        </div>
+        <Btn variant="primary" disabled={busy === "run" || s.mode === "off"} onClick={runNow}>{busy === "run" ? "جارٍ التشغيل…" : "تشغيل دورة الآن"}</Btn>
+      </div>
+      {msg && <div style={{ fontSize: FS.body, color: C.text, background: C.info + "10", border: `1px solid ${C.info}30`, borderRadius: 10, padding: "8px 12px" }}>{msg}</div>}
+      {s.mode === "observe" && <div style={{ fontSize: FS.meta, color: C.info }}>وضع المراقبة: المحرك يحسب ويسجل ما كان سيفعله فقط. لا تُسند أي جولة ولا يتغير شيء حتى تفعّل الأمانة التنفيذ التلقائي.</div>}
+      <Tabs value={tab} onChange={setTab} tabs={[{ key: "attention", label: "تحتاج قرارك", count: escalations.filter((d) => d.status === "open").length, tone: "danger" }, { key: "log", label: "سجل قرارات الإسناد", count: log.length }, { key: "runs", label: "الدورات", count: runs.length }]} />
+      {tab === "attention" && <AttentionList items={items} empty="لا حالات استثنائية — الإسناد يسير ضمن القيود" max={8} />}
+      {tab === "log" && (log.length === 0 ? <EmptyState icon="🤖" title="لا قرارات بعد" desc="تظهر هنا قرارات المحرك وأسبابها بعد أول دورة." /> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {log.map((d) => { const [lab, tone] = DISPATCH_STATUS[d.status] || [d.status, "neutral"]; return (
+            <div key={d.id} style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px", background: C.card }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: SP.sm, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ fontSize: FS.body, color: C.text, fontWeight: 700 }}>{ACTION_LABELS[d.type] || d.type}{d.routeName ? ` — ${d.routeName}` : ""}{d.driverName ? ` ← ${d.driverName}` : ""}</div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}><Badge tone={tone}>{lab}</Badge>{d.demo && <DemoBadge />}<span style={{ fontSize: FS.meta, color: C.dim }}>{getReadingAgeLabel(d.executedAt || d.updatedAt)}</span>{d.routeId && d.status === "executed" && onOpenRoute && <Btn variant="ghost" onClick={() => onOpenRoute(d.routeId)}>فتح</Btn>}</div>
+              </div>
+              <Disclosure summary="لماذا؟"><div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8 }}>{d.reason}{d.rejectReason ? <div style={{ color: C.warning }}>سبب الرفض عند التنفيذ: {d.rejectReason}</div> : null}{(d.alternatives || []).length > 0 && <div>البدائل التي لم تُختر: {d.alternatives.map((a) => `${a.driverName} (${a.why})`).join(" · ")}</div>}{d.note ? <div style={{ color: C.dim }}>{d.note}</div> : null}</div></Disclosure>
+            </div>
+          ); })}
+        </div>
+      ))}
+      {tab === "runs" && (runs.length === 0 ? <EmptyState icon="⏱️" title="لا دورات بعد" /> : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: ARABIC_FONT }}>
+            <thead><tr style={{ color: C.muted, textAlign: "right" }}>{["الوقت", "المشغّل", "الوضع", "جديدة", "إضافة", "إعادة إسناد", "مرفوعة", "نُفذ", "مراقبة", "مرفوض"].map((h) => <th key={h} style={{ padding: "6px", borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{h}</th>)}</tr></thead>
+            <tbody>{runs.map((r) => { const t = Object.values(r.municipalities || {}).reduce((a, x) => ({ c: a.c + (x.created || 0), i: a.i + (x.inserted || 0), ra: a.ra + (x.reassigned || 0), e: a.e + (x.escalated || 0), x: a.x + (x.executed || 0), o: a.o + (x.observed || 0), rj: a.rj + (x.rejected || 0) }), { c: 0, i: 0, ra: 0, e: 0, x: 0, o: 0, rj: 0 }); return (
+              <tr key={r.id} style={{ color: C.text }}>{[getReadingAgeLabel(r.startedAt), r.trigger, DISPATCH_MODES[r.mode] || r.mode, t.c, t.i, t.ra, t.e, t.x, t.o, t.rj].map((v, i) => <td key={i} style={{ padding: "6px", borderBottom: `1px solid ${C.border}` }}>{v}</td>)}</tr>
+            ); })}</tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/** Amanah-only: switch the autonomous dispatch mode, scope and operating thresholds. */
+const DispatchSettingsCard = ({ loggedInUser }) => {
+  const { settings } = useDispatchSettings(true);
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const s = draft || { ...DEFAULT_DISPATCH_SETTINGS, ...(settings || {}) };
+  const canEdit = can(loggedInUser?.role, "transfers.approve"); // the Amanah decision maker
+  const set = (k, v) => setDraft({ ...s, [k]: v });
+  const num = (k, label, unit) => <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: FS.meta, color: C.muted }}>{label}<span style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="number" disabled={!canEdit} value={s[k]} onChange={(e) => set(k, Number(e.target.value))} style={{ width: 90, padding: "6px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontFamily: ARABIC_FONT }} />{unit}</span></label>;
+  const save = async () => {
+    if (s.mode === "auto" && s.scope === "all" && !window.confirm("التنفيذ التلقائي على كل الحاويات يعني إسناد جولات حقيقية لسائقين دون اعتماد بشري لكل جولة. هل اجتازت الاختبارات وتريد المتابعة؟")) return;
+    setBusy(true); setMsg("");
+    try { const { lastRunAt, lastRunId, lastTrigger, lastUrgentRunAt, lastUrgentRunId, updatedAt, updatedBy, updatedByName, ...clean } = s; void lastRunAt; void lastRunId; void lastTrigger; void lastUrgentRunAt; void lastUrgentRunId; void updatedAt; void updatedBy; void updatedByName; await saveDispatchSettings(clean, { uid: loggedInUser?.uid, name: loggedInUser?.name }); setDraft(null); setMsg("حُفظت إعدادات الإسناد الذاتي"); }
+    catch (e) { setMsg("تعذر الحفظ: " + (e?.message || e)); } finally { setBusy(false); }
+  };
+  return (
+    <Section title="🤖 الإسناد التشغيلي الذاتي" hint="يحلل المستشعرات والتنبؤات والبلاغات دوريًا على الخادم، ويضيف الحاويات لجولات قائمة أو ينشئ جولات مجمعة ويسندها للسائق الأنسب. نقل الموارد بين البلديات يبقى باعتماد الأمانة." actions={<DispatchModeBadge settings={settings} />}>
+      {!canEdit && <div style={{ fontSize: FS.meta, color: C.dim, marginBottom: SP.sm }}>تغيير الوضع من صلاحية متخذ القرار في الأمانة فقط.</div>}
+      <div style={{ display: "flex", gap: SP.sm, flexWrap: "wrap", marginBottom: SP.md }}>
+        {Object.entries(DISPATCH_MODES).map(([k, l]) => <Btn key={k} variant={s.mode === k ? "primary" : "secondary"} disabled={!canEdit} onClick={() => set("mode", k)}>{l}</Btn>)}
+        <span style={{ width: 1, background: C.border, margin: "0 4px" }} />
+        {Object.entries(DISPATCH_SCOPES).map(([k, l]) => <Btn key={k} variant={s.scope === k ? "primary" : "secondary"} tone={k === "all" ? "warning" : undefined} disabled={!canEdit} onClick={() => set("scope", k)}>{l}</Btn>)}
+      </div>
+      <Disclosure summary="قيود التشغيل (قابلة للضبط)">
+        <div style={{ display: "flex", gap: SP.md, flexWrap: "wrap" }}>
+          {num("periodMinutes", "فاصل الدورة الدورية", "د")}{num("minBinsPerRoute", "أقل عدد حاويات للجولة الاعتيادية", "")}{num("urgentFillPct", "امتلاء عاجل يتجاوز التجميع", "%")}{num("maxApproachMin", "أقصى زمن وصول للسائق", "د")}
+          {num("maxStopsPerRoute", "أقصى توقفات للجولة", "")}{num("insertMaxKm", "أقصى بعد للإضافة لجولة قائمة", "كم")}{num("insertMaxAddedMin", "أقصى زمن يضاف للجولة", "د")}{num("notStartedEscalateMin", "تصعيد جولة لم تبدأ بعد", "د")}
+        </div>
+      </Disclosure>
+      {canEdit && <div style={{ display: "flex", gap: SP.sm, alignItems: "center", marginTop: SP.md }}><Btn variant="primary" disabled={busy || !draft} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ"}</Btn>{draft && <Btn variant="ghost" onClick={() => setDraft(null)}>إلغاء</Btn>}{msg && <span style={{ fontSize: FS.meta, color: C.muted }}>{msg}</span>}</div>}
+      <div style={{ fontSize: FS.meta, color: C.dim, marginTop: SP.sm }}>التشغيل: فوري عند قراءة حرجة، ودوري من الخادم، ويدوي من «تشغيل دورة الآن». عند تفعيل الإسناد الذاتي تتوقف مزامنة الاقتراحات من المتصفح.</div>
+    </Section>
+  );
+};
+
+/** Driver portal: tasks pushed by the dispatcher (new route, added stop, reassignment). */
+const DriverNotifications = ({ driverId }) => {
+  const { notifications } = useDriverNotifications(driverId);
+  const unread = notifications.filter((n) => !n.read).slice(0, 3);
+  if (unread.length === 0) return null;
+  return (
+    <div role="status" aria-live="polite" style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+      {unread.map((n) => (
+        <div key={n.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, background: n.type === "route_removed" ? C.warning + "18" : C.accent + "18", border: `1px solid ${n.type === "route_removed" ? C.warning : C.accent}60`, borderRadius: 12, padding: "10px 12px" }}>
+          <div><div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>🔔 {n.title}</div><div style={{ fontSize: 12.5, color: C.muted }}>{n.body}</div></div>
+          <Btn onClick={() => markDriverNotificationRead(n.id).catch(() => {})}>تم</Btn>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [], fireSensors = [], citizenReports = [], vehicles = [], routes = [], driverProfiles = [], loadingVehicles, loadingRoutes, loggedInUser, draftBinId, onConsumeDraftBin, initialRouteId = null, onConsumeInitialRoute, onShowOnMap , dispatchSettings = null, onOpenDispatch}) => {
+  const [tab, setTab] = useState(dispatchSettings?.mode === "auto" ? "approved" : "suggested");
   const [selectedRouteId, setSelectedRouteId] = useState(null);
 
   // Deep link from a bin/neighborhood/dashboard card: open that route (and its tab) once routes are loaded.
@@ -6353,9 +6410,15 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ fontSize: 12, color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px" }}>
-        هذه الصفحة تستبدل "وحدة التحكم" القديمة (أوامر الشفط). الجولات تُقترح آليًا من أولوية الحاويات، لكن لا تصبح نشطة
-        إلا باعتماد موظف صريح واختيار مركبة؛ لا يُرسل النظام مركبة تلقائيًا بدون تدخل بشري.
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12.5, color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px" }}>
+        <span>
+          {dispatchSettings?.mode === "auto"
+            ? <><b style={{ color: C.text }}>الإسناد الذاتي مفعّل{dispatchSettings.scope === "all" ? "" : " (بيئة العرض)"}:</b> الجولات الاعتيادية تُجمّع وتُسند للسائق الأنسب تلقائيًا، وتصلك الاستثناءات فقط.</>
+            : dispatchSettings?.mode === "observe"
+              ? <><b style={{ color: C.text }}>الإسناد الذاتي في وضع المراقبة:</b> يحسب ما كان سيفعله دون تنفيذ — الاعتماد والإسناد هنا يدويان.</>
+              : <><b style={{ color: C.text }}>الإسناد يدوي:</b> الجولة المقترحة لا تصل للسائق إلا باعتماد موظف واختيار سائق ومركبة.</>}
+        </span>
+        {onOpenDispatch && <Btn variant="ghost" onClick={onOpenDispatch}>الإسناد الذاتي ←</Btn>}
       </div>
 
       {draftBinId && (
@@ -6367,8 +6430,8 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <button disabled={generating || loading} onClick={handleGenerate} style={{
-          padding: "10px 18px", borderRadius: 10, border: "none",
-          background: generating ? C.border : "linear-gradient(135deg, #3b82f6, #1d4ed8)",
+          padding: "9px 16px", borderRadius: 10, border: "none",
+          background: generating ? C.border : C.brand,
           color: generating ? C.dim : "#fff", fontWeight: 700, fontSize: 13, cursor: generating ? "not-allowed" : "pointer", fontFamily: ARABIC_FONT,
         }}>
           {generating ? "جاري التوليد…" : pendingChanges > 0 ? `🧭 توليد/تحديث الجولات المقترحة (${pendingChanges} تغيير)` : "🧭 توليد جولات مقترحة الآن"}
@@ -6437,7 +6500,7 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
           ) : grouped[tab].map((r) => (
             <div key={r.id} onClick={() => setSelectedRouteId(r.id)} style={{ background: C.card, border: `1px solid ${STATUS_COLORS[r.priorityTier] || C.border}40`, borderRadius: 14, padding: 16, cursor: "pointer" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>{r.routeName} {r.demo && <DemoBadge />}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>{r.routeName} {r.demo && <DemoBadge />}{r.dispatch?.auto && <Badge tone="ok">🤖 تلقائي</Badge>}{r.driverName && <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>← {r.driverName}</span>}</div>
                 <StateBadge state={r.priorityTier} />
               </div>
               <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{r.binIds?.length || 0} حاوية · {r.estimatedDistanceKm} كم تقريبًا · تقدير {r.estimatedWasteLiters} لتر</div>
@@ -6749,10 +6812,11 @@ const AmanahStrategicPanel = ({ neighborhoods = [], bins = [], profiles = [], ve
 // ======================== CITY OPERATIONAL INTELLIGENCE + DECISION SIMULATION CENTER (Phase 6) ========================
 const VERDICT_LABEL = { better: ["أفضل", C.accent], worse: ["أسوأ", C.danger], neutral: ["محايد", C.warning] };
 
-const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicles = [], routes = [], incidents = [], recentReadings = [], fireSensors = [], citizenReports = [], loggedInUser }) => {
+const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicles = [], routes = [], incidents = [], recentReadings = [], fireSensors = [], citizenReports = [], loggedInUser, initialSection = null, onNavigate, modelsDetail = null }) => {
   const scope = scopeFor(loggedInUser);
   const [mid, setMid] = useState(scope.all ? "east" : scope.municipalityId);
-  const [section, setSection] = useState("predict");
+  const [section, setSection] = useState(initialSection || "predict");
+  const { settings: dispatchSettings } = useDispatchSettings(true);
   const [scenario, setScenario] = useState({ type: "vehicle_down", vehicleId: "", driverId: "", factor: 1.5, count: 3, delayMin: 20, delta: -1, fromMunicipalityId: "east", routeId: "" });
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState("");
@@ -6804,12 +6868,15 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div><div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>🧠 {BRAND.engine}</div><div style={{ fontSize: 12, color: C.dim }}>{BRAND.engineEn} — يربط المراقبة بالتنبؤ والتخطيط والتنفيذ وقياس النتائج. كل توصية مبنية على نتائج المحركات الحسابية، لا على نص مولَّد.</div></div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {scope.all && sel(mid, (v) => { setMid(v); setResult(null); }, MUNICIPALITIES.map((m) => [m.id, m.nameAr]))}
-          {[["predict", "1 · ماذا سيحدث؟"], ["act", "2 · ما أفضل إجراء؟"], ["impact", "3 · ما أثر القرار؟"]].map(([k, l]) => <button key={k} onClick={() => setSection(k)} style={{ padding: "8px 14px", borderRadius: 10, border: `1px solid ${section === k ? C.accent : C.border}`, background: section === k ? C.accent + "20" : "transparent", color: section === k ? C.accent : C.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT }}>{l}</button>)}
-        </div>
+        <div style={{ fontSize: 12.5, color: C.muted }}>كل نتيجة هنا محسوبة من المحركات (التنبؤ، التخطيط، الضغط، المحاكاة) — لا نصوص مولَّدة.</div>
+        {scope.all && <label style={{ fontSize: 12, color: C.muted, display: "inline-flex", gap: 6, alignItems: "center" }}>البلدية {sel(mid, (v) => { setMid(v); setResult(null); }, MUNICIPALITIES.map((m) => [m.id, m.nameAr]))}</label>}
       </div>
+      <Tabs value={section} onChange={setSection} tabs={[
+        { key: "predict", label: "التنبؤات — ماذا سيحدث؟", count: forecast.soon.length || null, tone: "warning" },
+        { key: "act", label: "التوصيات — ما أفضل إجراء؟", count: (quickPlan.additions.suggestions.length + myTransfers.length + quickPlan.plan.routes.length) || null, tone: "info" },
+        { key: "impact", label: "المحاكاة — ما أثر القرار؟" },
+        ...(modelsDetail ? [{ key: "models", label: "تفاصيل نماذج التنبؤ" }] : []),
+      ]} />
 
       {section === "predict" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -6832,19 +6899,27 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
 
       {section === "act" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <Card title="🧭 الجولات المقترحة الآن (خطة سريعة — مسافات جوية)" icon={<RouteIcon size={16} color={C.muted} />}>
-            {quickPlan.plan.routes.length === 0 ? <div style={{ fontSize: 12, color: C.accent }}>✅ لا حاويات مؤهلة للجمع الآن في هذه البلدية.</div> : quickPlan.plan.routes.map((r) => <div key={r.neighborhoodId} style={{ fontSize: 12, color: C.muted, background: C.bg, borderRadius: 8, padding: "8px 10px", marginBottom: 6, lineHeight: 1.8 }}><b style={{ color: C.text }}>{r.routeName}</b> — {explainRoute(r)}</div>)}
-            {quickPlan.plan.constraints.length > 0 && <ul style={{ margin: "6px 0 0", paddingInlineStart: 18, fontSize: 11.5, color: C.warning }}>{quickPlan.plan.constraints.map((c, i) => <li key={i}>{c}</li>)}</ul>}
-            <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6 }}>للخطة الكاملة على أزمنة الطرق الفعلية واعتمادها: صفحة «خطة الجمع الذكية».</div>
-          </Card>
-          <Card title="💡 توصيات قابلة للتفسير" icon={<Target size={16} color={C.muted} />}>
-            {quickPlan.additions.sentences.length === 0 && myTransfers.length === 0 ? <div style={{ fontSize: 12, color: C.muted }}>لا توصيات إضافية الآن.</div> : null}
-            {quickPlan.additions.sentences.map((t, i) => <div key={i} style={{ fontSize: 12.5, color: C.text, lineHeight: 1.9, background: C.accent + "12", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "8px 12px", marginBottom: 6 }}>{t}</div>)}
-            {myTransfers.map((t, i) => <div key={i} style={{ fontSize: 12.5, color: C.text, lineHeight: 1.9, background: C.info + "12", border: `1px solid ${C.info}40`, borderRadius: 10, padding: "8px 12px", marginBottom: 6 }}>🤝 {t.reason}</div>)}
-          </Card>
+          <Section title="الجولات المقترحة الآن" count={quickPlan.plan.routes.length} hint="خطة سريعة بالمسافات الجوية؛ الخطة الكاملة على الطرق الفعلية في «خطة الجمع الذكية»"
+            actions={<>{onNavigate && <Btn variant="primary" onClick={() => onNavigate("control", { tab: "plan" })}>فتح خطة الجمع الذكية</Btn>}{onNavigate && dispatchSettings?.mode === "auto" && <Btn onClick={() => onNavigate("control", { tab: "dispatch" })}>الإسناد الذاتي</Btn>}</>}>
+            <AttentionList max={5} empty="لا حاويات مؤهلة للجمع الآن في هذه البلدية" items={quickPlan.plan.routes.map((r) => ({ id: "qp_" + r.neighborhoodId, tone: r.driver ? "info" : "warning",
+              title: `${r.routeName}: ${r.stops.length} حاوية · ${r.distanceKm} كم`, meta: r.driver ? `السائق المقترح: ${r.driver.driverName} (${r.driver.vehicleNumber})` : "لا سائق مؤهل — يحتاج إسنادًا يدويًا أو دعمًا",
+              detail: explainRoute(r) }))} />
+            {quickPlan.plan.constraints.length > 0 && <Disclosure summary={`القيود (${quickPlan.plan.constraints.length})`}><ul style={{ margin: 0, paddingInlineStart: 18, fontSize: 12, color: C.warning }}>{quickPlan.plan.constraints.map((c, i) => <li key={i}>{c}</li>)}</ul></Disclosure>}
+          </Section>
+          <Section title="توصيات قابلة للتنفيذ" count={quickPlan.additions.suggestions.length + myTransfers.length}>
+            <AttentionList max={6} empty="لا توصيات إضافية الآن" items={[
+              ...quickPlan.additions.suggestions.map((a) => ({ id: "add_" + a.binId, tone: "info", title: `أضف ${a.binName} إلى ${a.routeName}`, meta: `متوقع امتلاؤها قريبًا · ${a.km} كم من ${a.near}`,
+                actionLabel: dispatchSettings?.mode === "auto" ? "دع الإسناد الذاتي يضيفها" : "فتح الجولات", onAction: () => onNavigate && onNavigate("control", { tab: dispatchSettings?.mode === "auto" ? "dispatch" : "routes" }) })),
+              ...myTransfers.map((t, i) => ({ id: "tr_" + i, tone: "warning", title: `نقل ${t.resourceType === "crew" ? "طاقم" : t.resourceType === "vehicle" ? "مركبة" : "سائق"} ${t.resourceLabel}: ${t.fromName} ← ${t.toName}`,
+                meta: `ضغط المستقبِلة ${t.impact.receiverBefore} ← ${t.impact.receiverAfter} · المرسِلة ${t.impact.donorBefore} ← ${t.impact.donorAfter} · ~${t.travelMin ?? "?"} د`, detail: t.reason,
+                actionLabel: can(loggedInUser?.role, "transfers.propose") ? "القيادة الاستراتيجية" : "جرّب أثره في المحاكاة", onAction: () => can(loggedInUser?.role, "transfers.propose") ? onNavigate && onNavigate("exec") : setSection("impact") })),
+            ]} />
+            <div style={{ fontSize: FS.meta, color: C.dim, marginTop: 8 }}>نقل الموارد بين البلديات يتطلب اعتماد الأمانة؛ مدير البلدية يطلب الدعم من «بلديتي ← مؤشرات الأداء».</div>
+          </Section>
         </div>
       )}
 
+      {section === "models" && modelsDetail}
       {section === "impact" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Card title="🧪 مركز محاكاة القرارات — ماذا لو؟" icon={<Gauge size={16} color={C.muted} />}>
@@ -6893,7 +6968,9 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
   );
 };
 
-const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, neighborhoods = [], bins = [], routes = [], fireSensors = [], citizenReports = [], collectionEvents = [], auditLog = [], vehicles = [], recentReadings = [], profiles = [], incidents = [], supportRequests = [], transfers = [], loggedInUser = null, onOpenMunicipality }) => {
+/** Executive tabs whose figures are generated / seeded (illustrative), not derived from live operations. */
+const EXEC_ILLUSTRATIVE_TABS = [["overview", "نظرة تنفيذية"], ["financial", "التحليل المالي"], ["districts", "أداء الأحياء"], ["benchmark", "المقارنة المعيارية"], ["scenarios", "سيناريوهات القرار"], ["strategic", "الأهداف الاستراتيجية"]];
+const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, neighborhoods = [], bins = [], routes = [], fireSensors = [], citizenReports = [], collectionEvents = [], auditLog = [], vehicles = [], recentReadings = [], profiles = [], incidents = [], supportRequests = [], transfers = [], loggedInUser = null, onOpenMunicipality , embedded = false}) => {
   const [tab, setTab] = useState("amanah");
 
   // ── "ملخص اليوم" — the city on one page, from live smart-bin data ──
@@ -6982,8 +7059,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
-      {/* Executive Header */}
-      <header style={{ padding: isMobile ? "10px 14px" : "12px 28px", background: C.brand, borderBottom: `1px solid ${C.brandSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "nowrap" }}>
+      {/* Executive Header (hidden when embedded in the main shell, which already provides header, password and session timeout) */}
+      {!embedded && <header style={{ padding: isMobile ? "10px 14px" : "12px 28px", background: C.brand, borderBottom: `1px solid ${C.brandSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "nowrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
           <div style={{ flexShrink: 0 }}><AppLogo size={38} /></div>
           {!isMobile && <div>
@@ -7002,33 +7079,27 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
           <button onClick={() => setShowPassModal(true)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #10b98140", background: "#10b98115", color: C.accent, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><SettingsIcon size={13} />{!isMobile && " إعدادات"}</button>
           <button onClick={onLogout} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ef444440", background: "#ef444415", color: C.danger, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ARABIC_FONT, display: "flex", alignItems: "center", gap: 5 }}><LogOut size={13} />{!isMobile && " خروج"}</button>
         </div>
-      </header>
+      </header>}
       {showPassModal && <ChangePasswordModal onClose={() => setShowPassModal(false)} />}
-      <SessionTimeout onLogout={onLogout} timeoutMin={30} countdownSec={10} />
+      {!embedded && <SessionTimeout onLogout={onLogout} timeoutMin={30} countdownSec={10} />}
 
-      {/* Tabs */}
-      <div style={{ padding: isMobile ? "10px 12px 0" : "12px 28px 0", display: "flex", gap: 6, flexWrap: "wrap", overflowX: "auto" }}>
-        {[
-          { key: "amanah",    label: "القيادة الاستراتيجية",  icon: <Landmark size={14} /> },
-          { key: "brain",     label: "العقل التشغيلي ومحاكاة القرارات", icon: <Sparkles size={14} /> },
-          { key: "today",     label: "ملخص اليوم",            icon: <Target size={14} /> },
-          { key: "overview",  label: "نظرة تنفيذية",         icon: <ChartNoAxesCombined size={14} /> },
-          { key: "financial", label: "التحليل المالي",        icon: <DollarSign size={14} /> },
-          { key: "districts", label: "أداء الأحياء",          icon: <Building size={14} /> },
-          { key: "benchmark", label: "المقارنة المعيارية",    icon: <TrendingUp size={14} /> },
-          { key: "scenarios", label: "سيناريوهات القرار",    icon: <Target size={14} /> },
-          { key: "strategic", label: "الأهداف الاستراتيجية", icon: <MapIcon size={14} /> },
-        ].map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)} style={{
-            padding: "9px 18px", borderRadius: 10, border: `1px solid ${tab === t.key ? C.warning : C.border}`,
-            background: tab === t.key ? "#f59e0b18" : "transparent", color: tab === t.key ? C.warning : C.muted,
-            cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ARABIC_FONT,
-            display: "flex", alignItems: "center", gap: 6,
-          }}>{t.icon}{t.label}</button>
-        ))}
+      {/* Tabs: live operations first; tabs built on generated/seeded figures are labelled «توضيحي» */}
+      <div style={{ padding: embedded ? 0 : isMobile ? "10px 12px 0" : "12px 28px 0", display: "flex", flexDirection: "column", gap: 8 }}>
+        <Tabs value={tab} onChange={setTab} tabs={[
+          { key: "amanah", label: "القيادة الاستراتيجية" },
+          { key: "today", label: "ملخص اليوم" },
+          ...(embedded ? [] : [{ key: "brain", label: "العقل التشغيلي" }]),
+          ...EXEC_ILLUSTRATIVE_TABS.map(([key, label]) => ({ key, label: `${label} · توضيحي` })),
+        ]} />
+        {embedded && <div style={{ display: "flex", justifyContent: "flex-end" }}><Btn variant="ghost" onClick={() => window.__showAdminPanel && window.__showAdminPanel()}>إدارة المستخدمين</Btn></div>}
+        {EXEC_ILLUSTRATIVE_TABS.some(([k]) => k === tab) && (
+          <div role="note" style={{ fontSize: 12.5, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}50`, borderRadius: 10, padding: "8px 12px" }}>
+            <b>بيانات توضيحية:</b> أرقام هذا التبويب مولّدة أو من بيانات التهيئة لعرض شكل التحليل، ولا تُشتق من التشغيل الفعلي. لا تُستخدم لاتخاذ قرار.
+          </div>
+        )}
       </div>
 
-      <div style={{ flex: 1, overflow: "auto", padding: "20px 28px" }}>
+      <div style={{ flex: 1, overflow: "auto", padding: embedded ? "14px 0 0" : "20px 28px" }}>
 
         {/* ===== TODAY — one page for the decision maker, exportable to PDF ===== */}
         {tab === "brain" && <IntelligencePage neighborhoods={neighborhoods} bins={bins} profiles={profiles} vehicles={vehicles} routes={routes} incidents={incidents} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser || user} />}
@@ -8146,6 +8217,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
             <button disabled={busy} onClick={toggleShift} style={btn({ padding: "8px 14px", background: onShift ? C.danger + "20" : C.accent, color: onShift ? C.danger : "#07231A", border: onShift ? `1px solid ${C.danger}` : "none", fontSize: 12 })}>{onShift ? "⏹ إنهاء المناوبة" : "▶️ بدء المناوبة"}</button>
           </div>
         )}
+        <DriverNotifications driverId={user.uid} />
         <div style={{ marginBottom: 14 }}><NotificationPermissionButton compact /></div>
 
         {route ? (
@@ -8928,7 +9000,8 @@ const UnifiedLoginPage = ({ onLogin }) => {
 // ======================== MAIN ========================
 function SmartWasteManagement() {
   const { user: authUser, userData, userRole, logout } = useAuth();
-  const [page, setPage] = useState("dashboard");
+  // The Amanah decision maker lands on the strategic portal; everyone else on the operations dashboard.
+  const [pageRaw, setPage] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 768);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [time, setTime] = useState(new Date());
@@ -8959,6 +9032,7 @@ function SmartWasteManagement() {
   const scopeMid = scope.all ? null : scope.municipalityId;
   const isDriverAccount = userData?.role === "driver";
   const isStaffAccount = !!userData && isStaffRole(userData.role);
+  const page = pageRaw || (userData?.role === "executive" ? "exec" : "dashboard");
   const { neighborhoods, loading: loadingNeighborhoods } = useNeighborhoods({ municipalityId: scopeMid });
   const { bins, loading: loadingBins } = useBins({ municipalityId: scopeMid });
   const { readings: recentReadings } = useRecentReadings();
@@ -8994,7 +9068,19 @@ function SmartWasteManagement() {
   };
   // Cross-page links that keep bins ↔ neighborhoods ↔ routes one click apart.
   const [routeInitialId, setRouteInitialId] = useState(null);
-  const goToRoute = (routeId) => { setRouteInitialId(routeId); setPage("control"); };
+  const goToRoute = (routeId) => { setRouteInitialId(routeId); setPageTabs({ control: "routes" }); setPage("control"); };
+  // Hub pages (routes / fleet / intelligence) keep the old pages as tabs; aliases keep old links working.
+  const [pageTabs, setPageTabs] = useState({});
+  const [collapsedGroupsSaved, setCollapsedGroupsSaved] = useState(() => { try { return JSON.parse(localStorage.getItem("swm_nav_collapsed") || "null"); } catch { return null; } });
+  const tabOf = (target, def) => pageTabs[target] || ({ plan: ["control", "plan"], fleet: ["drivers", "live"], predictions: ["brain", "models"] }[page]?.[0] === target ? { plan: "plan", fleet: "live", predictions: "models" }[page] : def);
+  const navigate = (pg, extra = {}) => {
+    const alias = { plan: ["control", "plan"], fleet: ["drivers", "live"], predictions: ["brain", "models"] }[pg];
+    const target = alias ? alias[0] : pg;
+    const tab = extra.tab || (alias ? alias[1] : null);
+    if (extra.municipalityId) setMunicipalityInitialId(extra.municipalityId);
+    setPageTabs(tab ? { [target]: tab } : {});
+    setPage(target);
+  };
   const [mapInitialKey, setMapInitialKey] = useState(null);
   const [municipalityInitialId, setMunicipalityInitialId] = useState(null);
   const goToMapNeighborhood = (key) => { setMapInitialKey(key); setPage("map"); };
@@ -9036,7 +9122,14 @@ function SmartWasteManagement() {
     time: getReadingAgeLabel(a.createdAt),
   })), [realAlerts]);
 
+  // When the server-side autonomous dispatcher is on (observe or auto), it owns route planning — the
+  // browser-side suggestion sync stands down so two writers never touch the same routes.
+  const { settings: dispatchSettings } = useDispatchSettings(isStaffAccount);
+  const serverDispatchOn = !!dispatchSettings && (dispatchSettings.mode === "observe" || dispatchSettings.mode === "auto");
+  const { decisions: dispatchDecisions } = useDispatchDecisions(isStaffAccount, scopeMid);
+  const openEscalations = dispatchDecisions.filter((d) => d.type === "escalate" && d.status === "open").length;
   useEffect(() => {
+    if (serverDispatchOn) return;
     if (!autoSyncRoutes || loadingRoutes || loadingBins || bins.length === 0 || !userData || !isStaffRole(userData.role)) return; // never from driver/citizen accounts
     const t = setTimeout(async () => {
       if (syncingRef.current) return;
@@ -9055,7 +9148,7 @@ function SmartWasteManagement() {
       finally { syncingRef.current = false; }
     }, 6000);
     return () => clearTimeout(t);
-  }, [autoSyncRoutes, bins, neighborhoods, routes, recentReadings, fireSensors, citizenReports, loadingRoutes, loadingBins, userData, municipalityIdFor]);
+  }, [serverDispatchOn, autoSyncRoutes, bins, neighborhoods, routes, recentReadings, fireSensors, citizenReports, loadingRoutes, loadingBins, userData, municipalityIdFor]);
 
   const lastAlertSyncRef = useRef(0);
   useEffect(() => {
@@ -9154,27 +9247,30 @@ function SmartWasteManagement() {
   }
 
   // Employee portal (default operational dashboard)
-  const navItems = [
-    { key: "dashboard", label: "لوحة التحكم",       icon: <LayoutDashboard size={20} /> },
-    { key: "map",       label: "الخريطة التشغيلية",  icon: <MapGlyph size={20} /> },
-    { key: "municipalities", label: "البلديات والنطاقات", icon: <Landmark size={20} /> },
-    ...(loggedInUser.role === "executive" ? [{ key: "neighborhoods", label: "الأحياء (كل المدينة)", icon: <Home size={20} /> }] : []),
-    { key: "bins",      label: "الحاويات الذكية",     icon: <Trash2 size={20} /> },
-    { key: "brain",     label: "العقل التشغيلي للمدينة", icon: <Sparkles size={20} /> },
-    { key: "plan",      label: "خطة الجمع الذكية",     icon: <Target size={20} /> },
-    { key: "control",   label: "إدارة الجولات",       icon: <RouteIcon size={20} /> },
-    { key: "drivers",   label: "السائقون والأسطول",    icon: <Truck size={20} /> },
-    { key: "fleet",     label: "متابعة الأسطول",        icon: <Radio size={20} /> },
-    { key: "requests",  label: "الطلبات والبلاغات",   icon: <Inbox size={20} /> },
-    { key: "fire",      label: "التنبيهات الحرارية",  icon: <Flame size={20} /> },
-    { key: "predictions", label: "التنبؤات",          icon: <Sparkles size={20} /> },
-    { key: "reports",   label: "التقارير",             icon: <ClipboardList size={20} /> },
-    { key: "audit",     label: "سجل العمليات",         icon: <FileText size={20} /> },
-    { key: "simulation", label: "المحاكاة (عرض)",       icon: <Gauge size={20} /> },
-    { key: "demo",      label: "سيناريو العرض",         icon: <Sparkles size={20} /> },
-    { key: "settings",  label: "الإعدادات",            icon: <SettingsIcon size={20} /> },
-    ...(loggedInUser.role === "executive" ? [{ key: "exec", label: "بوابة متخذي القرار", icon: <Crown size={20} /> }] : []),
+  // ── Navigation: grouped, role-specific (docs/UX_AUDIT_AND_DISPATCH.md §4). Merged pages stay reachable as tabs.
+  const role = loggedInUser.role;
+  const I = (key, label, icon) => ({ key, label, icon });
+  const navGroups = role === "executive" ? [
+    { id: "amanah", label: "الأمانة", items: [I("exec", "القيادة الاستراتيجية", <Crown size={18} />), I("brain", "العقل التشغيلي", <Sparkles size={18} />), I("map", "الخريطة التشغيلية", <MapGlyph size={18} />), I("municipalities", "البلديات والنطاقات", <Landmark size={18} />), I("neighborhoods", "الأحياء", <Home size={18} />)] },
+    { id: "ops", label: "التشغيل", items: [I("dashboard", "لوحة العمليات", <LayoutDashboard size={18} />), I("control", "الجولات والإسناد", <RouteIcon size={18} />), I("drivers", "الأسطول والسائقون", <Truck size={18} />), I("requests", "البلاغات والطلبات", <Inbox size={18} />), I("fire", "التنبيهات الحرارية", <Flame size={18} />), I("bins", "الحاويات الذكية", <Trash2 size={18} />)] },
+    { id: "analysis", label: "التحليل", items: [I("reports", "التقارير", <ClipboardList size={18} />)] },
+    { id: "admin", label: "الإدارة", items: [I("audit", "سجل العمليات", <FileText size={18} />), I("settings", "الإعدادات", <SettingsIcon size={18} />)] },
+    { id: "demo", label: "بيئة العرض", items: [I("simulation", "المحاكاة", <Gauge size={18} />), I("demo", "سيناريو العرض", <Sparkles size={18} />)] },
+  ] : [
+    { id: "now", label: "الآن", items: [I("dashboard", "لوحة العمليات", <LayoutDashboard size={18} />), I("map", "الخريطة التشغيلية", <MapGlyph size={18} />)] },
+    { id: "ops", label: "التشغيل", items: [I("control", "الجولات والإسناد", <RouteIcon size={18} />), I("drivers", "الأسطول والسائقون", <Truck size={18} />), I("requests", "البلاغات والطلبات", <Inbox size={18} />), I("fire", "التنبيهات الحرارية", <Flame size={18} />)] },
+    { id: "assets", label: "الأصول", items: [I("bins", "الحاويات الذكية", <Trash2 size={18} />), I("municipalities", role === "manager" ? "بلديتي" : "البلدية والأحياء", <Landmark size={18} />)] },
+    { id: "analysis", label: "التحليل والقرار", items: [I("brain", "العقل التشغيلي", <Sparkles size={18} />), I("reports", "التقارير", <ClipboardList size={18} />)] },
+    { id: "admin", label: "الإدارة", items: [...(role === "manager" ? [I("audit", "سجل العمليات", <FileText size={18} />)] : []), I("settings", role === "manager" ? "الإعدادات" : "تفضيلاتي", <SettingsIcon size={18} />)] },
+    ...(role === "manager" ? [{ id: "demo", label: "بيئة العرض", items: [I("simulation", "المحاكاة", <Gauge size={18} />), I("demo", "سيناريو العرض", <Sparkles size={18} />)] }] : []),
   ];
+  const navItems = navGroups.flatMap((g) => g.items);
+  // Old page keys that became tabs of a hub page.
+  const PAGE_ALIASES = { plan: ["control", "plan"], fleet: ["drivers", "live"], predictions: ["brain", "models"] };
+  const resolvedPage = PAGE_ALIASES[page] ? PAGE_ALIASES[page][0] : page;
+  const activeGroup = navGroups.find((g) => g.items.some((it) => it.key === resolvedPage))?.id;
+  const collapsedGroups = collapsedGroupsSaved || (role === "executive" ? { ops: true, admin: true, demo: true } : { admin: true, demo: true });
+  const toggleGroup = (id) => { const n = { ...collapsedGroups, [id]: !collapsedGroups[id] }; setCollapsedGroupsSaved(n); try { localStorage.setItem("swm_nav_collapsed", JSON.stringify(n)); } catch { /* per-viewer convenience only */ } };
 
   return (
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", overflow: "hidden", paddingTop: 26 }}>
@@ -9222,22 +9318,38 @@ function SmartWasteManagement() {
           )}
         </div>
 
-        <nav style={{ flex: 1, padding: "12px 8px", display: "flex", flexDirection: "column", gap: 4, overflowY: "auto" }}>
-          {navItems.map((item) => (
-            <button key={item.key} onClick={() => { setPage(item.key); setMapInitialKey(null); setRouteInitialId(null); if (isMobile) setSidebarOpen(false); }} style={{
-              display: "flex", alignItems: "center", gap: 12,
-              padding: (sidebarOpen || isMobile) ? "12px 14px" : "12px 0",
-              justifyContent: (sidebarOpen || isMobile) ? "flex-start" : "center",
-              borderRadius: 10, border: "none",
-              background: page === item.key ? "#ffffff1f" : "transparent",
-              color: page === item.key ? "#ffffff" : C.brandText,
-              cursor: "pointer", fontSize: 14, fontWeight: page === item.key ? 700 : 500,
-              fontFamily: ARABIC_FONT, whiteSpace: "nowrap", width: "100%",
-            }}>
-              <span style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>{item.icon}</span>
-              {(sidebarOpen || isMobile) && item.label}
-            </button>
-          ))}
+        <nav aria-label="القائمة الرئيسية" style={{ flex: 1, padding: "10px 8px", display: "flex", flexDirection: "column", gap: 2, overflowY: "auto" }}>
+          {navGroups.map((g) => {
+            const expanded = (sidebarOpen || isMobile);
+            const open = !collapsedGroups[g.id] || activeGroup === g.id || !expanded;
+            return (
+              <div key={g.id} style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: expanded ? 6 : 2 }}>
+                {expanded && (
+                  <button onClick={() => toggleGroup(g.id)} aria-expanded={open} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "none", border: "none", padding: "6px 10px 4px", color: activeGroup === g.id ? "#ffffff" : C.brandText, opacity: activeGroup === g.id ? 1 : 0.75, fontSize: 11.5, fontWeight: 800, letterSpacing: 0.3, cursor: "pointer", fontFamily: ARABIC_FONT }}>
+                    <span>{g.label}</span><span style={{ fontSize: 10 }}>{open ? "▾" : "◂"}</span>
+                  </button>
+                )}
+                {open && g.items.map((item) => {
+                  const active = resolvedPage === item.key;
+                  return (
+                    <button key={item.key} aria-current={active ? "page" : undefined} title={item.label} onClick={() => { setPage(item.key); setPageTabs({}); setMapInitialKey(null); setRouteInitialId(null); if (isMobile) setSidebarOpen(false); }} style={{
+                      display: "flex", alignItems: "center", gap: 10,
+                      padding: expanded ? "9px 12px" : "10px 0",
+                      justifyContent: expanded ? "flex-start" : "center",
+                      borderRadius: 10, border: "none", borderInlineStart: active ? "3px solid #ffffff" : "3px solid transparent",
+                      background: active ? "#ffffff24" : "transparent",
+                      color: active ? "#ffffff" : C.brandText,
+                      cursor: "pointer", fontSize: 13.5, fontWeight: active ? 800 : 500,
+                      fontFamily: ARABIC_FONT, whiteSpace: "nowrap", width: "100%",
+                    }}>
+                      <span style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>{item.icon}</span>
+                      {expanded && item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
         </nav>
 
         {/* User info + logout */}
@@ -9304,7 +9416,7 @@ function SmartWasteManagement() {
             >☰</button>
             <div style={{ minWidth: 0 }}>
               <h1 style={{ fontSize: isMobile ? 15 : 20, fontWeight: 800, margin: 0, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {navItems.find((n) => n.key === page)?.label}
+                {navItems.find((n) => n.key === resolvedPage)?.label}
               </h1>
               {!isMobile && (
                 <span style={{ fontSize: 11, color: C.dim }}>
@@ -9382,27 +9494,36 @@ function SmartWasteManagement() {
         </header>
 
         <div style={{ flex: 1, overflow: "auto", padding: isMobile ? 12 : 24 }}>
-          {page === "dashboard"  && <DashboardPage weeklyData={weeklyData} monthlyTrend={monthlyTrend} alerts={alerts} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} loadingNeighborhoods={loadingNeighborhoods} loadingBins={loadingBins} onViewBins={goToBins} onViewRoutes={() => setPage("control")} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
-          {page === "map"         && <MapPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} loading={loadingNeighborhoods || loadingBins} onViewBins={goToBins} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} initialSelectedKey={mapInitialKey} />}
-          {page === "municipalities" && <MunicipalitiesPage key={municipalityInitialId || "all"} initialMunicipalityId={municipalityInitialId} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} supportRequests={supportRequests} loggedInUser={loggedInUser} onOpenRoute={(id) => { setRouteInitialId(id); setPage("control"); }} onViewBins={(nid) => { setBinsNeighborhoodFilter(nid); setPage("bins"); }} onAddToRoute={(b) => { setRouteDraftBinId(b.id); setPage("control"); }} />}
-          {page === "neighborhoods" && <NeighborhoodsPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods} onViewBins={goToBins} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
-          {page === "bins"        && <BinsPage neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} loading={loadingBins} initialNeighborhoodId={binsNeighborhoodFilter} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} />}
-          {page === "control"    && <RouteManagementPage neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} vehicles={vehicles} routes={routes} driverProfiles={driverProfiles} loadingVehicles={loadingVehicles} loadingRoutes={loadingRoutes} loggedInUser={loggedInUser} draftBinId={routeDraftBinId} onConsumeDraftBin={() => setRouteDraftBinId(null)} initialRouteId={routeInitialId} onConsumeInitialRoute={() => setRouteInitialId(null)} onShowOnMap={goToMapNeighborhood} />}
-          {page === "requests"   && <RequestsManagementPage />}
-          {page === "fire"       && <FireAlertPage stations={stations} fireSensors={fireSensors} fireTempHistory={fireTempHistory} fireWeekly={fireWeeklyData} />}
-          {page === "predictions" && <PredictionsPage stations={stations} neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} />}
-          {page === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} bins={bins} neighborhoods={neighborhoods} routes={routes} collectionEvents={collectionEvents} vehicles={vehicles} auditLog={auditLog} fireSensors={fireSensors} citizenReports={citizenReports} />}
-          {page === "demo"       && <DemoScenarioPage neighborhoods={neighborhoods} bins={bins} routes={routes} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} supportRequests={supportRequests} transfers={resourceTransfers} auditLog={auditLog} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onNavigate={(pg, extra) => { if (extra?.municipalityId) setMunicipalityInitialId(extra.municipalityId); setPage(pg); }} />}
-          {page === "brain"      && <IntelligencePage neighborhoods={neighborhoods} bins={bins} profiles={driverProfiles} vehicles={vehicles} routes={routes} incidents={routeIncidents} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} />}
-          {page === "plan"       && <SmartPlanPage neighborhoods={neighborhoods} bins={bins} profiles={driverProfiles} vehicles={vehicles} routes={routes} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onOpenRoute={(id) => { setRouteInitialId(id); setPage("control"); }} />}
-          {page === "simulation" && <SimulationPage neighborhoods={neighborhoods} bins={bins} vehicles={vehicles} loggedInUser={loggedInUser} />}
-          {page === "exec"       && <ExecDashboard user={loggedInUser} onLogout={handleLogout} stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData}
+          {resolvedPage === "dashboard"  && <DashboardPage alerts={alerts} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} incidents={routeIncidents} loggedInUser={loggedInUser} loadingNeighborhoods={loadingNeighborhoods} loadingBins={loadingBins} onViewBins={goToBins} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} onNavigate={navigate} />}
+          {resolvedPage === "map"         && <MapPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} loading={loadingNeighborhoods || loadingBins} onViewBins={goToBins} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} initialSelectedKey={mapInitialKey} />}
+          {resolvedPage === "municipalities" && <MunicipalitiesPage key={municipalityInitialId || "all"} initialMunicipalityId={municipalityInitialId} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} supportRequests={supportRequests} loggedInUser={loggedInUser} onOpenRoute={(id) => { setRouteInitialId(id); setPage("control"); }} onViewBins={(nid) => { setBinsNeighborhoodFilter(nid); setPage("bins"); }} onAddToRoute={(b) => { setRouteDraftBinId(b.id); setPage("control"); }} />}
+          {resolvedPage === "neighborhoods" && <NeighborhoodsPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods} onViewBins={goToBins} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
+          {resolvedPage === "bins"        && <BinsPage neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} loading={loadingBins} initialNeighborhoodId={binsNeighborhoodFilter} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} />}
+          {resolvedPage === "requests"   && <RequestsManagementPage />}
+          {resolvedPage === "fire"       && <FireAlertPage stations={stations} fireSensors={fireSensors} fireTempHistory={fireTempHistory} fireWeekly={fireWeeklyData} />}
+          {resolvedPage === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} bins={bins} neighborhoods={neighborhoods} routes={routes} collectionEvents={collectionEvents} vehicles={vehicles} auditLog={auditLog} fireSensors={fireSensors} citizenReports={citizenReports} />}
+          {resolvedPage === "demo"       && <DemoScenarioPage neighborhoods={neighborhoods} bins={bins} routes={routes} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} supportRequests={supportRequests} transfers={resourceTransfers} auditLog={auditLog} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onNavigate={(pg, extra) => { if (extra?.municipalityId) setMunicipalityInitialId(extra.municipalityId); setPage(pg); }} />}
+          {resolvedPage === "simulation" && <SimulationPage neighborhoods={neighborhoods} bins={bins} vehicles={vehicles} loggedInUser={loggedInUser} />}
+          {resolvedPage === "exec"       && <ExecDashboard embedded user={loggedInUser} onLogout={handleLogout} stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData}
             neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} collectionEvents={collectionEvents} auditLog={auditLog} vehicles={vehicles} recentReadings={recentReadings}
             profiles={driverProfiles} incidents={routeIncidents} supportRequests={supportRequests} transfers={resourceTransfers} loggedInUser={loggedInUser} onOpenMunicipality={(mid) => { setMunicipalityInitialId(mid); setPage("municipalities"); }} />}
-          {page === "settings"   && <SettingsPage bins={bins} loggedInUser={loggedInUser} autoSyncRoutes={autoSyncRoutes} onToggleAutoSync={toggleAutoSync} />}
-          {page === "fleet"      && <FleetMonitorPage profiles={driverProfiles} vehicles={vehicles} routes={routes} incidents={routeIncidents} bins={bins} neighborhoods={neighborhoods} loggedInUser={loggedInUser} />}
-          {page === "drivers"    && <DriversPage profiles={driverProfiles} assignments={vehicleAssignments} vehicles={vehicles} loggedInUser={loggedInUser} />}
-          {page === "audit"      && <AuditLogPage auditLog={auditLog} />}
+          {resolvedPage === "settings"   && <SettingsPage bins={bins} loggedInUser={loggedInUser} autoSyncRoutes={autoSyncRoutes} onToggleAutoSync={toggleAutoSync} />}
+          {resolvedPage === "audit"      && <AuditLogPage auditLog={auditLog} />}
+          {resolvedPage === "control" && (() => { const t = tabOf("control", "routes"); return (
+            <HubPage value={t} onChange={(k) => setPageTabs({ control: k })} tabs={[{ key: "routes", label: "الجولات" }, { key: "dispatch", label: "الإسناد الذاتي", count: openEscalations, tone: "danger" }, { key: "plan", label: "خطة الجمع الذكية" }]}>
+              {t === "routes" && <RouteManagementPage neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} vehicles={vehicles} routes={routes} driverProfiles={driverProfiles} loadingVehicles={loadingVehicles} loadingRoutes={loadingRoutes} loggedInUser={loggedInUser} dispatchSettings={dispatchSettings} draftBinId={routeDraftBinId} onConsumeDraftBin={() => setRouteDraftBinId(null)} initialRouteId={routeInitialId} onConsumeInitialRoute={() => setRouteInitialId(null)} onShowOnMap={goToMapNeighborhood} onOpenDispatch={() => setPageTabs({ control: "dispatch" })} />}
+              {t === "dispatch" && <DispatchCenter loggedInUser={loggedInUser} onOpenRoute={goToRoute} />}
+              {t === "plan" && <SmartPlanPage neighborhoods={neighborhoods} bins={bins} profiles={driverProfiles} vehicles={vehicles} routes={routes} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onOpenRoute={goToRoute} />}
+            </HubPage>
+          ); })()}
+          {resolvedPage === "drivers" && (() => { const t = tabOf("drivers", "live"); return (
+            <HubPage value={t} onChange={(k) => setPageTabs({ drivers: k })} tabs={[{ key: "live", label: "المتابعة الحية", count: routeIncidents.filter((i) => i.status === "open").length, tone: "danger" }, { key: "profiles", label: "السائقون والمركبات" }]}>
+              {t === "live" && <FleetMonitorPage profiles={driverProfiles} vehicles={vehicles} routes={routes} incidents={routeIncidents} bins={bins} neighborhoods={neighborhoods} loggedInUser={loggedInUser} />}
+              {t === "profiles" && <DriversPage profiles={driverProfiles} assignments={vehicleAssignments} vehicles={vehicles} loggedInUser={loggedInUser} />}
+            </HubPage>
+          ); })()}
+          {resolvedPage === "brain" && <IntelligencePage neighborhoods={neighborhoods} bins={bins} profiles={driverProfiles} vehicles={vehicles} routes={routes} incidents={routeIncidents} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} initialSection={tabOf("brain", null)} onNavigate={navigate}
+            modelsDetail={<PredictionsPage stations={stations} neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} />} />}
         </div>
       </main>
 

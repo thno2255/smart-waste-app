@@ -22,8 +22,8 @@
  * solver is isolated so a server-side OR-Tools solve could replace it later.
  * ─────────────────────────────────────────────────────────────────────
  */
-import { haversineDistanceKm, estimateTravelMinutes } from "./decisionEngine";
-import { ASSUMPTIONS } from "./impact";
+import { haversineDistanceKm, estimateTravelMinutes } from "./decisionEngine.js";
+import { ASSUMPTIONS } from "./impact.js";
 
 /** Priority weight on arrival time (minutes of "lateness cost" per minute of arrival). */
 export const PRIORITY_WEIGHTS = { critical: 0.35, high: 0.15, medium: 0.05, warning: 0.05, low: 0, normal: 0 };

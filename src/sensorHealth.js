@@ -10,8 +10,8 @@
  * ─────────────────────────────────────────────────────────────────────
  */
 
-import { THRESHOLDS, getSensorConnectivity } from "./config";
-import { detectAnomalies } from "./prediction";
+import { THRESHOLDS, getSensorConnectivity } from "./config.js";
+import { detectAnomalies } from "./prediction.js";
 
 /**
  * @param {object} bin
