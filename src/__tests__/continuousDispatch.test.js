@@ -13,7 +13,6 @@ const depot = { lat: 26.33, lng: 43.95 };
 const neighborhoods = [{ id: "n1", name: "حي الخليج" }, { id: "n2", name: "حي الشروق" }];
 const bin = (id, nid, fill, lat, lng, extra = {}) => ({ id, name: id, neighborhoodId: nid, municipalityId: "east", deviceId: "d" + id, lastFillLevelPercent: fill, lastTemperatureCelsius: 28, lastReadingAt: fresh, lat, lng, capacityLiters: 1100, demo: true, ...extra });
 const k = (id, fill, i) => bin(id, "n1", fill, 26.360 + i * 0.001, 43.970 + i * 0.001);
-const s = (id, fill, i) => bin(id, "n2", fill, 26.330 + i * 0.001, 44.040 + i * 0.001);
 const driver = (uid, extra = {}) => ({ uid, fullName: uid, accountStatus: "active", shiftStatus: "on_shift", availability: "available", vehicleId: "V" + uid, neighborhoodKeys: ["الخليج", "الشروق"], municipalityId: "east", shiftStart: "06:00", shiftEnd: "18:00", ...extra });
 const vehicle = (id, extra = {}) => ({ id, vehicleNumber: id, status: "available", capacityLiters: 8000, depotLat: depot.lat, depotLng: depot.lng, municipalityId: "east", ...extra });
 const state = (over = {}) => ({ municipalityId: "east", neighborhoods, depot, bins: [], profiles: [], vehicles: [], routes: [], incidents: [], ...over });
