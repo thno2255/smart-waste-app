@@ -43,6 +43,8 @@ await env.withSecurityRulesDisabled(async (c) => {
   await put("bins/bE", { name: "bE", municipalityId: "east", neighborhoodId: "nE", lastFillLevelPercent: 50, simulated: true, demo: true });
   await put("bins/bE2", { name: "bE2", municipalityId: "east", neighborhoodId: "nE", lastFillLevelPercent: 50 });
   await put("bins/bN", { name: "bN", municipalityId: "north", neighborhoodId: "nN", lastFillLevelPercent: 50, simulated: true, demo: true });
+  await put("resource_transfers/T0", { resourceType: "crew", fromMunicipalityId: "north", toMunicipalityId: "east", status: "proposed" });
+  await put("rate_limits/k", { count: 1 });
   await put("collection_routes/RE", { routeName: "RE", municipalityId: "east", status: "approved", driverId: "drvE", vehicleId: "VE", binIds: ["bE"], collectedBinIds: [] });
   await put("collection_routes/RE2", { routeName: "RE2", municipalityId: "east", status: "in_progress", driverId: "drvE2", vehicleId: "VE2", binIds: ["bE2"], collectedBinIds: [] });
   await put("collection_routes/RN", { routeName: "RN", municipalityId: "north", status: "approved", driverId: "drvN", vehicleId: "VN", binIds: ["bN"], collectedBinIds: [] });
@@ -174,9 +176,6 @@ const CASES = [
   ["SEC-09", "opsE", "عميل", "simulation_scenarios", "قراءة", "موظف الشرق يقرأ سيناريو الشمال", "deny", (f) => getDoc(doc(f, "simulation_scenarios/scN"))],
   ["SEC-09", "mgrE", "عميل", "simulation_scenarios", "سرد", "مدير الشرق يسرد كل السيناريوهات", "deny", (f) => getDocs(collection(f, "simulation_scenarios"))],
   ["ALLOW", "drvE", "عميل", "collection_routes", "تحديث", "السائق يبدأ جولته المعتمدة", "allow", (f) => updateDoc(doc(f, "collection_routes/RE"), { status: "in_progress", startedAt: "t", updatedAt: "t" })],
-  ["ALLOW", "drvE2", "عميل", "collection_events", "إنشاء", "السائق يؤكد تفريغ حاوية في جولته الجارية", "allow", (f) => setDoc(doc(f, "collection_events/RE2__bE2"), { id: "RE2__bE2", routeId: "RE2", binId: "bE2", driverId: "drvE2", operatorId: "drvE2", confirmedAt: "t", municipalityId: "east" }, { merge: true })],
-  ["ALLOW", "drvE2", "عميل", "collection_routes", "تحديث", "السائق يسجل التقدم وينهي جولته الجارية", "allow", async (f) => { await updateDoc(doc(f, "collection_routes/RE2"), { collectedBinIds: ["bE2"], lastProgressAt: "t" }); await updateDoc(doc(f, "collection_routes/RE2"), { status: "completed", completedAt: "t" }); }],
-  ["ALLOW", "drvE2", "عميل", "bins", "تحديث", "السائق يختم جمع حاوية في بلديته", "allow", (f) => updateDoc(doc(f, "bins/bE2"), { lastCollectionAt: "t" })],
   ["ALLOW", "drvE", "عميل", "route_incidents", "إنشاء", "السائق يرفع بلاغًا على جولته", "allow", (f) => addDoc(collection(f, "route_incidents"), { routeId: "RE", driverId: "drvE", type: "obstacle", status: "open", municipalityId: "east" })],
   ["ALLOW", "drvE", "عميل", "driver_profiles", "تحديث", "السائق يبدأ مناوبته", "allow", (f) => updateDoc(doc(f, "driver_profiles/drvE"), { shiftStatus: "on_shift", updatedAt: "t" })],
   ["ALLOW", "drvE", "عميل", "vehicle_status_history", "إنشاء", "السائق يسجل حالة مركبته", "allow", (f) => addDoc(collection(f, "vehicle_status_history"), { vehicleId: "VE", from: "available", to: "on_route", actorId: "drvE", municipalityId: "east" })],
@@ -187,6 +186,19 @@ const CASES = [
   ["ALLOW", "amanah", "عميل", "dispatch_settings", "تحديث", "الأمانة تغيّر وضع الإسناد", "allow", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "auto", scope: "demo_only" })],
   ["ALLOW", "mgrE", "عميل", "simulation_scenarios", "سرد", "مدير الشرق يسرد سيناريوهات بلديته", "allow", (f) => getDocs(query(collection(f, "simulation_scenarios"), where("municipalityId", "==", "east")))],
   ["ALLOW", "mgrE", "عميل", "simulation_scenarios", "إنشاء", "مدير الشرق يحفظ نتيجة محاكاة", "allow", (f) => addDoc(collection(f, "simulation_scenarios"), { municipalityId: "east", verdict: "better" })],
+  // ── SEC-13 collection data is server-only (/api/field/confirm-collection); transfers execute only on the server ──
+  ["SEC-13", "drvE2", "عميل", "collection_events", "إنشاء", "السائق يكتب تأكيد تفريغ مباشرة (حتى في جولته الجارية)", "deny", (f) => setDoc(doc(f, "collection_events/RE2__bE2"), { id: "RE2__bE2", routeId: "RE2", binId: "bE2", driverId: "drvE2", operatorId: "drvE2", confirmedAt: "t", municipalityId: "east" }, { merge: true })],
+  ["SEC-13", "drvE2", "عميل", "collection_routes", "تحديث", "السائق يكتب تقدم الجولة مباشرة", "deny", (f) => updateDoc(doc(f, "collection_routes/RE2"), { collectedBinIds: ["bE2"], lastProgressAt: "t" })],
+  ["SEC-13", "drvE2", "عميل", "bins", "تحديث", "السائق يختم جمع حاوية مباشرة (في بلديته)", "deny", (f) => updateDoc(doc(f, "bins/bE2"), { lastCollectionAt: "t" })],
+  ["SEC-13", "opsE", "عميل", "collection_routes", "تحديث", "موظف العمليات يعدّل تقدم جولة في بلديته", "deny", (f) => updateDoc(doc(f, "collection_routes/RE2"), { collectedBinIds: ["bE2"] })],
+  ["SEC-13", "opsE", "عميل", "bins", "تحديث", "موظف العمليات يختم جمع حاوية حقيقية (غير محاكاة)", "deny", (f) => updateDoc(doc(f, "bins/bE2"), { lastCollectionAt: "t" })],
+  ["SEC-13", "amanah", "عميل", "resource_transfers", "تحديث", "الأمانة تجعل النقل منفذًا من العميل", "deny", (f) => updateDoc(doc(f, "resource_transfers/T0"), { status: "executed" })],
+  ["SEC-13", "amanah", "عميل", "resource_transfers", "إنشاء", "الأمانة تنشئ نقلًا بحالة منفذ مباشرة", "deny", (f) => setDoc(doc(f, "resource_transfers/T4"), { fromMunicipalityId: "north", toMunicipalityId: "east", status: "executed" })],
+  ["SEC-13", "amanah", "عميل", "rate_limits", "قراءة", "قراءة عدادات حدود الطلبات من العميل", "deny", (f) => getDoc(doc(f, "rate_limits/k"))],
+  ["SEC-13", "drvE", "عميل", "rate_limits", "حذف", "تصفير حد الطلبات من العميل", "deny", (f) => deleteDoc(doc(f, "rate_limits/k"))],
+  ["ALLOW", "drvE2", "عميل", "collection_routes", "تحديث", "السائق ينهي جولته الجارية (الحالة فقط)", "allow", (f) => updateDoc(doc(f, "collection_routes/RE2"), { status: "completed", completedAt: "t" })],
+  ["ALLOW", "opsE", "عميل", "bins", "تحديث", "المحاكي يحدّث وقت جمع حاوية محاكاة", "allow", (f) => updateDoc(doc(f, "bins/bE"), { lastCollectionAt: "t" })],
+  ["ALLOW", "amanah", "عميل", "resource_transfers", "تحديث", "الأمانة تعتمد نقلًا مقترحًا", "allow", (f) => updateDoc(doc(f, "resource_transfers/T0"), { status: "approved", decidedBy: "amanah", decidedAt: "t" })],
 ];
 void D;
 

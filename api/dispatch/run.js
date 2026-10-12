@@ -1,4 +1,4 @@
-/* global process */
+/* global process, Buffer */
 // Vercel Serverless Function — Autonomous Dispatch cycle
 //   GET  /api/dispatch/run            ← Vercel Cron (Authorization: Bearer $CRON_SECRET), periodic: respects periodMinutes
 //   POST /api/dispatch/run            ← signed-in staff (Authorization: Bearer <Firebase ID token>)
@@ -8,7 +8,9 @@
 //   - a municipality manager / operations employee: their OWN municipality only (urgent / demo events).
 // What the cycle may do is governed by dispatch_settings/config (mode off | observe | auto, scope),
 // which only the Amanah can change (firestore.rules). Kill switch: DISPATCH_API_ENABLED=false.
-import { adminDb, adminAuth } from "../_lib/firebaseAdmin.mjs";
+import { timingSafeEqual } from "node:crypto";
+import { adminDb } from "../_lib/firebaseAdmin.mjs";
+import { authenticate, rateLimit } from "../_lib/http.mjs";
 import { runDispatchCycle } from "../_lib/dispatchRunner.mjs";
 
 const STAFF = ["executive", "manager", "employee"];
@@ -17,15 +19,13 @@ async function identify(req, db) {
   const header = String(req.headers.authorization || "");
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   if (!token) return { error: [401, "Missing Authorization"] };
-  if (process.env.CRON_SECRET && token === process.env.CRON_SECRET) return { cron: true };
-  try {
-    const decoded = await adminAuth().verifyIdToken(token);
-    const u = await db.collection("users").doc(decoded.uid).get();
-    const role = u.exists ? u.get("role") : null;
-    const status = u.exists ? u.get("status") : null;
-    if (!STAFF.includes(role) || !["active", "approved"].includes(status)) return { error: [403, "Not allowed"] };
-    return { user: { uid: decoded.uid, name: u.get("fullName") || u.get("name") || decoded.email || "", role, municipalityId: u.get("municipalityId") || null } };
-  } catch { return { error: [401, "Invalid token"] }; }
+  if (process.env.CRON_SECRET && token.length === process.env.CRON_SECRET.length && timingSafeEqual(Buffer.from(token), Buffer.from(process.env.CRON_SECRET))) return { cron: true };
+  const who = await authenticate(req, db); // active profile + known role + municipality for scoped roles (fail closed)
+  if (who.error) return who;
+  if (!STAFF.includes(who.user.role)) return { error: [403, "Not allowed"] };
+  const rl = await rateLimit(db, "dispatch.manual", who.user.uid);
+  if (!rl.ok) return { error: [429, "تجاوزت حد تشغيل الدورات اليدوية — حاول بعد قليل"], retryAfterSec: rl.retryAfterSec };
+  return { user: who.user };
 }
 
 export default async function handler(req, res) {
@@ -35,7 +35,7 @@ export default async function handler(req, res) {
   let db;
   try { db = adminDb(); } catch (e) { return res.status(500).json({ error: e.message }); }
   const who = await identify(req, db);
-  if (who.error) return res.status(who.error[0]).json({ error: who.error[1] });
+  if (who.error) { if (who.retryAfterSec) res.setHeader("Retry-After", String(who.retryAfterSec)); return res.status(who.error[0]).json({ error: who.error[1] }); }
 
   if (who.cron) {
     const r = await runDispatchCycle(db, { trigger: "cron" });

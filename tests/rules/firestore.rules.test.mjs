@@ -63,7 +63,7 @@ await test("driver reads ONLY routes assigned to them (scoped query ok, other ro
 await test("driver advances only execution fields of their own route; cannot approve, reassign, or touch another driver's route", async () => {
   const db = ctx("drv1", "driver");
   await assertSucceeds(updateDoc(doc(db, "collection_routes/R1"), { status: "in_progress", startedAt: "now", driverName: "x" }));
-  await assertSucceeds(updateDoc(doc(db, "collection_routes/R1"), { collectedBinIds: ["b1"], lastProgressAt: "now" }));
+  await assertFails(updateDoc(doc(db, "collection_routes/R1"), { collectedBinIds: ["b1"], lastProgressAt: "now" }));  // progress is server-only
   await assertSucceeds(updateDoc(doc(db, "collection_routes/R1"), { skippedStops: [{ binId: "b1", reason: "obstacle" }] }));
   await assertFails(updateDoc(doc(db, "collection_routes/R1"), { driverId: "drv2" }));
   await assertFails(updateDoc(doc(db, "collection_routes/R1"), { status: "approved" }));
@@ -85,15 +85,14 @@ await test("employee approves/assigns routes and manages driver profiles; driver
   await assertFails(setDoc(doc(drv, "driver_profiles/drv9"), { uid: "drv9" }));
 });
 
-await test("collection events: idempotent own-route confirmation ok; other driver's route / foreign uid / delete denied", async () => {
+await test("collection events + bin collection time are server-only (/api/field/confirm-collection): every direct client write denied", async () => {
   const drv = ctx("drv1", "driver");
   const ev = { id: "R1__b1", routeId: "R1", binId: "b1", driverId: "drv1", operatorId: "drv1", confirmedAt: "now", fillBefore: 90, fillAfter: null };
-  await assertSucceeds(setDoc(doc(drv, "collection_events/R1__b1"), ev, { merge: true }));
-  await assertSucceeds(setDoc(doc(drv, "collection_events/R1__b1"), ev, { merge: true })); // retry → same doc
+  await assertFails(setDoc(doc(drv, "collection_events/R1__b1"), ev, { merge: true }));    // even the route's own driver
   await assertFails(setDoc(doc(drv, "collection_events/R2__b2"), { ...ev, id: "R2__b2", routeId: "R2", binId: "b2" }));
   await assertFails(setDoc(doc(drv, "collection_events/R1__bX"), { ...ev, driverId: "drv2" }));
   await assertFails(updateDoc(doc(drv, "bins/b1"), { lastFillLevelPercent: 0 }));           // never rewrite the reading
-  await assertSucceeds(updateDoc(doc(drv, "bins/b1"), { lastCollectionAt: "now" }));        // operational stamp only
+  await assertFails(updateDoc(doc(drv, "bins/b1"), { lastCollectionAt: "now" }));           // stamped by the server
 });
 
 await test("sensor readings are never client-writable (even for employees)", async () => {
@@ -200,11 +199,12 @@ await test("support requests: manager files one for OWN municipality only (statu
   await assertFails(deleteDoc(doc(ctx("admin1", "executive"), "support_requests/S1")));
 });
 
-await test("resource transfers: only the Amanah proposes/approves/executes; both sides read (constrained list), third municipality denied", async () => {
+await test("resource transfers: only the Amanah proposes/approves (execution is server-only); both sides read (constrained list), third municipality denied", async () => {
   const admin = ctx("admin1", "executive");
   const t = { resourceType: "crew", vehicleId: "VE", driverId: "drv1", fromMunicipalityId: "east", toMunicipalityId: "north", status: "proposed" };
   await assertSucceeds(setDoc(doc(admin, "resource_transfers/T1"), t));
   await assertSucceeds(updateDoc(doc(admin, "resource_transfers/T1"), { status: "approved", decidedBy: "admin1" }));
+  await assertFails(updateDoc(doc(admin, "resource_transfers/T1"), { status: "executed" }));  // execution: /api/admin/transfers only
   await assertFails(setDoc(doc(ctx("mgrE", "manager"), "resource_transfers/T2"), { ...t, fromMunicipalityId: "north", toMunicipalityId: "east" }));  // a manager cannot pull resources
   await assertFails(updateDoc(doc(ctx("mgrE", "manager"), "resource_transfers/T1"), { status: "executed" }));
   await assertSucceeds(getDoc(doc(ctx("mgrE", "manager"), "resource_transfers/T1")));      // sender side

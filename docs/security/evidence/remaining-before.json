@@ -1,0 +1,1182 @@
+[
+  {
+    "id": "SEC-01",
+    "uid": "opsE",
+    "col": "users",
+    "op": "تحديث",
+    "desc": "موظف العمليات يغيّر دوره إلى executive",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-01",
+    "uid": "opsE",
+    "col": "users",
+    "op": "تحديث",
+    "desc": "موظف العمليات يرقّي سائقًا إلى manager",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-01",
+    "uid": "drvE",
+    "col": "users",
+    "op": "تحديث",
+    "desc": "السائق يغيّر دوره إلى executive",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-01",
+    "uid": "drvE",
+    "col": "users",
+    "op": "تحديث",
+    "desc": "السائق يغيّر بلديته",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-01",
+    "uid": "pending",
+    "col": "users",
+    "op": "تحديث",
+    "desc": "حساب معلّق يفعّل نفسه",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-01",
+    "uid": "mgrE",
+    "col": "users",
+    "op": "تحديث",
+    "desc": "مدير البلدية يغيّر دور مستخدم من العميل",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-01",
+    "uid": "amanah",
+    "col": "users",
+    "op": "تحديث",
+    "desc": "الأمانة تغيّر دورًا من العميل (المسار الخادمي فقط)",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-01",
+    "uid": "drvE",
+    "col": "users",
+    "op": "تحديث",
+    "desc": "السائق يعدّل homeMunicipalityId",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-01",
+    "uid": "intruder",
+    "col": "users",
+    "op": "إنشاء",
+    "desc": "تسجيل ذاتي بدور executive ومفعّل",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-01",
+    "uid": "intruder2",
+    "col": "users",
+    "op": "إنشاء",
+    "desc": "تسجيل ذاتي بدور employee وبلدية مفعّل",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "citE",
+    "col": "users",
+    "op": "تحديث",
+    "desc": "مستخدم يعدّل اسمه وجواله",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "newCit",
+    "col": "users",
+    "op": "إنشاء",
+    "desc": "تسجيل مواطن جديد",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "newEmp",
+    "col": "users",
+    "op": "إنشاء",
+    "desc": "طلب حساب موظف (معلّق)",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "SEC-02",
+    "uid": "opsE",
+    "col": "users",
+    "op": "قراءة",
+    "desc": "موظف العمليات يقرأ مستند مواطن خارج نطاقه",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-02",
+    "uid": "opsE",
+    "col": "users",
+    "op": "سرد",
+    "desc": "موظف العمليات يسرد كل المستخدمين",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-02",
+    "uid": "mgrE",
+    "col": "users",
+    "op": "قراءة",
+    "desc": "مدير الشرق يقرأ سائق الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-02",
+    "uid": "drvE",
+    "col": "users",
+    "op": "قراءة",
+    "desc": "السائق يقرأ سائقًا آخر",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "mgrE",
+    "col": "users",
+    "op": "قراءة",
+    "desc": "مدير الشرق يقرأ سائق الشرق",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "mgrE",
+    "col": "users",
+    "op": "سرد",
+    "desc": "مدير الشرق يسرد مستخدمي بلديته (استعلام مقيّد)",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "amanah",
+    "col": "users",
+    "op": "سرد",
+    "desc": "الأمانة تسرد كل المستخدمين",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "drvE",
+    "col": "users",
+    "op": "قراءة",
+    "desc": "المستخدم يقرأ مستنده",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "SEC-03",
+    "uid": "noMunEmp",
+    "col": "bins",
+    "op": "قراءة",
+    "desc": "موظف بلا بلدية يقرأ حاوية",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-03",
+    "uid": "noMunEmp",
+    "col": "bins",
+    "op": "سرد",
+    "desc": "موظف بلا بلدية يسرد الحاويات",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-03",
+    "uid": "noMunMgr",
+    "col": "collection_routes",
+    "op": "قراءة",
+    "desc": "مدير بلا بلدية يقرأ جولة",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-03",
+    "uid": "noMunEmp",
+    "col": "collection_routes",
+    "op": "إنشاء",
+    "desc": "موظف بلا بلدية ينشئ جولة",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-03",
+    "uid": "noMunDrv",
+    "col": "collection_routes",
+    "op": "سرد",
+    "desc": "سائق بلا بلدية يسرد جولاته",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-03",
+    "uid": "badRole",
+    "col": "bins",
+    "op": "قراءة",
+    "desc": "دور غير صالح يقرأ حاوية",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-03",
+    "uid": "noRole",
+    "col": "bins",
+    "op": "قراءة",
+    "desc": "حساب بلا دور يقرأ حاوية",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-03",
+    "uid": "noRole",
+    "col": "vehicles",
+    "op": "قراءة",
+    "desc": "حساب بلا دور يقرأ مركبة",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-03",
+    "uid": "pending",
+    "col": "bins",
+    "op": "قراءة",
+    "desc": "حساب معلّق يقرأ حاوية",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "opsE",
+    "col": "bins",
+    "op": "سرد",
+    "desc": "موظف الشرق يسرد حاويات بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "amanah",
+    "col": "bins",
+    "op": "سرد",
+    "desc": "الأمانة تسرد كل الحاويات",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "opsE",
+    "col": "neighborhoods",
+    "op": "حذف",
+    "desc": "موظف الشرق يحذف حيًا في الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "opsE",
+    "col": "neighborhoods",
+    "op": "تحديث",
+    "desc": "موظف الشرق يعدّل حيًا في الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "opsE",
+    "col": "neighborhoods",
+    "op": "إنشاء",
+    "desc": "موظف الشرق ينشئ حيًا للشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "opsE",
+    "col": "neighborhoods",
+    "op": "تحديث",
+    "desc": "موظف الشرق ينقل حيه لبلدية أخرى",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "opsE",
+    "col": "fire_sensors",
+    "op": "تحديث",
+    "desc": "موظف يرفع خطورة حساس حريق",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "mgrE",
+    "col": "fire_sensors",
+    "op": "إنشاء",
+    "desc": "مدير ينشئ حساس حريق",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "opsE",
+    "col": "alerts",
+    "op": "تحديث",
+    "desc": "موظف الشرق يغلق تنبيهًا في الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "opsE",
+    "col": "alerts",
+    "op": "سرد",
+    "desc": "موظف الشرق يسرد كل التنبيهات",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "opsE",
+    "col": "analytics",
+    "op": "تحديث",
+    "desc": "موظف يكتب مؤشرات تحليلية",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "opsE",
+    "col": "simulated_readings",
+    "op": "إنشاء",
+    "desc": "موظف الشرق يكتب قراءة محاكاة لحاوية في الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-04",
+    "uid": "opsE",
+    "col": "simulated_readings",
+    "op": "إنشاء",
+    "desc": "قراءة محاكاة بلا وسم المحاكاة",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "mgrE",
+    "col": "neighborhoods",
+    "op": "تحديث",
+    "desc": "مدير الشرق يعدّل ملاحظة حيه",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "amanah",
+    "col": "neighborhoods",
+    "op": "تحديث",
+    "desc": "الأمانة تغيّر تبعية حي (المسار القائم)",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "amanah",
+    "col": "fire_sensors",
+    "op": "تحديث",
+    "desc": "الأمانة تحدّث حساس حريق",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "opsE",
+    "col": "alerts",
+    "op": "سرد",
+    "desc": "موظف الشرق يسرد تنبيهات بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "opsE",
+    "col": "alerts",
+    "op": "إنشاء",
+    "desc": "موظف الشرق ينشئ تنبيهًا لبلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "mgrE",
+    "col": "simulated_readings",
+    "op": "إنشاء",
+    "desc": "مدير الشرق يكتب قراءة محاكاة موسومة لحاوية في الشرق",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "SEC-06",
+    "uid": "opsE",
+    "col": "iot_devices",
+    "op": "تحديث",
+    "desc": "موظف الشرق يعيد ربط جهاز في الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-06",
+    "uid": "drvE",
+    "col": "iot_devices",
+    "op": "قراءة",
+    "desc": "السائق يقرأ تجزئة مفتاح جهاز",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-06",
+    "uid": "opsE",
+    "col": "iot_devices",
+    "op": "قراءة",
+    "desc": "موظف العمليات يقرأ سجل الأجهزة",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-06",
+    "uid": "mgrE",
+    "col": "iot_devices",
+    "op": "تحديث",
+    "desc": "مدير الشرق يربط جهازه بحاوية في الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-06",
+    "uid": "mgrE",
+    "col": "iot_devices",
+    "op": "تحديث",
+    "desc": "مدير الشرق ينقل جهازه لبلدية أخرى",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-06",
+    "uid": "mgrE",
+    "col": "iot_devices",
+    "op": "قراءة",
+    "desc": "مدير الشرق يقرأ جهاز الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "mgrE",
+    "col": "iot_devices",
+    "op": "تحديث",
+    "desc": "مدير الشرق يدوّر مفتاح جهازه",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "mgrE",
+    "col": "iot_devices",
+    "op": "سرد",
+    "desc": "مدير الشرق يسرد أجهزة بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "amanah",
+    "col": "iot_devices",
+    "op": "تحديث",
+    "desc": "الأمانة تعطل جهازًا",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "SEC-05",
+    "uid": "drvE",
+    "col": "audit_log",
+    "op": "إنشاء",
+    "desc": "السائق ينتحل محرك الإسناد التلقائي",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-05",
+    "uid": "opsE",
+    "col": "audit_log",
+    "op": "إنشاء",
+    "desc": "موظف يكتب سجلًا باسم مستخدم آخر",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-05",
+    "uid": "opsE",
+    "col": "audit_log",
+    "op": "إنشاء",
+    "desc": "موظف يكتب سجلًا باسم النظام مع هويته",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-05",
+    "uid": "opsE",
+    "col": "audit_log",
+    "op": "إنشاء",
+    "desc": "موظف الشرق يكتب سجلًا منسوبًا للشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-05",
+    "uid": "opsE",
+    "col": "audit_log",
+    "op": "تحديث",
+    "desc": "تعديل سجل سابق",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-05",
+    "uid": "amanah",
+    "col": "audit_log",
+    "op": "حذف",
+    "desc": "حذف سجل حقيقي (حتى من الأمانة)",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-05",
+    "uid": "mgrE",
+    "col": "audit_log",
+    "op": "قراءة",
+    "desc": "مدير الشرق يقرأ سجل الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-05",
+    "uid": "mgrE",
+    "col": "audit_log",
+    "op": "سرد",
+    "desc": "مدير الشرق يسرد كل السجل",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "drvE",
+    "col": "audit_log",
+    "op": "إنشاء",
+    "desc": "السائق يسجل إجراءه هو (بدء مناوبة)",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "mgrE",
+    "col": "audit_log",
+    "op": "سرد",
+    "desc": "مدير الشرق يسرد سجل بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "amanah",
+    "col": "audit_log",
+    "op": "سرد",
+    "desc": "الأمانة تسرد كل السجل",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ISO-01",
+    "uid": "opsE",
+    "col": "requests",
+    "op": "قراءة",
+    "desc": "موظف الشرق يقرأ طلبًا في الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ISO-01",
+    "uid": "opsE",
+    "col": "requests",
+    "op": "سرد",
+    "desc": "موظف الشرق يسرد كل الطلبات",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ISO-01",
+    "uid": "opsE",
+    "col": "requests",
+    "op": "تحديث",
+    "desc": "موظف الشرق يرد على طلب في الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ISO-01",
+    "uid": "opsE",
+    "col": "citizen_reports",
+    "op": "سرد",
+    "desc": "موظف الشرق يسرد كل البلاغات",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ISO-01",
+    "uid": "opsE",
+    "col": "citizen_reports",
+    "op": "حذف",
+    "desc": "موظف الشرق يحذف بلاغًا في الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ISO-01",
+    "uid": "drvE",
+    "col": "citizen_reports",
+    "op": "قراءة",
+    "desc": "السائق يقرأ بلاغ مواطن",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ISO-01",
+    "uid": "citE",
+    "col": "requests",
+    "op": "إنشاء",
+    "desc": "مواطن ينشئ طلبًا باسم غيره",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "opsE",
+    "col": "requests",
+    "op": "سرد",
+    "desc": "موظف الشرق يسرد طلبات بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "opsE",
+    "col": "requests",
+    "op": "تحديث",
+    "desc": "موظف الشرق يرد على طلب في بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "opsE",
+    "col": "citizen_reports",
+    "op": "سرد",
+    "desc": "موظف الشرق يسرد بلاغات بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "citE",
+    "col": "requests",
+    "op": "قراءة",
+    "desc": "المواطن يقرأ طلبه",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "citE",
+    "col": "citizen_reports",
+    "op": "إنشاء",
+    "desc": "المواطن يرفع بلاغًا",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "amanah",
+    "col": "requests",
+    "op": "سرد",
+    "desc": "الأمانة تسرد كل الطلبات",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "drvE",
+    "col": "collection_routes",
+    "op": "تحديث",
+    "desc": "السائق ينهي جولة معتمدة دون بدئها",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "drvE",
+    "col": "collection_events",
+    "op": "إنشاء",
+    "desc": "السائق يؤكد تفريغ حاوية ليست في جولته",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "drvE",
+    "col": "bins",
+    "op": "تحديث",
+    "desc": "السائق يختم جمع حاوية في بلدية أخرى",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "drvE",
+    "col": "route_incidents",
+    "op": "إنشاء",
+    "desc": "السائق يرفع بلاغًا على جولة غيره",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "drvE",
+    "col": "vehicle_status_history",
+    "op": "إنشاء",
+    "desc": "السائق يكتب سجل حالة لمركبة غيره",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "drvE",
+    "col": "driver_profiles",
+    "op": "تحديث",
+    "desc": "السائق يوسّع نطاق أحيائه",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "opsE",
+    "col": "collection_routes",
+    "op": "إنشاء",
+    "desc": "موظف الشرق ينشئ جولة في الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "opsE",
+    "col": "vehicles",
+    "op": "تحديث",
+    "desc": "موظف الشرق يعدّل مركبة الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "opsE",
+    "col": "resource_transfers",
+    "op": "إنشاء",
+    "desc": "موظف العمليات يقترح نقل مورد",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "mgrE",
+    "col": "resource_transfers",
+    "op": "إنشاء",
+    "desc": "مدير البلدية يعتمد نقل مورد",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "opsE",
+    "col": "dispatch_settings",
+    "op": "تحديث",
+    "desc": "موظف العمليات يفعّل الإسناد على كل الحاويات",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "opsE",
+    "col": "simulation_scenarios",
+    "op": "قراءة",
+    "desc": "موظف الشرق يقرأ سيناريو الشمال",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-09",
+    "uid": "mgrE",
+    "col": "simulation_scenarios",
+    "op": "سرد",
+    "desc": "مدير الشرق يسرد كل السيناريوهات",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "drvE",
+    "col": "collection_routes",
+    "op": "تحديث",
+    "desc": "السائق يبدأ جولته المعتمدة",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "drvE",
+    "col": "route_incidents",
+    "op": "إنشاء",
+    "desc": "السائق يرفع بلاغًا على جولته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "drvE",
+    "col": "driver_profiles",
+    "op": "تحديث",
+    "desc": "السائق يبدأ مناوبته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "drvE",
+    "col": "vehicle_status_history",
+    "op": "إنشاء",
+    "desc": "السائق يسجل حالة مركبته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "opsE",
+    "col": "collection_routes",
+    "op": "تحديث",
+    "desc": "موظف الشرق يعتمد جولة في بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "opsE",
+    "col": "vehicles",
+    "op": "تحديث",
+    "desc": "موظف الشرق يحدّث مركبة بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "opsE",
+    "col": "dispatch_decisions",
+    "op": "تحديث",
+    "desc": "موظف الشرق يغلق استثناء بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "amanah",
+    "col": "resource_transfers",
+    "op": "إنشاء",
+    "desc": "الأمانة تقترح نقل مورد",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "amanah",
+    "col": "dispatch_settings",
+    "op": "تحديث",
+    "desc": "الأمانة تغيّر وضع الإسناد",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "mgrE",
+    "col": "simulation_scenarios",
+    "op": "سرد",
+    "desc": "مدير الشرق يسرد سيناريوهات بلديته",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "mgrE",
+    "col": "simulation_scenarios",
+    "op": "إنشاء",
+    "desc": "مدير الشرق يحفظ نتيجة محاكاة",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "SEC-13",
+    "uid": "drvE2",
+    "col": "collection_events",
+    "op": "إنشاء",
+    "desc": "السائق يكتب تأكيد تفريغ مباشرة (حتى في جولته الجارية)",
+    "expected": "deny",
+    "outcome": "allow",
+    "pass": false
+  },
+  {
+    "id": "SEC-13",
+    "uid": "drvE2",
+    "col": "collection_routes",
+    "op": "تحديث",
+    "desc": "السائق يكتب تقدم الجولة مباشرة",
+    "expected": "deny",
+    "outcome": "allow",
+    "pass": false
+  },
+  {
+    "id": "SEC-13",
+    "uid": "drvE2",
+    "col": "bins",
+    "op": "تحديث",
+    "desc": "السائق يختم جمع حاوية مباشرة (في بلديته)",
+    "expected": "deny",
+    "outcome": "allow",
+    "pass": false
+  },
+  {
+    "id": "SEC-13",
+    "uid": "opsE",
+    "col": "collection_routes",
+    "op": "تحديث",
+    "desc": "موظف العمليات يعدّل تقدم جولة في بلديته",
+    "expected": "deny",
+    "outcome": "allow",
+    "pass": false
+  },
+  {
+    "id": "SEC-13",
+    "uid": "opsE",
+    "col": "bins",
+    "op": "تحديث",
+    "desc": "موظف العمليات يختم جمع حاوية حقيقية (غير محاكاة)",
+    "expected": "deny",
+    "outcome": "allow",
+    "pass": false
+  },
+  {
+    "id": "SEC-13",
+    "uid": "amanah",
+    "col": "resource_transfers",
+    "op": "تحديث",
+    "desc": "الأمانة تجعل النقل منفذًا من العميل",
+    "expected": "deny",
+    "outcome": "allow",
+    "pass": false
+  },
+  {
+    "id": "SEC-13",
+    "uid": "amanah",
+    "col": "resource_transfers",
+    "op": "إنشاء",
+    "desc": "الأمانة تنشئ نقلًا بحالة منفذ مباشرة",
+    "expected": "deny",
+    "outcome": "allow",
+    "pass": false
+  },
+  {
+    "id": "SEC-13",
+    "uid": "amanah",
+    "col": "rate_limits",
+    "op": "قراءة",
+    "desc": "قراءة عدادات حدود الطلبات من العميل",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "SEC-13",
+    "uid": "drvE",
+    "col": "rate_limits",
+    "op": "حذف",
+    "desc": "تصفير حد الطلبات من العميل",
+    "expected": "deny",
+    "outcome": "deny",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "drvE2",
+    "col": "collection_routes",
+    "op": "تحديث",
+    "desc": "السائق ينهي جولته الجارية (الحالة فقط)",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "opsE",
+    "col": "bins",
+    "op": "تحديث",
+    "desc": "المحاكي يحدّث وقت جمع حاوية محاكاة",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  },
+  {
+    "id": "ALLOW",
+    "uid": "amanah",
+    "col": "resource_transfers",
+    "op": "تحديث",
+    "desc": "الأمانة تعتمد نقلًا مقترحًا",
+    "expected": "allow",
+    "outcome": "allow",
+    "pass": true
+  }
+]

@@ -16,9 +16,10 @@
 process.env.GCLOUD_PROJECT ||= "swm-dispatch-e2e";
 const { adminDb, adminAuth } = await import("../../api/_lib/firebaseAdmin.mjs");
 const { runDispatchCycle } = await import("../../api/_lib/dispatchRunner.mjs");
+const confirmHandler = (await import("../../api/field/confirm-collection.js")).default;
 const { initializeApp } = await import("firebase/app");
 const { getAuth, connectAuthEmulator, signInWithEmailAndPassword } = await import("firebase/auth");
-const { getFirestore, connectFirestoreEmulator, collection, query, where, getDocs, getDoc, doc, updateDoc, setDoc, arrayUnion, terminate } = await import("firebase/firestore");
+const { getFirestore, connectFirestoreEmulator, collection, query, where, getDocs, getDoc, doc, updateDoc, arrayUnion, terminate } = await import("firebase/firestore");
 
 const db = adminDb();
 let passed = 0, failed = 0;
@@ -39,7 +40,7 @@ async function client(email, password) {
   const auth = getAuth(app); connectAuthEmulator(auth, `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`, { disableWarnings: true });
   const fs = getFirestore(app); connectFirestoreEmulator(fs, fsHost, Number(fsPort));
   const cred = await signInWithEmailAndPassword(auth, email, password);
-  return { fs, uid: cred.user.uid };
+  return { fs, uid: cred.user.uid, token: await cred.user.getIdToken() };
 }
 async function wipe() {
   for (const c of ["bins", "neighborhoods", "driver_profiles", "vehicles", "collection_routes", "route_incidents", "dispatch_decisions", "dispatch_runs", "dispatch_locks", "dispatch_settings", "driver_notifications", "audit_log", "municipalities", "simulated_readings", "sensor_readings", "fire_sensors", "citizen_reports", "collection_events"]) {
@@ -96,7 +97,7 @@ await test("3–6 · the engine (critical-reading trigger) creates a route, pick
 });
 
 await test("7 · the route and its notification reach the DRIVER's account (client SDK, security rules)", async () => {
-  const { fs, uid } = await client("drv1@e2e.local", PW);
+  const { fs, uid, token } = await client("drv1@e2e.local", PW);
   const mine = await getDocs(query(collection(fs, "collection_routes"), where("driverId", "==", uid)));
   ok(mine.docs.some((d) => d.id === route.id), "route not visible to the driver");
   const notes = await getDocs(query(collection(fs, "driver_notifications"), where("driverId", "==", uid)));
@@ -105,17 +106,20 @@ await test("7 · the route and its notification reach the DRIVER's account (clie
   const theirs = await getDocs(query(collection(other.fs, "collection_routes"), where("driverId", "==", other.uid)));
   ok(!theirs.docs.some((d) => d.id === route.id), "another driver can see the route");
   await terminate(other.fs);
-  globalThis.__driver = { fs, uid };
+  globalThis.__driver = { fs, uid, token };
 });
 
-await test("8–10 · the driver starts, confirms the emptying and finishes — the route status follows", async () => {
-  const { fs, uid } = globalThis.__driver;
+await test("8–10 · the driver starts, confirms each emptying THROUGH THE SERVER (direct writes denied) and finishes — the route status follows", async () => {
+  const { fs, token } = globalThis.__driver;
+  const confirm = async (body) => { let code = 0, out = null; const res = { setHeader() {}, status(c) { code = c; return res; }, json(o) { out = o; } }; await confirmHandler({ method: "POST", headers: { authorization: `Bearer ${token}` }, body }, res); return { code, out }; };
+  ok((await confirm({ routeId: route.id, binId: route.binIds[0] })).code === 409, "confirmed before the route started");
   await updateDoc(doc(fs, "collection_routes", route.id), { status: "in_progress", startedAt: iso(), updatedAt: iso() });
   await updateDoc(doc(fs, "vehicles", "Vdrv1"), { status: "on_route", currentRouteId: route.id, updatedAt: iso() });
   for (const binId of route.binIds) {
-    await setDoc(doc(fs, "collection_events", `${route.id}__${binId}`), { id: `${route.id}__${binId}`, routeId: route.id, binId, driverId: uid, operatorId: uid, confirmedAt: iso(), fillBefore: 92, fillAfter: null }, { merge: true });
-    await updateDoc(doc(fs, "collection_routes", route.id), { collectedBinIds: arrayUnion(binId), lastProgressAt: iso() });
-    await updateDoc(doc(fs, "bins", binId), { lastCollectionAt: iso() });
+    let denied = false; try { await updateDoc(doc(fs, "collection_routes", route.id), { collectedBinIds: arrayUnion(binId) }); } catch { denied = true; }
+    ok(denied, "driver wrote collection progress directly");
+    const r = await confirm({ routeId: route.id, binId, clientConfirmedAt: iso() });
+    ok(r.code === 200 && r.out.duplicate === false, `confirm ${r.code} ${JSON.stringify(r.out)}`);
   }
   await updateDoc(doc(fs, "collection_routes", route.id), { status: "completed", completedAt: iso(), updatedAt: iso() });
   await updateDoc(doc(fs, "vehicles", "Vdrv1"), { status: "available", currentRouteId: null, updatedAt: iso() });

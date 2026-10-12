@@ -1056,13 +1056,20 @@ export function useRouteIncidents(enabled = true, municipalityId = null) {
  * creating a second event. Updates ONLY operational fields on the bin
  * (lastCollectionAt) — the measured fill level is never touched here.
  */
+/**
+ * Collection confirmation through the SERVER (/api/field/confirm-collection): it re-validates the driver, the
+ * in-progress route, the stop, the vehicle and duplicates inside one transaction. A business rejection (4xx except
+ * 429) is permanent — the offline queue drops it instead of retrying forever; network errors and 429/5xx retry.
+ */
 export const confirmCollection = async (confirmation) => {
-  const batch = writeBatch(db);
-  batch.set(doc(db, COLLECTIONS.COLLECTION_EVENTS, confirmation.id), { ...confirmation, collectedAt: confirmation.confirmedAt, createdAt: ts() }, { merge: true });
-  batch.update(doc(db, COLLECTIONS.COLLECTION_ROUTES, confirmation.routeId), { collectedBinIds: arrayUnion(confirmation.binId), lastProgressAt: ts() });
-  batch.update(doc(db, COLLECTIONS.BINS, confirmation.binId), { lastCollectionAt: confirmation.confirmedAt });
-  await batch.commit();
-  return confirmation.id;
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) throw Object.assign(new Error("غير مسجل الدخول"), { permanent: false });
+  const pos = confirmation.confirmLocation ? { lat: confirmation.confirmLocation.lat, lng: confirmation.confirmLocation.lng, accuracy: confirmation.confirmLocation.accuracyM ?? null } : null;
+  const res = await fetch("/api/field/confirm-collection", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ routeId: confirmation.routeId, binId: confirmation.binId, clientConfirmedAt: confirmation.confirmedAt, ...(pos ? { position: pos } : {}) }) });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(out.error || `HTTP ${res.status}`), { status: res.status, permanent: res.status >= 400 && res.status < 500 && res.status !== 429 && res.status !== 401 });
+  return out.eventId || confirmation.id;
 };
 
 /** Driver reports an obstacle/fault/unreachable stop: incident doc + the stop moves to skippedStops (never to collected). */
@@ -1268,47 +1275,18 @@ export const decideResourceTransfer = async (transfer, actor, decision, note = "
   batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: decision === "approved" ? "transfer_approved" : "transfer_rejected", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId, from: transfer.fromMunicipalityId, to: transfer.toMunicipalityId, note }, createdAt: ts() });
   await batch.commit();
 };
-/** Resource documents touched by a transfer: vehicle, driver profile (+ its user doc), or both for a crew. */
-const transferTargets = (transfer) => {
-  const t = [];
-  const vehicleId = transfer.resourceType === "vehicle" ? transfer.resourceId : transfer.vehicleId;
-  const driverId = transfer.resourceType === "driver" ? transfer.resourceId : transfer.driverId;
-  if (transfer.resourceType !== "driver" && vehicleId) t.push({ col: COLLECTIONS.VEHICLES, id: vehicleId });
-  if (transfer.resourceType !== "vehicle" && driverId) t.push({ col: COLLECTIONS.DRIVER_PROFILES, id: driverId }); // the users/{uid} doc is re-homed by the server (/api/admin/users)
-  return t;
-};
-/** Executes an APPROVED transfer: the vehicle / driver / crew is temporarily re-homed (homeMunicipalityId kept for the return). */
-export const executeResourceTransfer = async (transfer, actor) => {
-  if (transfer.status !== "approved") throw new Error("النقل غير معتمد");
-  const targets = transferTargets(transfer);
-  if (targets.length === 0) throw new Error("لا مورد محدد في النقل");
-  const batch = writeBatch(db);
-  for (const { col, id, optional } of targets) {
-    const snap = await getDoc(doc(db, col, id));
-    if (!snap.exists()) { if (optional) continue; throw new Error("المورد غير موجود"); }
-    const d = snap.data();
-    batch.update(snap.ref, { municipalityId: transfer.toMunicipalityId, homeMunicipalityId: d.homeMunicipalityId || d.municipalityId || transfer.fromMunicipalityId, transferId: transfer.id, transferUntil: transfer.until || null, updatedAt: ts() });
-  }
-  batch.update(doc(db, COLLECTIONS.RESOURCE_TRANSFERS, transfer.id), { status: "executed", executedBy: actor?.uid || "", executedAt: ts(), updatedAt: ts() });
-  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "transfer_executed", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId, from: transfer.fromMunicipalityId, to: transfer.toMunicipalityId }, createdAt: ts() });
-  await batch.commit();
-  // Driver / crew: the server re-homes the user account (sensitive field), verified against this executed transfer.
-  if (transfer.resourceType !== "vehicle") await adminUserAction({ action: "applyTransfer", transferId: transfer.id });
-};
-/** Returns an EXECUTED transfer's resource(s) to the home municipality. */
-export const returnResourceTransfer = async (transfer, actor) => {
-  if (transfer.status !== "executed") throw new Error("النقل غير منفَّذ");
-  const batch = writeBatch(db);
-  for (const { col, id, optional } of transferTargets(transfer)) {
-    const snap = await getDoc(doc(db, col, id));
-    if (!snap.exists()) { if (optional) continue; throw new Error("المورد غير موجود"); }
-    batch.update(snap.ref, { municipalityId: snap.data().homeMunicipalityId || transfer.fromMunicipalityId, transferId: null, transferUntil: null, updatedAt: ts() });
-  }
-  batch.update(doc(db, COLLECTIONS.RESOURCE_TRANSFERS, transfer.id), { status: "returned", returnedBy: actor?.uid || "", returnedAt: ts(), updatedAt: ts() });
-  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "transfer_returned", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId }, createdAt: ts() });
-  await batch.commit();
-  if (transfer.resourceType !== "vehicle") await adminUserAction({ action: "revertTransfer", transferId: transfer.id });
-};
+/** Executes / returns an APPROVED transfer on the SERVER (/api/admin/transfers): vehicle, driver profile, driver
+ * account and transfer status change in ONE Firestore transaction — all or nothing. */
+export async function adminTransferAction(action, transferId) {
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) throw new Error("غير مسجل الدخول");
+  const res = await fetch("/api/admin/transfers", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ action, transferId }) });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+  return out;
+}
+export const executeResourceTransfer = (transfer) => adminTransferAction("execute", transfer.id);
+export const returnResourceTransfer = (transfer) => adminTransferAction("return", transfer.id);
 
 /** Planner / simulation records (immutable history of what the engines computed and why). */
 export const saveOptimizationRun = (data, actor) => addItem(COLLECTIONS.OPTIMIZATION_RUNS, { ...data, createdBy: actor?.uid || "", createdByName: actor?.name || "" });

@@ -30,6 +30,9 @@ function devServerFunctions() {
       })
       mount('/api/dispatch/run', 'api/dispatch/run.js')
       mount('/api/admin/users', 'api/admin/users.js')
+      mount('/api/admin/transfers', 'api/admin/transfers.js')
+      mount('/api/field/confirm-collection', 'api/field/confirm-collection.js')
+      mount('/api/ai', 'api/ai.js')
     },
   }
 }
@@ -38,13 +41,5 @@ export default defineConfig({
   plugins: [react(), devServerFunctions()],
   // Unit tests run with `vitest`; the Firestore rules tests need the emulator and run via `npm run test:rules`.
   test: { exclude: ['**/node_modules/**', '**/dist/**', 'tests/rules/**', 'tests/integration/**'] },
-  server: {
-    proxy: {
-      '/api/ai': {
-        target: 'https://api.groq.com',
-        changeOrigin: true,
-        rewrite: () => '/openai/v1/chat/completions',
-      }
-    }
-  }
+  // /api/* is served by the functions above in emulator mode (no direct proxy to any AI provider).
 })

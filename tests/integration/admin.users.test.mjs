@@ -97,38 +97,57 @@ await test("the same changes are refused from the client SDK, even for the Amana
   }
 });
 
-await test("transfer re-homing: only for an EXECUTED transfer, then reverted only once RETURNED", async () => {
-  await db.doc("resource_transfers/T1").set({ resourceType: "crew", driverId: "drvE", vehicleId: "VE", fromMunicipalityId: "east", toMunicipalityId: "north", status: "approved" });
-  ok((await call("amanah", { action: "applyTransfer", transferId: "T1" })).code === 409, "applied before execution");
-  await db.doc("resource_transfers/T1").update({ status: "executed" });
-  ok((await call("amanah", { action: "applyTransfer", transferId: "T1" })).code === 200, "apply");
-  const u = (await db.doc("users/drvE").get()).data();
-  ok(u.municipalityId === "north" && u.homeMunicipalityId === "east" && u.transferId === "T1", "not re-homed");
-  ok((await call("amanah", { action: "revertTransfer", transferId: "T1" })).code === 409, "reverted before return");
-  await db.doc("resource_transfers/T1").update({ status: "returned" });
-  ok((await call("amanah", { action: "revertTransfer", transferId: "T1" })).code === 200, "revert");
-  ok((await db.doc("users/drvE").get()).get("municipalityId") === "east", "not reverted");
-  ok((await call("mgrE", { action: "applyTransfer", transferId: "T1" })).code === 403, "manager applied a transfer");
+await test("transfers no longer go through this route (one transaction in /api/admin/transfers); a transferred account cannot be re-homed by hand", async () => {
+  ok((await call("amanah", { action: "applyTransfer", transferId: "T1" })).code === 400, "legacy applyTransfer accepted");
+  ok((await call("amanah", { action: "revertTransfer", transferId: "T1" })).code === 400, "legacy revertTransfer accepted");
+  await db.doc("users/drvE").update({ transferId: "T1" });
+  ok((await call("amanah", { action: "setMunicipality", uid: "drvE", municipalityId: "north" })).code === 409, "re-homed during a transfer");
+  await db.doc("users/drvE").update({ transferId: null });
 });
 
-await test("migration: dry-run writes nothing; --apply scopes legacy documents; re-run is a no-op; scoped staff then see them", async () => {
+await test("migration: dry run writes nothing + reports; apply needs a backup; counts verified; re-run is a no-op; restore undoes only its own fields; accounts are reported, never changed", async () => {
+  const { restoreBackup } = await import("../../scripts/migrations/backfill-security-scope.mjs");
+  const { mkdtempSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
   await db.doc("neighborhoods/nE").set({ name: "حي الشروق", municipalityId: "east" });
   await db.doc("bins/bE").set({ name: "bE", municipalityId: "east", neighborhoodId: "nE" });
   await db.doc("requests/r1").set({ userId: "c1", district: "حي الشروق" });
+  await db.doc("requests/r2").set({ userId: "c2", district: "حي غير معروف" });
   await db.doc("citizen_reports/c1").set({ userId: "c1", district: "", binId: "bE" });
   await db.doc("alerts/a1").set({ sourceId: "bE", resolved: false });
   await db.doc("iot_devices/d1").set({ deviceId: "ESP-1", binId: "bE" });
+  await db.doc("users/legacy1").set({ role: "employee", status: "approved" });
+  const usersBefore = JSON.stringify((await db.collection("users").get()).docs.map((d) => [d.id, d.data()]).sort());
+
   const dry = await backfillSecurityScope(db, { apply: false });
-  ok(dry.requests.resolved === 1 && dry.requests.written === 0, "dry run wrote");
+  ok(dry.mode === "dry-run" && dry.report.requests.toWrite === 1 && dry.report.requests.unresolved === 1 && dry.report.requests.written === 0 && dry.ok, `dry: ${JSON.stringify(dry.report.requests)}`);
   ok(!(await db.doc("requests/r1").get()).get("municipalityId"), "dry run modified data");
-  const run = await backfillSecurityScope(db, { apply: true });
-  ok(run.requests.written === 1 && run.citizen_reports.written === 1 && run.alerts.written === 1 && run.iot_devices.written === 1, `apply: ${JSON.stringify(run)}`);
-  const again = await backfillSecurityScope(db, { apply: true });
-  ok(Object.values(again).every((r) => r.written === 0), "second run wrote again");
+  let refused = false; try { await backfillSecurityScope(db, { apply: true }); } catch { refused = true; }
+  ok(refused, "apply ran without a backup");
+
+  const dir = mkdtempSync(`${tmpdir()}/swm-mig-`);
+  const run = await backfillSecurityScope(db, { apply: true, backupDir: dir, now: "2026-10-12T00:00:00.000Z" });
+  ok(run.ok && run.report.requests.written === 1 && run.report.citizen_reports.written === 1 && run.report.alerts.written === 1 && run.report.iot_devices.written === 1, `apply: ${JSON.stringify(run.report)}`);
+  ok(Object.values(run.verification).every((v) => v.countUnchanged && v.scopedAsExpected), "count verification failed");
+  ok(JSON.parse(readFileSync(run.backupFile, "utf8")).changes.length === 4, "backup incomplete");
+  ok(!(await db.doc("requests/r2").get()).get("municipalityId"), "unresolved doc was guessed");
+  const again = await backfillSecurityScope(db, { apply: true, backupDir: dir });
+  ok(Object.values(again.report).every((r) => r.written === 0) && again.backupFile === null, "second run wrote again");
+
   await mkUser("opsE2", { role: "employee", status: "active", municipalityId: "east" });
   const fs = await client("opsE2");
   ok((await getDocs(query(collection(fs, "requests"), where("municipalityId", "==", "east")))).size === 1, "scoped staff cannot see the backfilled request");
   await terminate(fs);
+
+  await db.doc("alerts/a1").update({ municipalityId: "north" });   // edited after the migration → restore must leave it
+  const res = await restoreBackup(db, run.backupFile);
+  ok(res.restored === 3 && res.skippedChanged === 1, `restore: ${JSON.stringify(res)}`);
+  ok(!(await db.doc("requests/r1").get()).get("municipalityId") && !(await db.doc("requests/r1").get()).get("municipalityBackfilledAt"), "restore left fields");
+  ok((await db.doc("alerts/a1").get()).get("municipalityId") === "north", "restore overwrote a later edit");
+
+  ok(run.users.statusApproved.some((u) => u.uid === "legacy1") && run.users.staffWithoutMunicipality.some((u) => u.uid === "legacy1"), "account review missed legacy1");
+  const usersAfter = JSON.stringify((await db.collection("users").get()).docs.filter((d) => d.id !== "opsE2").map((d) => [d.id, d.data()]).sort());
+  ok(usersAfter === usersBefore, "migration changed user accounts");
 });
 
 console.log(`\nAdmin path + migration: ${passed} passed, ${failed} failed\n`);

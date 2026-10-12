@@ -14,7 +14,8 @@
     "dispatch:worker": "node scripts/dispatchWorker.mjs",
     "test:e2e": "firebase emulators:exec --only firestore,auth --project swm-dispatch-e2e \"node tests/integration/dispatch.e2e.test.mjs\"",
     "test:security": "npm i --no-save --legacy-peer-deps @firebase/rules-unit-testing && firebase emulators:exec --only firestore --project swm-security-test \"node tests/rules/security.rules.test.mjs\"",
-    "test:admin": "firebase emulators:exec --only firestore,auth --project swm-admin-test \"node tests/integration/admin.users.test.mjs\""
+    "test:admin": "firebase emulators:exec --only firestore,auth --project swm-admin-test \"node tests/integration/admin.users.test.mjs\"",
+    "test:guards": "firebase emulators:exec --only firestore,auth --project swm-guards-test \"node tests/integration/server.guards.test.mjs\""
   },
   "dependencies": {
     "firebase": "^12.12.0",

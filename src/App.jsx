@@ -4453,91 +4453,22 @@ const RequestsManagementPage = ({ loggedInUser }) => {
 
 // ======================== SETTINGS ========================
 // ── بطاقة مفتاح Claude API ──────────────────────────────────────────
-const GROQ_MODEL = "llama-3.3-70b-versatile";
 
 const ApiKeyCard = () => {
-  const F = ARABIC_FONT;
-  const [key, setKey]               = useState(() => localStorage.getItem("groq_api_key") || "");
-  const [saved, setSaved]           = useState(false);
-  const [visible, setVisible]       = useState(false);
-  const [testStatus, setTestStatus] = useState(null);
-  const [testMsg, setTestMsg]       = useState("");
-
-  const save = () => {
-    localStorage.setItem("groq_api_key", key.trim());
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
-  };
-  const clear = () => {
-    localStorage.removeItem("groq_api_key");
-    setKey(""); setTestStatus(null);
-  };
-
-  const testConnection = async () => {
-    const k = key.trim();
-    if (!k) { setTestMsg("أدخل المفتاح أولاً"); setTestStatus("error"); return; }
-    setTestStatus("testing"); setTestMsg("");
-    try {
-      const res = await fetch("/api/ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${k}` },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          max_tokens: 10,
-          messages: [{ role: "user", content: "قل: متصل" }],
-        }),
-      });
-      if (res.ok) {
-        setTestStatus("ok"); setTestMsg(`✅ الاتصال يعمل — ${GROQ_MODEL}`);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        const msg = err?.error?.message || "";
-        if (res.status === 401) { setTestStatus("error"); setTestMsg("مفتاح API غير صحيح ❌"); }
-        else if (res.status === 429) { setTestStatus("error"); setTestMsg("تجاوز الحد — انتظر قليلاً"); }
-        else { setTestStatus("error"); setTestMsg(`خطأ ${res.status}: ${msg}`); }
-      }
-    } catch (e) {
-      setTestStatus("error"); setTestMsg("خطأ شبكة — تأكد من اتصال الإنترنت");
-    }
-  };
-
-  const statusColor = testStatus === "ok" ? C.accent : testStatus === "error" ? C.danger : C.info;
-
+  const [enabled, setEnabled] = useState(null);
+  useEffect(() => {
+    try { localStorage.removeItem("groq_api_key"); } catch { /* older versions stored the key here — removed */ }
+    (async () => {
+      try { const { auth } = await import("./firebase"); const token = await auth.currentUser?.getIdToken(); const r = await fetch("/api/ai", { headers: { Authorization: `Bearer ${token || ""}` } }); const d = await r.json().catch(() => ({})); setEnabled(!!d.enabled); }
+      catch { setEnabled(false); }
+    })();
+  }, []);
   return (
-    <Card title="المساعد الذكي — Groq AI (مجاني)" icon={<Bot size={16} color={C.muted} />}>
-      <div style={{ padding: "8px 12px", borderRadius: 8, background: C.accent + "15", border: `1px solid ${C.accent}30`, fontSize: 11, color: C.accent, marginBottom: 14, fontFamily: F }}>
-        ✅ مجاني تماماً — بدون بطاقة بنكية — يعمل في جميع المناطق
+    <Card title="🤖 المساعد الذكي">
+      <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.9 }}>
+        مفتاح مزود الذكاء الاصطناعي يُحفظ على الخادم فقط (متغير <code>GROQ_API_KEY</code>)، ولا يُخزَّن في المتصفح. يجيب المساعد من بيانات نطاقك فقط ولا يستطيع تنفيذ أي إجراء.
+        <div style={{ marginTop: 6, fontWeight: 700, color: enabled ? C.accent : C.warning }}>{enabled == null ? "جارٍ التحقق…" : enabled ? "المساعد مفعّل" : "المساعد غير مفعّل على الخادم"}</div>
       </div>
-      <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.9, marginBottom: 14 }}>
-        احصل على مفتاح مجاني من <span style={{ color: "#f55036", fontWeight: 700 }}>console.groq.com</span> ← API Keys ← Create API Key.
-        يُحفظ المفتاح في المتصفح فقط.
-      </p>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <input
-          type={visible ? "text" : "password"}
-          value={key}
-          onChange={e => { setKey(e.target.value); setTestStatus(null); }}
-          placeholder="gsk_..."
-          style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontFamily: F, outline: "none" }}
-        />
-        <button onClick={() => setVisible(v => !v)} style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer", fontSize: 14 }}>
-          {visible ? "🙈" : "👁️"}
-        </button>
-      </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button onClick={save} style={{ padding: "10px 20px", borderRadius: 10, border: "none", background: saved ? C.accent : "linear-gradient(135deg,#6d28d9,#4c1d95)", color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13, fontFamily: F }}>
-          {saved ? "✅ تم الحفظ" : "💾 حفظ"}
-        </button>
-        <button onClick={testConnection} disabled={testStatus === "testing"} style={{ padding: "10px 18px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.info, fontWeight: 700, cursor: "pointer", fontSize: 13, fontFamily: F }}>
-          {testStatus === "testing" ? "⏳ جاري الاختبار..." : "🔗 اختبار الاتصال"}
-        </button>
-        {key && <button onClick={clear} style={{ padding: "10px 14px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.danger, cursor: "pointer", fontSize: 13, fontFamily: F }}>🗑️ حذف</button>}
-      </div>
-      {testMsg && (
-        <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: statusColor + "15", border: `1px solid ${statusColor}40`, fontSize: 12, color: statusColor, fontFamily: F }}>
-          {testMsg}
-        </div>
-      )}
     </Card>
   );
 };
@@ -7599,7 +7530,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
 };
 
 // ======================== AI ASSISTANT ========================
-const AIAssistant = ({ role, stations = [], alerts = [], userData = {}, myRequests = [], myReports = [], suctionJobs = [] }) => {
+const AIAssistant = ({ role }) => {
   const F = ARABIC_FONT;
   const [open, setOpen]       = useState(false);
   const [messages, setMessages] = useState([]);
@@ -7607,103 +7538,29 @@ const AIAssistant = ({ role, stations = [], alerts = [], userData = {}, myReques
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef(null);
 
-  const apiKey = typeof window !== "undefined" ? localStorage.getItem("groq_api_key") || "" : "";
-
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, open]);
 
-  // Build system context from real data
-  const buildSystemPrompt = () => {
-    const now = new Date().toLocaleString("ar-SA");
-    if (isMgmtRole(role)) {
-      const critical  = stations.filter(s => getStatus(s.fillLevel) === "حرج");
-      const warning   = stations.filter(s => getStatus(s.fillLevel) === "تحذير");
-      const normal    = stations.filter(s => getStatus(s.fillLevel) === "طبيعي");
-      const activeJobs = suctionJobs.filter(j => j.status === "نشط" || j.status === "جاري");
-      return `أنت مساعد ذكي لنظام إدارة النفايات الذكي في مدينة بريدة، منطقة القصيم.
-وقت الآن: ${now}
-دورك: تساعد الموظفين والمدراء على فهم البيانات واتخاذ القرارات.
-
-=== البيانات الحالية للنظام ===
-إجمالي الأحياء: ${stations.length}
-• حرجة (≥85%): ${critical.length} حي ${critical.length > 0 ? "— " + critical.map(s => `${s.name} (${s.fillLevel}%)`).join("، ") : ""}
-• تحذير (60-84%): ${warning.length} حي ${warning.length > 0 ? "— " + warning.map(s => `${s.name} (${s.fillLevel}%)`).join("، ") : ""}
-• طبيعية (<60%): ${normal.length} حي
-
-التنبيهات النشطة: ${alerts.filter(a => a.type === "حرج").length} حرجة، ${alerts.filter(a => a.type === "تحذير").length} تحذير
-أوامر الجولات النشطة: ${activeJobs.length}
-
-قواعد الإجابة:
-- أجب بالعربية دائماً
-- اجعل إجاباتك مختصرة وعملية
-- استند فقط على البيانات المعطاة
-- إذا سُئلت عن شيء خارج نطاق بياناتك، قل ذلك بوضوح`;
-    }
-    // citizen
-    const pendingReqs  = myRequests.filter(r => r.status === "قيد المراجعة").length;
-    const acceptedReqs = myRequests.filter(r => r.status === "مقبول").length;
-    const pendingReps  = myReports.filter(r => r.status === "قيد المعالجة").length;
-    const myDistrict   = userData.district || "غير محدد";
-    const distStation  = stations.find(s => s.district === myDistrict);
-    return `أنت مساعد ذكي لبوابة الأفراد في نظام إدارة النفايات ببريدة.
-وقت الآن: ${now}
-دورك: تساعد المواطن على متابعة طلباته وبلاغاته والحصول على معلومات عن حيّه.
-
-=== بيانات المواطن ===
-الاسم: ${userData.name || "مواطن"}
-الحي: ${myDistrict}
-طلبات الحاويات: ${myRequests.length} إجمالي (${pendingReqs} قيد المراجعة، ${acceptedReqs} مقبول)
-البلاغات: ${myReports.length} إجمالي (${pendingReps} قيد المعالجة)
-${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distStation.fillLevel}% (${getStatus(distStation.fillLevel)})` : "لا توجد محطة مرتبطة بحيك"}
-
-قواعد الإجابة:
-- أجب بالعربية دائماً
-- كن ودوداً وبسيطاً في لغتك
-- اجعل إجاباتك مختصرة ومفيدة
-- لا تشارك بيانات مواطنين آخرين`;
-  };
-
+  // The server builds the context from data this user is allowed to see (municipality / own routes / own requests)
+  // and holds the provider key. The browser sends only the question and the recent turns.
   const sendMessage = async () => {
     const text = input.trim();
     if (!text || loading) return;
-    if (!apiKey) {
-      setMessages(p => [...p, { role: "user", content: text }, { role: "assistant", content: "⚠️ يرجى إدخال مفتاح Gemini API في صفحة الإعدادات أولاً." }]);
-      setInput(""); return;
-    }
-    const newMessages = [...messages, { role: "user", content: text }];
-    setMessages(newMessages);
+    const history = messages.slice(-6).map((m) => ({ role: m.role, content: String(m.content).slice(0, 1000) }));
+    setMessages((p) => [...p, { role: "user", content: text }]);
     setInput("");
     setLoading(true);
     try {
-      const res = await fetch("/api/ai", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          max_tokens: 600,
-          messages: [
-            { role: "system", content: buildSystemPrompt() },
-            ...newMessages.map(m => ({ role: m.role, content: m.content })),
-          ],
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const msg = err?.error?.message || `HTTP ${res.status}`;
-        if (res.status === 401) throw new Error("مفتاح API غير صحيح — تحقق منه في الإعدادات");
-        if (res.status === 429) throw new Error("تجاوزت حد الاستخدام — انتظر قليلاً ثم حاول مجدداً");
-        throw new Error(msg);
-      }
-      const data = await res.json();
-      const reply = data?.choices?.[0]?.message?.content || "لم أتمكن من الإجابة.";
-      setMessages(p => [...p, { role: "assistant", content: reply }]);
+      const { auth } = await import("./firebase");
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token || ""}` }, body: JSON.stringify({ question: text.slice(0, 500), history }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(res.status === 429 ? "تجاوزت حد استخدام المساعد — حاول لاحقًا" : res.status === 503 ? "المساعد غير مفعّل حاليًا" : data.error || `HTTP ${res.status}`);
+      setMessages((p) => [...p, { role: "assistant", content: data.reply || "لم أتمكن من الإجابة." }]);
     } catch (e) {
-      setMessages(p => [...p, { role: "assistant", content: `❌ ${e.message}` }]);
+      setMessages((p) => [...p, { role: "assistant", content: `تعذر الحصول على إجابة: ${e.message}` }]);
     } finally {
       setLoading(false);
     }
@@ -8155,7 +8012,10 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
     const q = queueRef.current;
     if (q.size() === 0) return;
     const r = await q.flush(async (op) => {
-      if (op.type === "collect") await confirmCollection(op.payload);
+      if (op.type === "collect") {
+        try { await confirmCollection(op.payload); }
+        catch (e) { if (!e.permanent) throw e; console.warn("[confirm] rejected by server, dropped from queue:", e.message); }
+      }
       else if (op.type === "incident") await reportRouteIncident(op.payload);
     });
     setPendingOffline(r.pending);
@@ -8204,7 +8064,10 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
       const confirmation = buildConfirmation({ route, bin, user, position: posStatus === "gps" ? position : null });
       if (!navigator.onLine) { queueRef.current.enqueue({ id: confirmation.id, type: "collect", payload: confirmation }); setPendingOffline(queueRef.current.size()); return; }
       try { await confirmCollection(confirmation); }
-      catch (e) { queueRef.current.enqueue({ id: confirmation.id, type: "collect", payload: confirmation }); setPendingOffline(queueRef.current.size()); console.warn("[confirm] queued offline:", e?.message); }
+      catch (e) {
+        if (e.permanent) { alert("تعذر تأكيد التفريغ: " + e.message); return; }
+        queueRef.current.enqueue({ id: confirmation.id, type: "collect", payload: confirmation }); setPendingOffline(queueRef.current.size()); console.warn("[confirm] queued offline:", e?.message);
+      }
     } finally { confirmingRef.current.delete(stop.binId); setBusy(false); }
   };
   const handleIncident = async (type, stop) => {
@@ -8914,13 +8777,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
       </div>
 
       {/* المساعد الذكي — للمواطن */}
-      <AIAssistant
-        role="citizen"
-        stations={stations}
-        userData={user}
-        myRequests={myRequests}
-        myReports={myReports}
-      />
+      <AIAssistant role="citizen" />
     </div>
   );
 };
@@ -9587,13 +9444,7 @@ function SmartWasteManagement() {
       </main>
 
       {/* المساعد الذكي — للموظف والإدارة العليا */}
-      <AIAssistant
-        role={userRole}
-        stations={stations}
-        alerts={alerts}
-        userData={loggedInUser}
-        suctionJobs={suctionJobs || []}
-      />
+      <AIAssistant role={userRole} />
     </div>
   );
 }
