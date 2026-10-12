@@ -1338,7 +1338,7 @@ export const markDriverNotificationRead = (id) => updateDoc(doc(db, COLLECTIONS.
 /** The Amanah switches the dispatch mode / scope / thresholds (rules: executive only). Audited. */
 export const saveDispatchSettings = async (data, actor) => {
   await setDoc(doc(db, COLLECTIONS.DISPATCH_SETTINGS, "config"), { ...data, updatedAt: ts(), updatedBy: actor?.uid || "", updatedByName: actor?.name || "" }, { merge: true });
-  await addDoc(collection(db, COLLECTIONS.AUDIT_LOG), { action: "dispatch_settings_changed", actorId: actor?.uid || "", actorName: actor?.name || "", details: { mode: data.mode, scope: data.scope, periodMinutes: data.periodMinutes }, createdAt: ts() });
+  await addDoc(collection(db, COLLECTIONS.AUDIT_LOG), { action: "dispatch_settings_changed", actorId: actor?.uid || "", actorName: actor?.name || "", details: { mode: data.mode, scope: data.scope, periodMinutes: data.periodMinutes, targets: data.targets || null, impactFactors: data.impactFactors || null }, createdAt: ts() });
 };
 /** Operations closes an escalation (resolved = handled, dismissed = not needed). */
 export const resolveDispatchDecision = (id, actor, status, note = "") =>

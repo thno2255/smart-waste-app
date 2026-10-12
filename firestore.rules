@@ -193,7 +193,11 @@ service cloud.firestore {
     // ── routes & field execution ──
     match /collection_routes/{id} {
       allow read: if (isEmployee() && inMun(resource.data)) || (isDriver() && resource.data.driverId == request.auth.uid);
-      allow create: if isEmployee() && inMun(request.resource.data);
+      // A new real route carries no collection progress and is not already running/completed (that is server/driver
+      // lifecycle). Demo-labelled history routes of the simulation scene are the only exception.
+      allow create: if isEmployee() && inMun(request.resource.data)
+                    && (request.resource.data.get("demo", false) == true
+                        || (request.resource.data.get("collectedBinIds", []).size() == 0 && !(request.resource.data.get("status", "") in ["in_progress", "completed"])));
       allow delete: if isEmployee() && inMun(resource.data);
       // Drivers advance only the execution fields of THEIR route, along the lifecycle approved → in_progress → completed.
       // collectedBinIds is collection data: only the server confirmation route writes it (no client, no role).
@@ -209,7 +213,14 @@ service cloud.firestore {
     // routeId__binId, route in progress, bin on the route, vehicle valid). No client may create or edit them.
     match /collection_events/{id} {
       allow read: if isStaff() && inMun(resource.data);
-      allow create, update: if false;
+      // Real confirmations are written ONLY by /api/field/confirm-collection. The single client exception is the
+      // demo scene's simulated history: back-office staff, own municipality, demo-labelled, on a COMPLETED demo route.
+      allow create: if isEmployee() && inMun(request.resource.data)
+                    && request.resource.data.get("demo", false) == true && request.resource.data.get("_demoSeedVersion", "") is string
+                    && request.resource.data.get("_demoSeedVersion", "") != ""
+                    && routeDoc(request.resource.data.routeId).get("demo", false) == true
+                    && routeDoc(request.resource.data.routeId).status == "completed";
+      allow update: if false;
       allow delete: if isAdmin() && resource.data.get("demo", false) == true;
     }
     match /route_incidents/{id} {

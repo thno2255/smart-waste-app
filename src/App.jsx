@@ -196,14 +196,16 @@ import { createOfflineQueue } from "./offlineQueue";
 import { DEFAULT_SIM_CONFIG, SIM_EVENTS, generateScenario } from "./simulation/simulationEngine";
 import { buildCollectionPlan, explainRoute, suggestAdditions } from "./collectionPlanner";
 import { makeThermalAlertFor, makeBinContext } from "./binContext";
-import { DEFAULT_DISPATCH_SETTINGS, DISPATCH_MODES, DISPATCH_SCOPES, ACTION_LABELS, ESCALATION_LABELS } from "./autoDispatchEngine";
+import { DEFAULT_DISPATCH_SETTINGS, DISPATCH_MODES, DISPATCH_SCOPES, ACTION_LABELS, ESCALATION_LABELS, targetsOf, impactFactorsOf, TARGET_LABELS, DEFAULT_TARGETS } from "./autoDispatchEngine";
+import { EXPLANATION_VERSION, explanationSummary, minutesText, DECISION_TYPES, TRIGGER_TEXT, ALTERNATIVE_TEXT, CONSTRAINT_TEXT, reasonText, operationalImpact } from "./decisionExplain";
+import { DRIVER_STATE_LABELS, shiftWindow, driverOperationalState } from "./driverState";
 import { simulateDecision, SCENARIO_TYPES } from "./decisionSimulator";
 import { municipalityPressure, recommendTransfers, compareMunicipalities, CREW_BINS_PER_HOUR } from "./interMunicipalEngine";
 import { installSimulation, subscribeSimState, tickSimulation, setSimulationStatus, fireSimulationEvent, realIntervalMs, resetSimulation } from "./simulation/simulationRunner";
 import { DEMO_STEPS, DEFAULT_DEMO_MUNICIPALITY, evaluateDemo, nextStepIndex } from "./demoScenario";
 import { can, validateDriverProfile, findVehicleAssignmentConflicts, findRouteAssignmentConflicts, activeAssignmentFor, vehicleHolderAt, coverageMatrix, driverCodeFor, locationFreshness, SHIFT_STATUS_LABELS, AVAILABILITY_LABELS } from "./fleetEngine";
-import { getBinMapState, computeNeighborhoodMapStats, binMatchesFilter, neighborhoodMatchesFilter, polygonStyle, markerStyle, MAP_STATE_COLORS, MAP_STATE_LABELS } from "./mapVisual";
-import { computeImpactMetrics, computeFleetPerformance } from "./impact";
+import { getBinMapState, computeNeighborhoodMapStats, binMatchesFilter, neighborhoodMatchesFilter, polygonStyle, markerStyle, MAP_STATE_COLORS, MAP_STATE_LABELS, binNeedsCollection } from "./mapVisual";
+import { computeFleetPerformance, IMPACT_FACTOR_SOURCES, DEFAULT_IMPACT_FACTORS } from "./impact";
 import { seedAllCollections, migrateStationsToBinsAndNeighborhoods, seedCityDemoData } from "./seedFirestore";
 import { exportAllDataToExcel } from "./exportAllDataToExcel";
 
@@ -1499,6 +1501,47 @@ const MAP_LAYERS = [
   { key: "routes", label: "الجولات والمركبات" },
 ];
 
+/** Map side card for one neighbourhood: the operational essentials first; details and recommendations on demand. */
+const NeighborhoodOpsCard = ({ stats, routes = [], profiles = [], onShowRoutes, onViewBins }) => {
+  const [recOpen, setRecOpen] = useState(false);
+  const closeRec = () => setRecOpen(false);
+  const mid = stats.views.find((v) => v.bin.municipalityId)?.bin.municipalityId || null;
+  const { decisions } = useOpsData();
+  const active = routes.filter((r) => ["approved", "in_progress"].includes(r.status) && (r.neighborhoodIds || []).some((id) => stats.ids.includes(id)));
+  const onRoute = new Set(active.flatMap((r) => r.binIds || []));
+  const waiting = stats.views.filter((v) => binNeedsCollection(v.vs) && !onRoute.has(v.bin.id)).length;
+  const drivers = [...new Set(active.map((r) => r.driverName).filter(Boolean))];
+  const nextCollection = active.map((r) => r.expectedCollectionAt).filter(Boolean).sort()[0] || null;
+  const key = normalizeNeighborhoodName(stats.name);
+  const nowMs = currentTimeMs();
+  const covering = profiles.filter((p) => (p.neighborhoodKeys || []).includes(key) && p.shiftStatus === "on_shift" && p.availability !== "unavailable" && (!p.accountStatus || p.accountStatus === "active")
+    && (() => { const w = shiftWindow(p, { now: nowMs }); return !w.known || w.minutesLeft > 0; })());
+  const coverage = covering.length >= 2 ? ["جيدة", C.accent] : covering.length === 1 ? ["محدودة", C.warning] : ["لا تغطية", C.danger];
+  const recs = decisions.filter((d) => d.gap && ["open", "observed"].includes(d.status) && stats.ids.includes(d.gap.neighborhoodId));
+  const row = (label, value, color) => <div style={{ display: "flex", justifyContent: "space-between", gap: SP.sm, padding: "5px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12.5 }}><span style={{ color: C.muted }}>{label}</span><b style={{ color: color || C.text, fontWeight: 700 }}>{value}</b></div>;
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: SP.sm }}>
+      <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{stats.name}</div>
+      <div style={{ fontSize: FS.meta, color: C.muted, marginBottom: 8 }}>{municipalityById(mid)?.nameAr || "بلدية غير محددة"}</div>
+      {row("إجمالي الحاويات", stats.total)}
+      {row("الحاويات الحرجة", stats.criticalCount, stats.criticalCount ? C.danger : undefined)}
+      {row("بانتظار الإسناد", waiting, waiting ? C.warning : undefined)}
+      {row("الجولات النشطة", active.length)}
+      {row("السائقون المكلفون", drivers.length ? drivers.join("، ") : "—")}
+      {row("موعد الجمع المتوقع", nextCollection ? clockText(nextCollection) : active.length ? "غير محسوب لهذه الجولة" : "لا جولة نشطة")}
+      {row("مستوى التغطية", `${coverage[0]} · ${covering.length} سائق في المناوبة يغطي الحي`, coverage[1])}
+      <div style={{ display: "flex", gap: SP.sm, flexWrap: "wrap", marginTop: 10 }}>
+        {onShowRoutes && <Btn onClick={onShowRoutes}>عرض الجولات</Btn>}
+        {profiles.length > 0 && <Btn variant="ghost" onClick={() => setRecOpen(true)}>عرض التوصيات{recs.length ? ` (${recs.length})` : ""}</Btn>}
+        {onViewBins && <Btn variant="ghost" onClick={() => onViewBins(stats.id)}>الحاويات</Btn>}
+      </div>
+      <SidePanel open={recOpen} onClose={closeRec} title={`توصيات ${stats.name}`}>
+        <CoverageRecommendations decisions={recs} />
+      </SidePanel>
+    </div>
+  );
+};
+
 const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = [], fireSensors = [], recentReadings = [], routes: routesAll = [], citizenReports = [], profiles = [], municipalityFilter = null, initialLayer = "neighborhoods", height = 440, onViewBins, onAddToRoute, onOpenRoute, compact = false, initialSelectedKey = null }) => {
   const [filter, setFilter] = useState("all");
   const [layer, setLayer] = useState(initialLayer);
@@ -1752,7 +1795,9 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
             </span>
           </div>
 
-          {selectedStats ? (
+          {selectedStats ? (<>
+            <NeighborhoodOpsCard stats={selectedStats} routes={routesAll} profiles={profiles} onShowRoutes={() => setLayer("routes")} onViewBins={onViewBins} />
+            <Disclosure summary="تفاصيل الحاويات والجولة">
             <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{selectedStats.name}</div>
@@ -1811,13 +1856,9 @@ const OperationalMap = ({ neighborhoods: neighborhoodsAll = [], bins: binsAll = 
                 )}
               </div>
 
-              {onViewBins && (
-                <button onClick={() => onViewBins(selectedStats.id)} style={{ marginTop: 10, padding: "8px 16px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>
-                  عرض الحاويات
-                </button>
-              )}
             </div>
-          ) : (
+            </Disclosure>
+          </>) : (
             <div style={{ fontSize: 12, color: C.dim, padding: 16, border: `1px dashed ${C.border}`, borderRadius: 12, textAlign: "center" }}>
               اضغط على أي حي بالخريطة لعرض تفاصيله والجولة المرتبطة به
             </div>
@@ -1888,11 +1929,6 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
   const munProfiles = profiles.filter((p) => p.municipalityId === mid);
   const munVehicles = vehicles.filter((v) => v.municipalityId === mid);
   const munIncidents = incidents.filter((i) => i.municipalityId === mid);
-  const impact = useMemo(() => {
-    const ctx = makeBinContext(fireSensors, citizenReports, munNeighborhoods);
-    const scored = munBins.map((bin) => ({ bin, priority: getBinPriority(bin, null, [], ctx.forBin(bin)) }));
-    return computeImpactMetrics(groupNeighborhoodsByName(munNeighborhoods, munBins), scored, munRoutes, { depot: DEFAULT_DEPOT });
-  }, [munBins, munNeighborhoods, munRoutes, fireSensors, citizenReports]);
   const canOverride = can(loggedInUser?.role, "municipalities.manage");
   const [overrideBusy, setOverrideBusy] = useState("");
   const tabs = [["map", "الخريطة"], ["neighborhoods", "الأحياء"], ["bins", "الحاويات والمستشعرات"], ["fleet", "السائقون والمركبات"], ["routes", "الجولات"], ["incidents", "البلاغات"], ["kpi", "مؤشرات الأداء"]];
@@ -1986,7 +2022,7 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
               <div key={l} style={{ background: C.card, border: `1px solid ${c}30`, borderRadius: 12, padding: "12px 14px" }}><div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 11, color: C.muted }}>{l}</div></div>
             ))}
           </div>
-          <ImpactCard impact={impact} compact accent={m.color} />
+          <PerformanceImpactPanel municipalityId={mid} compact />
           {myPressure && (() => { const [lab, col] = PRESSURE_LABEL[myPressure.level]; const open = supportRequests.filter((r) => r.municipalityId === mid && r.status === "open"); return (
             <Card title="الضغط التشغيلي وطلب الدعم من الأمانة" icon={<AlertTriangle size={16} color={C.muted} />}>
               <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>مؤشر الضغط الآن: <b style={{ color: col }}>{myPressure.index} ({lab})</b> — {myPressure.reasons.join(" · ")}</div>
@@ -2153,36 +2189,6 @@ const centroidForGroup = (group) => {
 };
 
 // ======================== IMPACT CARD (shared: dashboard, reports, executive) ========================
-/** "What did data-driven collection save TODAY vs a fixed daily schedule?" — every figure traces to computeImpactMetrics() and its stated assumptions. */
-const ImpactCard = ({ impact, compact = false, accent = C.accent }) => {
-  const tiles = [
-    { label: "زيارات غير ضرورية تم تجنبها اليوم", value: impact.stopsAvoided, unit: "حاوية", color: accent },
-    { label: "أحياء لا تحتاج أي جولة اليوم", value: impact.neighborhoodsSkipped, unit: "حي", color: C.info },
-    { label: "كيلومترات موفّرة", value: impact.kmSaved, unit: "كم", color: C.info, sub: `${impact.dataDrivenKm} بدل ${impact.baselineKm} كم (−${impact.reductionPct}%)` },
-    { label: "وقود موفّر", value: impact.fuelSavedL, unit: "لتر", color: C.warning },
-    { label: "انبعاثات CO₂ موفّرة", value: impact.co2SavedKg, unit: "كجم", color: accent },
-    { label: "وقت تشغيل موفّر", value: impact.minutesSaved, unit: "دقيقة", color: C.purple },
-    { label: "فيضانات مُنعت (حاويات حرجة مغطاة بجولة)", value: impact.overflowsPrevented, unit: "حاوية", color: C.danger },
-  ];
-  return (
-    <Card title="ماذا وفّرنا اليوم؟ — الجمع بالبيانات مقابل الجدول الثابت" icon={<Leaf size={16} color={C.muted} />}>
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${compact ? 150 : 180}px, 1fr))`, gap: 10 }}>
-        {tiles.map((t) => (
-          <div key={t.label} style={{ background: C.bg, border: `1px solid ${t.color}30`, borderRadius: 12, padding: "12px 14px" }}>
-            <div style={{ fontSize: compact ? 22 : 26, fontWeight: 800, color: t.color }}>{t.value} <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>{t.unit}</span></div>
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{t.label}</div>
-            {t.sub && <div style={{ fontSize: 10.5, color: C.dim, marginTop: 2 }}>{t.sub}</div>}
-          </div>
-        ))}
-      </div>
-      <div style={{ fontSize: 10.5, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
-        الأساس المقارن: جدول ثابت يزور كل حاوية مرة يوميًا (مسار لكل حي يمر بكل حاوياته من المستودع). المنهج بالبيانات: فقط الحاويات المؤهلة الآن.
-        الافتراضات: {impact.assumptions.truckFuelLitersPerKm} لتر/كم، {impact.assumptions.co2KgPerLiterDiesel} كجم CO₂/لتر ديزل، {impact.assumptions.minutesPerStop} دقائق لكل حاوية، {impact.assumptions.avgUrbanSpeedKmh} كم/س. المسافات جوية (Haversine) وليست مسافات طرق.
-      </div>
-    </Card>
-  );
-};
-
 /** Compact dispatch status for the operations dashboard: summary first, details one click away. */
 const DispatchSummary = ({ settings, decisions = [], routes = [], onOpen, onOpenRoute }) => {
   const { runs } = useDispatchRuns(true, 5);
@@ -2192,7 +2198,7 @@ const DispatchSummary = ({ settings, decisions = [], routes = [], onOpen, onOpen
   const autoToday = routes.filter((r) => r.dispatch?.auto && String(r.dispatch.at || r.createdAt || "") >= dayStart.toISOString());
   const by = (st) => autoToday.filter((r) => r.status === st).length;
   const pending = decisions.filter((d) => d.type === "escalate" && d.status === "open");
-  const recent = decisions.filter((d) => d.status === "executed").slice(0, 3);
+  const recent = decisions.filter((d) => d.status === "executed" && ["create_assign", "insert", "reassign"].includes(d.type)).sort((a, b) => String(b.executedAt || "").localeCompare(String(a.executedAt || ""))).slice(0, 3);
   return (
     <Section title="الإسناد التلقائي" actions={<><DispatchModeBadge settings={settings} />{onOpen && <Btn variant="ghost" onClick={onOpen}>التفاصيل</Btn>}</>}>
       <KpiRow>
@@ -2202,11 +2208,9 @@ const DispatchSummary = ({ settings, decisions = [], routes = [], onOpen, onOpen
       </KpiRow>
       {s.mode !== "auto" && <div style={{ fontSize: FS.meta, color: C.info, marginTop: SP.sm }}>{s.mode === "observe" ? "وضع المراقبة: يحسب المحرك القرارات ويسجلها دون تنفيذ." : "الإسناد التلقائي متوقف — الإسناد يدوي."}</div>}
       {recent.length > 0 && (
-        <Disclosure summary="أسباب آخر الإسنادات">
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {recent.map((d) => <div key={d.id} style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}><b style={{ color: C.text }}>{d.routeName}</b> ← {d.driverName} · {getReadingAgeLabel(d.executedAt)}{onOpenRoute && d.routeId ? <> · <button onClick={() => onOpenRoute(d.routeId)} style={{ background: "none", border: "none", color: C.info, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 12, padding: 0 }}>فتح</button></> : null}<div>{d.reason}</div></div>)}
-          </div>
-        </Disclosure>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: SP.sm, marginTop: SP.md }}>
+          {recent.map((d) => <DecisionCard key={d.id} decision={d} route={routes.find((r) => r.id === d.routeId)} neighborhoodName={d.explanation?.neighborhoodName || ""} onOpenRoute={onOpenRoute} />)}
+        </div>
       )}
     </Section>
   );
@@ -2239,7 +2243,6 @@ const DashboardPage = ({ alerts = [], neighborhoods = [], bins = [], fireSensors
   const escalations = decisions.filter((d) => d.type === "escalate" && d.status === "open");
   const fillValues = bins.map((b) => b.lastFillLevelPercent).filter((v) => v != null && v <= 100);
   const avgFill = fillValues.length ? Math.round(fillValues.reduce((a, v) => a + v, 0) / fillValues.length) : null;
-  const impact = useMemo(() => computeImpactMetrics(groupNeighborhoodsByName(neighborhoods, bins), scoredBins, routes, { depot: DEFAULT_DEPOT }), [neighborhoods, bins, scoredBins, routes]);
   const loading = loadingBins || loadingNeighborhoods;
 
   // ── What needs attention, ranked: dispatch exceptions → uncovered demand → safety → field → data quality → citizens.
@@ -2302,7 +2305,7 @@ const DashboardPage = ({ alerts = [], neighborhoods = [], bins = [], fireSensors
 
       <Section title="المؤشرات والتحليلات" collapsible defaultOpen={false} hint="محسوبة من حالة الحاويات والجولات الحالية">
         <div style={{ display: "flex", flexDirection: "column", gap: SP.md }}>
-          <ImpactCard impact={impact} compact />
+          <PerformanceImpactPanel municipalityId={scope.all ? null : scope.municipalityId} compact onOpen={onNavigate ? () => onNavigate("brain", { tab: "perf" }) : undefined} />
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: SP.md }}>
             <Card title="توزيع مستويات الامتلاء">
               <ChartBox height={220}><ResponsiveContainer>
@@ -2728,14 +2731,9 @@ const PerfTable = ({ rows = [], firstCol }) => (
   </div>
 );
 
-const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborhoods = [], routes = [], collectionEvents = [], vehicles = [], auditLog = [], fireSensors = [], citizenReports = [] }) => {
+const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborhoods = [], routes = [], collectionEvents = [], vehicles = [], auditLog = [] }) => {
   const [tab, setTab] = useState("performance");
   const fleet = useMemo(() => computeFleetPerformance(routes, collectionEvents, auditLog, vehicles), [routes, collectionEvents, auditLog, vehicles]);
-  const impact = useMemo(() => {
-    const ctx = makeBinContext(fireSensors, citizenReports, neighborhoods);
-    const scored = bins.map((bin) => ({ bin, priority: getBinPriority(bin, null, [], ctx.forBin(bin)) }));
-    return computeImpactMetrics(groupNeighborhoodsByName(neighborhoods, bins), scored, routes, { depot: DEFAULT_DEPOT });
-  }, [bins, neighborhoods, routes, fireSensors, citizenReports]);
 
   // ── Analytics من Firestore ────────────────────────────────────────
   const { data: kpisDoc } = useAnalyticsDoc("kpis");
@@ -2897,7 +2895,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
         );
       })()}
 
-      {tab === "impact" && <ImpactCard impact={impact} />}
+      {tab === "impact" && <PerformanceImpactPanel />}
 
       {tab === "fleet" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -5599,9 +5597,12 @@ const FleetMonitorPage = ({ profiles = [], vehicles = [], routes = [], incidents
             {!sel ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {onShift.length === 0 && <EmptyState icon="🛌" title="لا سائقين في المناوبة" />}
-                {onShift.map((p) => { const r = routeFor(p.uid); const f = locationFreshness(p.lastLocation, { now }); return (
+                {onShift.map((p) => { const r = routeFor(p.uid); const f = locationFreshness(p.lastLocation, { now }); const st = driverOperationalState(p, { vehicle: vehicleById.get(p.vehicleId), routes, incidents, now }); return (
                   <div key={p.uid} onClick={() => p.lastLocation && setSelectedUid(p.uid)} style={{ padding: "8px 10px", borderRadius: 8, background: C.bg, fontSize: 12, cursor: p.lastLocation ? "pointer" : "default" }}>
-                    <b style={{ color: C.text }}>{p.fullName}</b> · {vehicleById.get(p.vehicleId)?.vehicleNumber || "بلا مركبة"} · {r ? `${r.routeName} (${ROUTE_STATUS_LABELS[r.status]})` : "بلا جولة"}
+                    <b style={{ color: C.text }}>{p.fullName}</b> · <span style={{ color: { AVAILABLE: C.accent, ON_ROUTE: C.info, NEXT_ROUTE_RESERVED: C.info, VEHICLE_FULL: C.warning, VEHICLE_FAULT: C.danger }[st.state] || C.muted, fontWeight: 700 }}>{st.label}</span>
+                    {st.finishInMin != null && <span style={{ color: C.muted }}> · ينهي جولته خلال ~{minText(st.finishInMin)}</span>}
+                    {st.shift.known && <span style={{ color: C.muted }}> · المتبقي من المناوبة {minText(Math.max(0, st.shift.minutesLeft))}</span>}
+                    <div style={{ color: C.muted }}>{vehicleById.get(p.vehicleId)?.vehicleNumber || "بلا مركبة"} · {r ? `${r.routeName} (${ROUTE_STATUS_LABELS[r.status]})` : "بلا جولة"}{st.remainingCapacityL != null && st.activeRoutes.length ? ` · السعة المتبقية ${numText(st.remainingCapacityL, "لتر")}` : ""}</div>
                     <div style={{ color: f.state === "live" ? C.accent : f.state === "stale" ? C.warning : C.dim, fontSize: 11 }}>{f.state === "live" ? "موقع مباشر" : f.state === "stale" ? `آخر موقع قبل ${f.ageMin} د` : "لا يشارك موقعه"}</div>
                   </div>
                 ); })}
@@ -6354,7 +6355,430 @@ const DispatchModeBadge = ({ settings }) => {
   );
 };
 
-const DispatchCenter = ({ loggedInUser, onOpenRoute }) => {
+// ======================== COMMAND CENTRE — decision records, timeline, recommendations, performance ========================
+/** One subscription per collection for the whole shell: panels read the same data instead of opening duplicate listeners. */
+const OpsDataContext = createContext(null);
+const EMPTY_OPS = { routes: [], events: [], vehicles: [], decisions: [], settings: null };
+const useOpsData = () => useContext(OpsDataContext) || EMPTY_OPS;
+const NA_TEXT = "غير متاح";
+const minText = (m) => minutesText(m);
+const clockText = (iso) => (iso ? new Date(iso).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }) : "—");
+const dayText = (iso) => (iso ? new Date(iso).toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "long" }) : "");
+const numText = (v, unit = "") => (v == null ? NA_TEXT : `${Number(v).toLocaleString("ar-SA")}${unit ? ` ${unit}` : ""}`);
+/** Arabic count agreement: 1 سائق · 2 سائقان · 3–10 سائقين · 11+ سائقًا. */
+const arCount = (n, [one, two, few, many]) => (n === 1 ? `${one} واحد` : n === 2 ? two : n >= 3 && n <= 10 ? `${n} ${few}` : `${n} ${many}`);
+const TIER_TEXT = { critical: "حرجة", high: "مرتفعة", medium: "متوسطة", low: "منخفضة" };
+const CONFIDENCE_TEXT = { high: "عالية", medium: "متوسطة", low: "منخفضة" };
+const SOURCE_TEXT = {
+  fill: { simulated: "قراءات محاكاة", sensor: "قراءات المستشعرات", mixed: "قراءات مستشعرات ومحاكاة" },
+  approach: { osrm: "زمن فعلي عبر شبكة الطرق (OSRM)", estimate: "تقدير بالمسافة الجوية", estimate_routing_failed: "تقدير بالمسافة الجوية — تعذر الاتصال بخدمة المسارات" },
+  origin: { live: "موقع السائق المباشر", route_end: "نهاية جولته الحالية", depot: "مستودع المركبة", stale_depot: "مستودع المركبة (آخر موقع قديم)", default: "موقع افتراضي للمدينة" },
+};
+
+/** Detail drawer — opens from the left (RTL start of content stays visible). */
+const SidePanel = ({ open, onClose, title, subtitle, children }) => {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.28)", zIndex: 1300, display: "flex", justifyContent: "flex-end" }}>
+      <aside role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()} dir="rtl"
+        style={{ width: "min(540px, 100vw)", height: "100%", background: C.bg, borderInlineStart: `1px solid ${C.border}`, overflowY: "auto", fontFamily: ARABIC_FONT, boxShadow: "0 0 28px rgba(15,23,42,0.12)" }}>
+        <div style={{ position: "sticky", top: 0, zIndex: 1, background: C.card, borderBottom: `1px solid ${C.border}`, padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: SP.md }}>
+          <div>
+            <div style={{ fontSize: FS.section, fontWeight: 800, color: C.text }}>{title}</div>
+            {subtitle && <div style={{ fontSize: FS.meta, color: C.muted, marginTop: 3 }}>{subtitle}</div>}
+          </div>
+          <button onClick={onClose} aria-label="إغلاق" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", padding: 4 }}><UiIcon e="✕" size={18} /></button>
+        </div>
+        <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: SP.md }}>{children}</div>
+      </aside>
+    </div>
+  );
+};
+/** Collapsible section inside a detail drawer — closed by default (summary first, details on demand). */
+const PanelSection = ({ title, hint, children, defaultOpen = false }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", gap: SP.sm, background: "none", border: "none", padding: "12px 14px", cursor: "pointer", fontFamily: ARABIC_FONT, textAlign: "right" }}>
+        <span style={{ fontSize: FS.body, fontWeight: 700, color: C.text }}>{title}{hint && <span style={{ fontSize: FS.meta, color: C.dim, fontWeight: 500, marginInlineStart: 8 }}>{hint}</span>}</span>
+        <span style={{ color: C.dim, fontSize: 12 }}>{open ? "▾" : "◂"}</span>
+      </button>
+      {open && <div style={{ padding: "0 14px 12px", fontSize: 12.5, color: C.muted, lineHeight: 1.8 }}>{children}</div>}
+    </section>
+  );
+};
+const Fact = ({ label, value }) => (
+  <div style={{ display: "flex", justifyContent: "space-between", gap: SP.md, padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
+    <span style={{ color: C.muted }}>{label}</span><span style={{ color: C.text, fontWeight: 600, textAlign: "left" }}>{value ?? NA_TEXT}</span>
+  </div>
+);
+const Check = ({ ok, children }) => (
+  <div style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "3px 0" }}>
+    <span aria-hidden="true" style={{ color: ok ? C.accent : C.danger, flexShrink: 0, marginTop: 2 }}><UiIcon e={ok ? "✅" : "❌"} size={14} /></span><span style={{ color: C.text }}>{children}</span>
+  </div>
+);
+
+/** "تفاصيل قرار الإسناد" — summary first; seven sections on demand. Built only from the stored record. */
+const DecisionDetails = ({ decision }) => {
+  const exp = decision?.explanation || decision?.dispatch?.explanation || null;
+  if (!exp || exp.v !== EXPLANATION_VERSION) {
+    return (
+      <>
+        <EmptyState icon="ℹ️" title="تفاصيل القرار غير متاحة" desc="سُجّل هذا القرار قبل اعتماد سجل التفسير المنظم، ولا يُعاد بناء أسبابه تخمينًا." />
+        {decision?.reason && <PanelSection title="النص المسجل وقت القرار"><div style={{ color: C.text }}>{decision.reason}</div></PanelSection>}
+      </>
+    );
+  }
+  const summary = explanationSummary(exp);
+  const sel = exp.selection || {};
+  const isInsert = exp.decisionType === "ROUTE_INSERTION";
+  const nb = exp.neighborhoodName || decision?.neighborhoodName || "";
+  return (
+    <>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderInlineStart: `3px solid ${C.brand}`, borderRadius: 10, padding: "12px 14px" }}>
+        <div style={{ fontSize: FS.meta, color: C.muted, marginBottom: 4 }}>{DECISION_TYPES[exp.decisionType] || exp.decisionType}{nb ? ` · ${nb}` : ""}{exp.municipalityId ? ` · ${municipalityById(exp.municipalityId)?.shortAr || ""}` : ""} · {clockText(exp.decidedAt)}</div>
+        <div style={{ fontSize: 14, color: C.text, lineHeight: 1.9, fontWeight: 600 }}>{summary}</div>
+        {exp.dataSources?.fill !== "sensor" && <div style={{ fontSize: FS.meta, color: C.dim, marginTop: 6 }}>بيانات محاكاة</div>}
+      </div>
+
+      <PanelSection title="سبب إنشاء الجولة" hint={`${exp.trigger?.binsCount ?? 0} حاوية`}>
+        <div style={{ color: C.text, marginBottom: 6 }}>{TRIGGER_TEXT[exp.trigger?.code] || ESCALATION_LABELS[exp.escalationKind] || ""}</div>
+        {(exp.trigger?.bins || []).map((b) => (
+          <Fact key={b.binId} label={`${b.name}${b.simulated ? " · محاكاة" : ""}`} value={`${b.fillPct != null ? `${b.fillPct}%` : NA_TEXT} · ${TIER_TEXT[b.tier] || b.tier || ""}`} />
+        ))}
+      </PanelSection>
+
+      {sel.driverId || isInsert ? (
+        <PanelSection title={isInsert ? "معايير اختيار الجولة" : "معايير اختيار السائق"}>
+          {(sel.reasonCodes || []).map((c) => <Check key={c} ok={!["INSUFFICIENT_CAPACITY", "SHIFT_END_UNKNOWN", "CAPACITY_UNKNOWN", "HIGHEST_SCORE_NOT_EARLIEST"].includes(c)}>{reasonText(c)}</Check>)}
+          <Fact label={isInsert ? "الجولة" : "السائق المختار"} value={isInsert ? `${sel.routeName} — ${sel.driverName || ""}` : sel.driverName} />
+          {sel.vehicleNumber && <Fact label="المركبة" value={sel.vehicleNumber} />}
+          {exp.vehicle && <Fact label="السعة المتبقية / حمولة الجولة" value={exp.vehicle.remainingL != null ? `${numText(exp.vehicle.remainingL, "لتر")} / ${numText(exp.vehicle.routeWasteL, "لتر")}` : NA_TEXT} />}
+          {sel.confidence && <Fact label="درجة الثقة في التقدير" value={CONFIDENCE_TEXT[sel.confidence]} />}
+        </PanelSection>
+      ) : null}
+
+      {(exp.alternatives || []).length > 0 && (
+        <PanelSection title="البدائل التي جرى تقييمها" hint={`${exp.alternatives.length}`}>
+          {exp.alternatives.map((a, i) => (
+            <div key={i} style={{ padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ color: C.text, fontWeight: 600 }}>{ALTERNATIVE_TEXT[a.option] || a.routeName || a.option}{a.chosen ? " — البديل المختار" : a.feasible ? "" : " — غير ممكن"}</div>
+              {(a.codes || []).length > 0 && <div>{a.codes.map(reasonText).join("، ")}</div>}
+              {(a.routesConsidered || []).length > 0 && <div style={{ color: C.dim }}>الجولات المدروسة: {a.routesConsidered.join("، ")}</div>}
+              {(a.driversStudied || []).length > 0 && <div style={{ color: C.dim }}>السائقون المدروسون: {a.driversStudied.join("، ")}</div>}
+            </div>
+          ))}
+        </PanelSection>
+      )}
+
+      {exp.candidates && (
+        <PanelSection title="أسباب استبعاد الخيارات الأخرى" hint={`دُرس ${exp.candidates.evaluated} · مؤهل ${exp.candidates.eligible}`}>
+          {exp.candidates.excluded.length === 0 ? <div>لا سائقين آخرين في البلدية.</div> : exp.candidates.excluded.map((x) => (
+            <Fact key={x.driverId} label={`${x.driverName}${x.state ? ` · ${DRIVER_STATE_LABELS[x.state] || ""}` : ""}`} value={x.codes.map(reasonText).join("، ") + (x.etaMin != null ? ` (يصل خلال ${x.etaMin} د)` : "")} />
+          ))}
+        </PanelSection>
+      )}
+
+      {exp.timing && (
+        <PanelSection title="الزمن المتوقع">
+          {sel.mode === "next_route" && <Fact label="يبدأ بعد إنهاء جولته الحالية" value={minText(sel.startAfterMin)} />}
+          {exp.timing.approachMin != null && <Fact label="زمن الوصول" value={minText(exp.timing.approachMin)} />}
+          {exp.timing.etaMin != null && <Fact label="الوصول إلى أول حاوية" value={`${minText(exp.timing.etaMin)} (${clockText(exp.timing.expectedFirstArrivalAt)})`} />}
+          {exp.timing.completionMin != null && <Fact label="إكمال الجولة" value={`${minText(exp.timing.completionMin)} (${clockText(exp.timing.expectedCompletionAt)})`} />}
+          {exp.timing.addedMin != null && <Fact label="الزمن المضاف للجولة" value={minText(exp.timing.addedMin)} />}
+          {exp.timing.shiftMinutesLeft != null && <Fact label="المتبقي من المناوبة" value={minText(exp.timing.shiftMinutesLeft)} />}
+          {(exp.constraints || []).length > 0 && <div style={{ marginTop: 8 }}>
+            <div style={{ color: C.text, fontWeight: 600, marginBottom: 4 }}>القيود التي أثرت على القرار</div>
+            {exp.constraints.map((c) => <Check key={c.code} ok={c.met}>{CONSTRAINT_TEXT[c.code] || c.code}: {c.value ?? NA_TEXT} من {c.limit ?? NA_TEXT}</Check>)}
+          </div>}
+        </PanelSection>
+      )}
+
+      {!isInsert && exp.decisionType !== "ESCALATION" && (
+        <PanelSection title="الأثر المتوقع" hint="متوقع — قبل التنفيذ">
+          {exp.impact ? <>
+            <Fact label="مسافة الجولة المحسّنة" value={numText(exp.impact.routeKm, "كم")} />
+            <Fact label="المسار المرجعي لنفس الحاويات" value={numText(exp.impact.referenceKm, "كم")} />
+            <Fact label="المسافة الموفرة" value={numText(exp.impact.kmSaved, "كم")} />
+            <Fact label="الوقود المقدّر توفيره" value={numText(exp.impact.fuelL, "لتر")} />
+            <Fact label="الانبعاثات المقدّر تجنبها" value={numText(exp.impact.co2Kg, "كجم CO₂")} />
+            <div style={{ color: C.dim, marginTop: 6 }}>المرجع: نفس الحاويات من نفس نقطة الانطلاق بترتيب الأكثر إلحاحًا أولًا، بقياس جوي موحد للطرفين.</div>
+          </> : <div>{NA_TEXT} — لا إحداثيات كافية أو نقطة انطلاق للحساب.</div>}
+        </PanelSection>
+      )}
+
+      {decision?.gap && <PanelSection title="التوصية لمعالجة فجوة الموارد" defaultOpen><GapDetails gap={decision.gap} /></PanelSection>}
+
+      <PanelSection title="البيانات المستخدمة في القرار">
+        <Fact label="بيانات الامتلاء" value={SOURCE_TEXT.fill[exp.dataSources?.fill] || NA_TEXT} />
+        {exp.dataSources?.readingsWindowHours && <Fact label="نافذة القراءات" value={`آخر ${exp.dataSources.readingsWindowHours} ساعة`} />}
+        {exp.dataSources?.approach && <Fact label="زمن الوصول" value={SOURCE_TEXT.approach[exp.dataSources.approach] || exp.dataSources.approach} />}
+        {exp.dataSources?.origin && <Fact label="نقطة انطلاق السائق" value={SOURCE_TEXT.origin[exp.dataSources.origin] || exp.dataSources.origin} />}
+        {exp.dataSources?.routeOrder && <Fact label="ترتيب التوقفات" value={exp.dataSources.routeOrder === "osrm" ? "مصفوفة طرق فعلية" : "تقدير بالمسافة الجوية"} />}
+        <Fact label="وقت اتخاذ القرار" value={exp.decidedAt ? new Date(exp.decidedAt).toLocaleString("ar-SA") : NA_TEXT} />
+        {decision?.id && <Fact label="مرجع القرار" value={<span style={{ fontFamily: "monospace", fontSize: 11 }}>{String(decision.id).slice(0, 28)}</span>} />}
+        <div style={{ color: C.dim, marginTop: 6 }}>مصدر التفسير: سجل القرار المحفوظ لحظة التنفيذ — قيود المحرك وبياناته الفعلية، دون أي نص مولَّد.</div>
+      </PanelSection>
+    </>
+  );
+};
+
+/** Resource-gap analysis: the recommendation first, the full ladder on demand. */
+const GapDetails = ({ gap }) => {
+  if (!gap?.options) return <div>{NA_TEXT}</div>;
+  const rec = gap.options.find((o) => o.step === gap.recommendedStep);
+  const exp = (o) => o?.expected;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: SP.sm, fontSize: 12.5, color: C.muted, lineHeight: 1.8 }}>
+      <div style={{ color: C.text, fontSize: FS.body, fontWeight: 600 }}>{gap.problem}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: SP.sm }}>
+        <KpiTile label="الجمع المتوقع الآن" value={gap.beforeMin != null ? gap.beforeMin : "لا إسناد"} unit={gap.beforeMin != null ? "د" : ""} tone={gap.beforeMin == null || gap.beforeMin > gap.targetMin ? "danger" : "neutral"} />
+        <KpiTile label="الزمن المستهدف" value={gap.targetMin} unit="د" />
+        <KpiTile label="حجم العمل" value={gap.demand.workloadMin} unit="د" hint={`${gap.demand.binsCount} حاوية`} />
+        <KpiTile label="القدرة المتاحة ضمن الهدف" value={gap.capacity.capacityWithinTargetMin} unit="د" hint={`${gap.capacity.coveringDrivers} سائق يغطي الحي · ${gap.capacity.availableVehicles} مركبة متاحة`} />
+      </div>
+      {rec ? (
+        <div style={{ border: `1px solid ${C.border}`, borderInlineStart: `3px solid ${C.brand}`, borderRadius: 10, padding: "10px 12px", background: C.card }}>
+          <div style={{ fontSize: FS.meta, color: C.muted }}>الإجراء الموصى به · الخطوة {rec.step} من 7 · الجهة المخولة: {rec.authority}</div>
+          <div style={{ fontWeight: 700, color: C.text, margin: "4px 0" }}>{rec.title}</div>
+          <div style={{ color: C.text }}>{rec.action}</div>
+          {exp(rec) && <div style={{ marginTop: 4 }}>الأثر المتوقع: {exp(rec).beforeMin != null ? `${exp(rec).beforeMin} د ← ` : ""}<b style={{ color: exp(rec).meetsTarget ? C.accent : C.warning }}>{minText(exp(rec).afterMin)}</b> (الهدف {exp(rec).targetMin} د){rec.confidence ? ` · الثقة ${CONFIDENCE_TEXT[rec.confidence]}` : ""}</div>}
+          <div style={{ color: C.dim }}>السبب: {rec.cause}</div>
+          {(rec.constraints || []).length > 0 && <div style={{ color: C.dim }}>القيود: {rec.constraints.join("، ")}</div>}
+        </div>
+      ) : <div>لا إجراء ممكن ضمن القيود الحالية.</div>}
+      <Disclosure summary="كل الخيارات المدروسة بالترتيب">
+        {gap.options.map((o) => (
+          <div key={o.code} style={{ padding: "6px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
+            <div style={{ color: C.text, fontWeight: 600 }}>{o.step}. {o.title} — {o.referral ? "إحالة" : o.feasible ? (o.expected?.meetsTarget ? "يحقق الهدف" : "ممكن دون تحقيق الهدف") : "غير ممكن"}</div>
+            {o.action && <div>{o.action}</div>}
+            {o.expected && <div>الأثر: {minText(o.expected.afterMin)}</div>}
+            <div style={{ color: C.dim }}>{o.cause}</div>
+          </div>
+        ))}
+      </Disclosure>
+      <div style={{ fontSize: FS.meta, color: C.dim }}>{gap.basis}</div>
+    </div>
+  );
+};
+
+/** "لماذا اتخذ النظام هذا القرار؟" */
+const WhyButton = ({ decision, label = "لماذا اتخذ النظام هذا القرار؟", title = "تفاصيل قرار الإسناد" }) => {
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  return (
+    <>
+      <button onClick={() => setOpen(true)} style={{ background: "none", border: "none", padding: 0, color: C.info, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT, textAlign: "right" }}>{label}</button>
+      <SidePanel open={open} onClose={close} title={title} subtitle={decision?.routeName || ""}><DecisionDetails decision={decision} /></SidePanel>
+    </>
+  );
+};
+
+/** Operational card: what · status · expected outcome · details. */
+const DecisionCard = ({ decision, route, neighborhoodName, onOpenRoute }) => {
+  const exp = decision.explanation || route?.dispatch?.explanation;
+  const bins = (decision.binIds || []).length;
+  const status = decision.type === "create_assign"
+    ? (decision.reservation ? `حُجزت لـ${decision.driverName} بعد إنهاء جولته الحالية` : `أُسندت إلى ${decision.driverName}`)
+    : decision.type === "insert" ? `أُضيفت إلى ${decision.routeName} لدى ${decision.driverName || "السائق"}`
+    : decision.type === "reassign" ? `أُعيد إسنادها إلى ${decision.driverName}`
+    : decision.type === "escalate" ? (ESCALATION_LABELS[decision.kind] || "رُفعت لموظف العمليات") : ACTION_LABELS[decision.type] || decision.type;
+  const done = route?.status === "completed";
+  const expected = done ? `اكتملت ${clockText(route.completedAt)}` : decision.expectedCollectionAt || route?.expectedCollectionAt
+    ? `الجمع المتوقع: ${clockText(decision.expectedCollectionAt || route.expectedCollectionAt)}${decision.completionMin != null ? ` (خلال ${minText(decision.completionMin)} من القرار)` : ""}` : null;
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 3 }}>
+      <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{neighborhoodName || exp?.neighborhoodName || "—"}</div>
+      <div style={{ fontSize: FS.body, color: C.text }}>{bins} {bins === 1 ? "حاوية تحتاج" : "حاويات تحتاج"} إلى جمع</div>
+      <div style={{ fontSize: FS.body, color: decision.type === "escalate" ? C.warning : C.muted }}>{status}</div>
+      {expected && <div style={{ fontSize: FS.body, color: C.muted }}>{expected}</div>}
+      <div style={{ marginTop: 4, display: "flex", gap: SP.md, flexWrap: "wrap" }}><WhyButton decision={decision} />{onOpenRoute && decision.routeId && <button onClick={() => onOpenRoute(decision.routeId)} style={{ background: "none", border: "none", padding: 0, color: C.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT }}>فتح الجولة</button>}</div>
+    </div>
+  );
+};
+
+/**
+ * "القرارات التشغيلية" — chronological events, every one tied to a stored record:
+ * decisions (detection, analysis, assignment, escalation, resolution), routes (start, completion), collection events.
+ */
+const TIMELINE_TYPES = { detect: "اكتشاف", analyse: "تحليل", assign: "إسناد", reserve: "حجز جولة تالية", insert: "إضافة إلى جولة", reassign: "إعادة إسناد", release: "سحب إسناد", escalate: "رفع للعمليات", resolve: "معالجة", start: "بدء تنفيذ", collect: "تأكيد جمع", complete: "اكتمال جولة" };
+const STATUS_FILTERS = { executed: "منفّذ", open: "بانتظار قرار", observed: "مراقبة", resolved: "عولج", dismissed: "تُجوهل", rejected_at_commit: "رُفض عند التنفيذ", superseded: "حلّ محله أحدث" };
+const OperationalTimeline = ({ decisions = [], routes = [], events = [], neighborhoods = [], showMunicipality = false }) => {
+  const [fMun, setFMun] = useState(""); const [fNb, setFNb] = useState(""); const [fType, setFType] = useState(""); const [fStatus, setFStatus] = useState(""); const [q, setQ] = useState("");
+  const [shown, setShown] = useState(25);
+  const items = useMemo(() => {
+    const nbName = (id) => neighborhoods.find((n) => n.id === id)?.name || "";
+    const routeById = new Map(routes.map((r) => [r.id, r]));
+    const out = [];
+    const add = (o) => { if (o.at) out.push(o); };
+    for (const d of decisions) {
+      const base = { municipalityId: d.municipalityId, neighborhoodId: d.neighborhoodId || d.explanation?.neighborhoodId || null, routeId: d.routeId, routeName: d.routeName, status: d.status, decision: d };
+      const e = d.explanation;
+      const nb = nbName(base.neighborhoodId);
+      if (e?.trigger) add({ ...base, id: `${d.id}:detect`, at: d.createdAt, type: "detect", title: `اكتشاف ${arCount(e.trigger.binsCount, ["حاوية", "حاويتين", "حاويات", "حاوية"]).replace(/^(حاوية) واحد$/, "حاوية واحدة")} تحتاج جمعًا${nb ? ` في ${nb}` : ""}`, detail: TRIGGER_TEXT[e.trigger.code] || "" });
+      if (e?.candidates) add({ ...base, id: `${d.id}:analyse`, at: d.createdAt, type: "analyse", title: `تحليل ${arCount(e.candidates.evaluated, ["سائق", "سائقين", "سائقين", "سائقًا"])} ومركباتهم — ${e.candidates.eligible ? `${e.candidates.eligible} مؤهل` : "لا مؤهل"}`, detail: "" });
+      const t = d.type === "create_assign" ? (d.reservation ? "reserve" : "assign") : d.type === "escalate" ? "escalate" : d.type;
+      const title = d.type === "create_assign" ? (d.reservation ? `حجز ${d.routeName || "الجولة"} لـ${d.driverName} بعد جولته الحالية` : `إسناد ${d.routeName || "الجولة"} إلى ${d.driverName}`)
+        : d.type === "insert" ? `إضافة حاوية إلى ${d.routeName} لدى ${d.driverName || "السائق"}` : d.type === "reassign" ? `إعادة إسناد ${d.routeName} إلى ${d.driverName}`
+        : d.type === "release" ? `سحب الإسناد عن ${d.routeName}` : `رفع لموظف العمليات: ${ESCALATION_LABELS[d.kind] || d.kind}${nb ? ` — ${nb}` : ""}`;
+      add({ ...base, id: `${d.id}:decide`, at: d.executedAt || d.createdAt, type: t, title, detail: d.status === "observed" ? "وضع المراقبة — لم يُنفّذ" : d.status === "rejected_at_commit" ? `رُفض عند التنفيذ: ${d.rejectReason || ""}` : "" });
+      if (e?.timing?.etaMin != null && d.status === "executed") add({ ...base, id: `${d.id}:eta`, at: d.executedAt || d.createdAt, type: t, title: `تقدير الوصول إلى أول حاوية خلال ${minText(e.timing.etaMin)}`, detail: e.timing.completionMin != null ? `إكمال الجولة المتوقع ${clockText(e.timing.expectedCompletionAt)}` : "" });
+      if (d.resolvedAt) add({ ...base, id: `${d.id}:resolve`, at: d.resolvedAt, type: "resolve", title: `${d.status === "dismissed" ? "تجاهل" : "معالجة"} حالة: ${ESCALATION_LABELS[d.kind] || d.kind}`, detail: d.resolutionNote || "" });
+    }
+    for (const r of routes) {
+      const base = { municipalityId: r.municipalityId, neighborhoodId: r.neighborhoodIds?.[0] || null, routeId: r.id, routeName: r.routeName, status: null };
+      if (r.startedAt) add({ ...base, id: `${r.id}:start`, at: r.startedAt, type: "start", title: `بدء تنفيذ ${r.routeName}${r.driverName ? ` — ${r.driverName}` : ""}`, detail: `${(r.binIds || []).length} توقف` });
+      if (r.completedAt && r.status === "completed") add({ ...base, id: `${r.id}:complete`, at: r.completedAt, type: "complete", title: `اكتمال ${r.routeName}`, detail: `جُمعت ${(r.collectedBinIds || []).length} من ${(r.binIds || []).length}` });
+    }
+    for (const ev of events) {
+      const r = routeById.get(ev.routeId);
+      add({ id: `ev:${ev.id}`, at: ev.confirmedAt || ev.collectedAt, type: "collect", municipalityId: ev.municipalityId || r?.municipalityId, neighborhoodId: r?.neighborhoodIds?.[0] || null, routeId: ev.routeId, routeName: r?.routeName || "", status: null,
+        title: `تأكيد جمع حاوية${r ? ` في ${r.routeName}` : ""}`, detail: `${ev.driverName || ""}${ev.fillBefore != null ? ` · الامتلاء قبل الجمع ${ev.fillBefore}%` : ""}${ev.verifiedBy === "server" ? " · تحقق الخادم" : ""}` });
+    }
+    return out.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  }, [decisions, routes, events, neighborhoods]);
+  const filtered = items.filter((i) => (!fMun || i.municipalityId === fMun) && (!fNb || i.neighborhoodId === fNb) && (!fType || i.type === fType) && (!fStatus || i.status === fStatus)
+    && (!q.trim() || String(i.routeId || "").includes(q.trim()) || String(i.routeName || "").includes(q.trim())));
+  const sel = (value, onChange, options, label) => (
+    <select aria-label={label} value={value} onChange={(e) => { onChange(e.target.value); setShown(25); }} style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>
+      <option value="">{label}: الكل</option>{options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+    </select>
+  );
+  const page = filtered.slice(0, shown).map((i, idx, arr) => ({ ...i, day: dayText(i.at), showDay: idx === 0 || dayText(arr[idx - 1].at) !== dayText(i.at) }));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: SP.md }}>
+      <div style={{ display: "flex", gap: SP.sm, flexWrap: "wrap", alignItems: "center" }}>
+        {showMunicipality && sel(fMun, setFMun, MUNICIPALITIES.map((m) => [m.id, m.shortAr || m.nameAr]), "البلدية")}
+        {sel(fNb, setFNb, neighborhoods.filter((n) => !fMun || n.municipalityId === fMun).map((n) => [n.id, n.name]), "الحي")}
+        {sel(fType, setFType, Object.entries(TIMELINE_TYPES), "نوع الحدث")}
+        {sel(fStatus, setFStatus, Object.entries(STATUS_FILTERS), "حالة القرار")}
+        <input value={q} onChange={(e) => { setQ(e.target.value); setShown(25); }} placeholder="بحث برقم الجولة أو اسمها" aria-label="بحث برقم الجولة"
+          style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT, minWidth: 180, flex: "1 1 180px" }} />
+      </div>
+      {filtered.length === 0 ? <EmptyState icon="📜" title="لا أحداث مطابقة" desc="تظهر هنا أحداث الإسناد والتنفيذ المحفوظة فقط." /> : (
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "4px 14px" }}>
+          {page.map((i) => {
+            return (
+              <div key={i.id}>
+                {i.showDay && <div style={{ fontSize: FS.meta, color: C.dim, fontWeight: 700, padding: "10px 0 4px" }}>{i.day}</div>}
+                <div style={{ display: "grid", gridTemplateColumns: "54px 1fr", gap: SP.md, padding: "8px 0", borderTop: `1px solid ${C.border}` }}>
+                  <div style={{ fontSize: 12, color: C.muted, fontVariantNumeric: "tabular-nums" }}>{clockText(i.at)}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: FS.body, color: C.text, fontWeight: 600 }}>{i.title}</div>
+                    <div style={{ fontSize: FS.meta, color: C.dim }}>{TIMELINE_TYPES[i.type]}{i.detail ? ` · ${i.detail}` : ""}{showMunicipality && i.municipalityId ? ` · ${municipalityById(i.municipalityId)?.shortAr || ""}` : ""}{i.decision?.demo ? " · بيانات محاكاة" : ""}</div>
+                    {i.decision && ["assign", "reserve", "insert", "reassign", "escalate"].includes(i.type) && i.id.endsWith(":decide") && <div style={{ marginTop: 3 }}><WhyButton decision={i.decision} /></div>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {filtered.length > shown && <Btn variant="ghost" onClick={() => setShown((n) => n + 25)}>عرض المزيد ({filtered.length - shown})</Btn>}
+    </div>
+  );
+};
+
+/** Coverage recommendations: open resource-gap analyses (one card each, details in the drawer). */
+const CoverageRecommendations = ({ decisions = [], neighborhoods = [], max = 6 }) => {
+  const [openId, setOpenId] = useState(null);
+  const close = useCallback(() => setOpenId(null), []);
+  const gaps = decisions.filter((d) => d.gap && ["open", "observed"].includes(d.status)).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  if (gaps.length === 0) return <EmptyState icon="✅" title="لا فجوات في التغطية" desc="تظهر هنا توصيات تعزيز التغطية عندما تعجز الموارد عن الجمع ضمن الزمن المستهدف." />;
+  const current = gaps.find((g) => g.id === openId);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: SP.md }}>
+      {gaps.slice(0, max).map((d) => {
+        const g = d.gap; const rec = g.options.find((o) => o.step === g.recommendedStep);
+        return (
+          <div key={d.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>تعزيز تغطية {g.neighborhoodName || neighborhoods.find((n) => n.id === g.neighborhoodId)?.name || ""}</div>
+            <div style={{ fontSize: FS.body, color: C.muted }}>{g.beforeMin != null ? `الجمع المتوقع ${g.beforeMin} د · الهدف ${g.targetMin} د` : `${g.demand.binsCount} حاوية بلا إسناد ممكن · الهدف ${g.targetMin} د`}</div>
+            {rec && <div style={{ fontSize: FS.body, color: C.text }}>{rec.title}{rec.expected?.afterMin != null ? ` — المتوقع ${minText(rec.expected.afterMin)}` : ""}</div>}
+            <div style={{ fontSize: FS.meta, color: C.dim }}>الجهة المخولة: {rec?.authority || "—"}{d.demo ? " · بيانات محاكاة" : ""}</div>
+            <button onClick={() => setOpenId(d.id)} style={{ background: "none", border: "none", padding: 0, marginTop: 4, color: C.info, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT, textAlign: "right" }}>عرض التوصية وسببها</button>
+          </div>
+        );
+      })}
+      <SidePanel open={!!current} onClose={close} title="توصية تعزيز التغطية" subtitle={current?.gap?.neighborhoodName || ""}>
+        {current && <><GapDetails gap={current.gap} /><PanelSection title="القرار الذي أطلق التوصية"><WhyButton decision={current} label="تفاصيل القرار" /></PanelSection></>}
+      </SidePanel>
+    </div>
+  );
+};
+
+/** "الأداء والأثر" — realised vs expected, from stored routes, collection events and decisions. */
+const PERIODS = { today: ["اليوم", () => { const d = new Date(currentTimeMs()); d.setHours(0, 0, 0, 0); return d.getTime(); }], week: ["آخر 7 أيام", () => currentTimeMs() - 7 * 86400000], month: ["آخر 30 يومًا", () => currentTimeMs() - 30 * 86400000] };
+const PerformanceImpactPanel = ({ municipalityId = null, compact = false, onOpen }) => {
+  const [period, setPeriod] = useState(compact ? "week" : "today");
+  const ops = useOpsData();
+  const settings = ops.settings;
+  const T = targetsOf(settings); const F = impactFactorsOf(settings);
+  const imp = useMemo(() => {
+    const inMun = (x) => !municipalityId || x.municipalityId === municipalityId;
+    return operationalImpact({ routes: ops.routes.filter(inMun), events: ops.events.filter(inMun), decisions: ops.decisions.filter(inMun), vehicles: ops.vehicles.filter(inMun),
+      targets: targetsOf(ops.settings), factors: impactFactorsOf(ops.settings), from: PERIODS[period][1](), to: currentTimeMs() });
+  }, [ops.routes, ops.events, ops.decisions, ops.vehicles, ops.settings, municipalityId, period]);
+  const r = imp.realised, e = imp.expected;
+  const why = (v, reason) => (v == null ? reason : undefined);
+  const noRoutes = "لا جولات مكتملة بإحداثيات في الفترة";
+  const realisedTiles = [
+    { label: "المسافة الموفرة", value: r.kmSaved, unit: "كم", hint: why(r.kmSaved, noRoutes) ?? `${numText(r.distanceKm)} بدل ${numText(r.referenceKm)} كم` },
+    { label: "الوقود المقدّر توفيره", value: r.fuelL, unit: "لتر", hint: why(r.fuelL, F.fuelLitersPerKm == null ? "معامل الاستهلاك غير مضبوط" : noRoutes) },
+    { label: "الانبعاثات المقدّر تجنبها", value: r.co2Kg, unit: "كجم CO₂", hint: why(r.co2Kg, F.co2KgPerLiter == null || F.fuelLitersPerKm == null ? "معامل غير مضبوط" : noRoutes) },
+    { label: "زمن التشغيل الموفر", value: r.minutesSaved == null ? null : r.minutesSaved >= 60 ? r.hoursSaved : r.minutesSaved, unit: r.minutesSaved >= 60 ? "ساعة" : "د", hint: why(r.minutesSaved, noRoutes) ?? "المسافة الموفرة ÷ متوسط السرعة" },
+    { label: "الالتزام بزمن الجمع", value: r.onTimePct, unit: "%", hint: r.onTimePct == null ? "لا حاويات حرجة مجموعة في الفترة" : `الهدف ${T.onTimePct}% · متأخرة ${r.lateCritical}`, tone: r.onTimePct == null ? "neutral" : r.onTimePct >= T.onTimePct ? "ok" : "warning" },
+    { label: "استغلال المركبات", value: r.utilizationPct, unit: "%", hint: r.utilizationPct == null ? "لا جولات مكتملة بسعة مسجلة" : `الهدف ${T.vehicleUtilizationPct}% · حمولة مقدّرة من الامتلاء`, tone: r.utilizationPct == null ? "neutral" : r.utilizationPct >= T.vehicleUtilizationPct ? "ok" : "warning" },
+    { label: "متوسط زمن الاستجابة", value: r.avgResponseMin, unit: "د", hint: why(r.avgResponseMin, "لا عمليات جمع في الفترة") ?? "من القرار إلى تأكيد الجمع" },
+    { label: "الحاويات التي جُمعت", value: r.binsCollected, unit: "" },
+    { label: "الجولات المكتملة", value: r.routesCompleted, unit: "" },
+    { label: "القرارات الآلية الناجحة", value: r.autoDecisionsExecuted ? `${r.autoDecisionsSucceeded} من ${r.autoDecisionsExecuted}` : null, unit: "", hint: why(r.autoDecisionsExecuted || null, "لا قرارات آلية منفذة في الفترة") ?? "نُفذت وجُمعت حاوياتها" },
+  ];
+  const tile = (t) => <KpiTile key={t.label} label={t.label} value={t.value ?? <span style={{ fontSize: 14, fontWeight: 600, color: C.dim }}>{NA_TEXT}</span>} unit={t.value == null ? "" : t.unit} tone={t.tone || "neutral"} hint={t.hint} />;
+  const periodSel = (
+    <select aria-label="الفترة" value={period} onChange={(ev) => setPeriod(ev.target.value)} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>
+      {Object.entries(PERIODS).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}
+    </select>
+  );
+  if (compact) {
+    return (
+      <Section title="الأداء والأثر" hint={`متحقق · ${PERIODS[period][0]}`} actions={<>{periodSel}{onOpen && <Btn variant="ghost" onClick={onOpen}>التفاصيل</Btn>}</>}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: SP.sm }}>{[realisedTiles[6], realisedTiles[4], realisedTiles[0], realisedTiles[2]].map(tile)}</div>
+      </Section>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: SP.lg }}>
+      <Section title="المتحقق" hint="من الجولات المكتملة والحاويات المؤكد جمعها فعلًا" actions={periodSel}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: SP.sm }}>{realisedTiles.map(tile)}</div>
+      </Section>
+      <Section title="المتوقع" hint="من الجولات المعتمدة والجارية — قبل التنفيذ">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: SP.sm }}>
+          {[{ label: "جولات قيد التنفيذ أو الانتظار", value: e.routesPlanned, unit: "" }, { label: "المسافة المتوقع توفيرها", value: e.kmSaved, unit: "كم", hint: why(e.kmSaved, "لا جولات مخططة بإحداثيات") },
+            { label: "الوقود المتوقع توفيره", value: e.fuelL, unit: "لتر" }, { label: "الانبعاثات المتوقع تجنبها", value: e.co2Kg, unit: "كجم CO₂" },
+            { label: "متوسط زمن الجمع المتوقع", value: e.avgExpectedCollectionMin, unit: "د", hint: why(e.avgExpectedCollectionMin, "لا جولات بزمن متوقع مسجل") ?? `الهدف للحرجة ${T.criticalCollectionMin} د` }].map(tile)}
+        </div>
+      </Section>
+      <Disclosure summary="طريقة الحساب ومصادر المعاملات">
+        <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
+          <div>{imp.basis}.</div>
+          <div>الوقود = المسافة الموفرة × {F.fuelLitersPerKm ?? NA_TEXT} لتر/كم — {IMPACT_FACTOR_SOURCES.fuelLitersPerKm}.</div>
+          <div>الانبعاثات = الوقود × {F.co2KgPerLiter ?? NA_TEXT} كجم CO₂/لتر — {IMPACT_FACTOR_SOURCES.co2KgPerLiter}.</div>
+          <div>ساعات التشغيل = المسافة الموفرة ÷ {F.avgUrbanSpeedKmh ?? NA_TEXT} كم/س — {IMPACT_FACTOR_SOURCES.avgUrbanSpeedKmh}.</div>
+          <div>زمن الاستجابة من وقت القرار إلى تأكيد الخادم للجمع؛ الالتزام يُقاس على الحاويات التي كان امتلاؤها حرجًا عند الجمع. المعاملات قابلة للضبط من إعدادات الإسناد (الأمانة).</div>
+        </div>
+      </Disclosure>
+    </div>
+  );
+};
+
+const DispatchCenter = ({ loggedInUser, onOpenRoute, routes = [], events = [], neighborhoods = [] }) => {
   const scope = scopeFor(loggedInUser);
   const mid = scope.all ? null : scope.municipalityId;
   const { settings } = useDispatchSettings(true);
@@ -6366,7 +6790,7 @@ const DispatchCenter = ({ loggedInUser, onOpenRoute }) => {
   const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
   const s = { ...DEFAULT_DISPATCH_SETTINGS, ...(settings || {}) };
   const escalations = decisions.filter((d) => d.type === "escalate" && (d.status === "open" || d.status === "observed"));
-  const log = decisions.filter((d) => d.type !== "escalate").slice(0, 40);
+  const timelineCount = decisions.length;
   const runNow = async () => {
     setBusy("run"); setMsg("");
     try {
@@ -6385,7 +6809,12 @@ const DispatchCenter = ({ loggedInUser, onOpenRoute }) => {
     title: `${ESCALATION_LABELS[d.kind] || d.kind}${d.routeName ? ` — ${d.routeName}` : ""}`,
     meta: `${(d.binIds || []).length} حاوية · ${getReadingAgeLabel(d.createdAt)}${d.status === "observed" ? " · وضع المراقبة: كان سيُرفع لك" : ""}`,
     badge: d.status === "observed" ? <Badge tone="info">مراقبة</Badge> : null,
-    detail: <div><div>{d.reason}</div>{d.suggestion && <div style={{ color: C.text, marginTop: 4 }}><b>المقترح:</b> {d.suggestion}</div>}{(d.alternatives || []).length > 0 && <div style={{ marginTop: 4 }}>البدائل: {d.alternatives.map((a) => `${a.driverName} (${a.why})`).join(" · ")}</div>}</div>,
+    detail: <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div>{d.reason}</div>
+      {d.gap ? (() => { const rec = d.gap.options.find((o) => o.step === d.gap.recommendedStep); return rec ? <div style={{ color: C.text }}><b>الإجراء الموصى به:</b> {rec.title}{rec.expected?.afterMin != null ? ` — الجمع المتوقع ${minText(rec.expected.afterMin)} (الهدف ${rec.expected.targetMin} د)` : ""}</div> : null; })()
+        : d.suggestion && <div style={{ color: C.text }}><b>المقترح:</b> {d.suggestion}</div>}
+      <WhyButton decision={d} label={d.gap ? "عرض التوصية وسببها" : "لماذا رُفعت هذه الحالة؟"} title={d.gap ? "توصية تعزيز التغطية" : "تفاصيل القرار"} />
+    </div>,
     actions: d.status === "open" ? <>{d.routeId && onOpenRoute && <Btn onClick={() => onOpenRoute(d.routeId)}>فتح الجولة</Btn>}<Btn tone="ok" disabled={busy === d.id} onClick={close(d, "resolved")}>تم التعامل</Btn><Btn variant="ghost" disabled={busy === d.id} onClick={close(d, "dismissed")}>تجاهل</Btn></> : null,
   }));
   const lastRun = runs[0];
@@ -6401,21 +6830,9 @@ const DispatchCenter = ({ loggedInUser, onOpenRoute }) => {
       </div>
       {msg && <div style={{ fontSize: FS.body, color: C.text, background: C.info + "10", border: `1px solid ${C.info}30`, borderRadius: 10, padding: "8px 12px" }}>{msg}</div>}
       {s.mode === "observe" && <div style={{ fontSize: FS.meta, color: C.info }}>وضع المراقبة: المحرك يحسب ويسجل ما كان سيفعله فقط. لا تُسند أي جولة ولا يتغير شيء حتى تفعّل الأمانة التنفيذ التلقائي.</div>}
-      <Tabs value={tab} onChange={setTab} tabs={[{ key: "attention", label: "تحتاج قرارك", count: escalations.filter((d) => d.status === "open").length, tone: "danger" }, { key: "log", label: "سجل قرارات الإسناد", count: log.length }, { key: "runs", label: "الدورات", count: runs.length }]} />
+      <Tabs value={tab} onChange={setTab} tabs={[{ key: "attention", label: "تحتاج قرارك", count: escalations.filter((d) => d.status === "open").length, tone: "danger" }, { key: "log", label: "القرارات التشغيلية", count: timelineCount }, { key: "runs", label: "الدورات", count: runs.length }]} />
       {tab === "attention" && <AttentionList items={items} empty="لا حالات استثنائية — الإسناد يسير ضمن القيود" max={8} />}
-      {tab === "log" && (log.length === 0 ? <EmptyState icon="🤖" title="لا قرارات بعد" desc="تظهر هنا قرارات المحرك وأسبابها بعد أول دورة." /> : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {log.map((d) => { const [lab, tone] = DISPATCH_STATUS[d.status] || [d.status, "neutral"]; return (
-            <div key={d.id} style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px", background: C.card }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: SP.sm, flexWrap: "wrap", alignItems: "center" }}>
-                <div style={{ fontSize: FS.body, color: C.text, fontWeight: 700 }}>{ACTION_LABELS[d.type] || d.type}{d.routeName ? ` — ${d.routeName}` : ""}{d.driverName ? ` ← ${d.driverName}` : ""}</div>
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}><Badge tone={tone}>{lab}</Badge>{d.demo && <DemoBadge />}<span style={{ fontSize: FS.meta, color: C.dim }}>{getReadingAgeLabel(d.executedAt || d.updatedAt)}</span>{d.routeId && d.status === "executed" && onOpenRoute && <Btn variant="ghost" onClick={() => onOpenRoute(d.routeId)}>فتح</Btn>}</div>
-              </div>
-              <Disclosure summary="لماذا؟"><div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8 }}>{d.reason}{d.rejectReason ? <div style={{ color: C.warning }}>سبب الرفض عند التنفيذ: {d.rejectReason}</div> : null}{(d.alternatives || []).length > 0 && <div>البدائل التي لم تُختر: {d.alternatives.map((a) => `${a.driverName} (${a.why})`).join(" · ")}</div>}{d.note ? <div style={{ color: C.dim }}>{d.note}</div> : null}</div></Disclosure>
-            </div>
-          ); })}
-        </div>
-      ))}
+      {tab === "log" && <OperationalTimeline decisions={decisions} routes={routes} events={events} neighborhoods={neighborhoods} showMunicipality={scope.all} />}
       {tab === "runs" && (runs.length === 0 ? <EmptyState icon="⏱️" title="لا دورات بعد" /> : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: ARABIC_FONT }}>
@@ -6458,7 +6875,29 @@ const DispatchSettingsCard = ({ loggedInUser }) => {
         <div style={{ display: "flex", gap: SP.md, flexWrap: "wrap" }}>
           {num("periodMinutes", "فاصل الدورة الدورية", "د")}{num("minBinsPerRoute", "أقل عدد حاويات للجولة الاعتيادية", "")}{num("urgentFillPct", "امتلاء عاجل يتجاوز التجميع", "%")}{num("maxApproachMin", "أقصى زمن وصول للسائق", "د")}
           {num("maxStopsPerRoute", "أقصى توقفات للجولة", "")}{num("insertMaxKm", "أقصى بعد للإضافة لجولة قائمة", "كم")}{num("insertMaxAddedMin", "أقصى زمن يضاف للجولة", "د")}{num("notStartedEscalateMin", "تصعيد جولة لم تبدأ بعد", "د")}
+          {num("reserveNextWithinMin", "حجز الجولة التالية لسائق ينهي جولته خلال", "د")}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: FS.meta, color: C.muted, alignSelf: "flex-end" }}><input type="checkbox" disabled={!canEdit} checked={s.allowNextRouteReservation !== false} onChange={(e) => set("allowNextRouteReservation", e.target.checked)} />السماح بحجز الجولة التالية</label>
         </div>
+      </Disclosure>
+      <Disclosure summary="الأهداف التشغيلية">
+        <div style={{ fontSize: FS.meta, color: C.dim, margin: "4px 0 8px" }}>تؤثر في القرار: تُرفض إضافة حاوية حرجة لجولة تصلها بعد الهدف، ويُرفع كل إسناد لا يحقق الهدف مع توصية لمعالجة فجوة الموارد، ويُقاس الأداء عليها.</div>
+        <div style={{ display: "flex", gap: SP.md, flexWrap: "wrap" }}>
+          {Object.entries(TARGET_LABELS).map(([k, [label, unit]]) => (
+            <label key={k} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: FS.meta, color: C.muted }}>{label}<span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="number" disabled={!canEdit} value={targetsOf(s)[k]} onChange={(e) => set("targets", { ...targetsOf(s), [k]: Number(e.target.value) })} style={{ width: 90, padding: "6px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontFamily: ARABIC_FONT }} />{unit}</span></label>
+          ))}
+        </div>
+      </Disclosure>
+      <Disclosure summary="معاملات حساب الأثر البيئي">
+        <div style={{ fontSize: FS.meta, color: C.dim, margin: "4px 0 8px" }}>اترك الحقل فارغًا إن لم يتوفر معامل موثوق؛ يظهر المؤشر المعتمد عليه «غير متاح» بدل رقم تقديري.</div>
+        <div style={{ display: "flex", gap: SP.md, flexWrap: "wrap" }}>
+          {[["fuelLitersPerKm", "استهلاك الوقود", "لتر/كم"], ["co2KgPerLiter", "معامل الانبعاث", "كجم CO₂/لتر"], ["avgUrbanSpeedKmh", "متوسط السرعة الحضرية", "كم/س"]].map(([k, label, unit]) => (
+            <label key={k} title={IMPACT_FACTOR_SOURCES[k]} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: FS.meta, color: C.muted, maxWidth: 260 }}>{label}<span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="number" step="0.01" disabled={!canEdit} value={impactFactorsOf(s)[k] ?? ""} onChange={(e) => set("impactFactors", { ...impactFactorsOf(s), [k]: e.target.value === "" ? null : Number(e.target.value) })} style={{ width: 90, padding: "6px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontFamily: ARABIC_FONT }} />{unit}</span>
+              <span style={{ color: C.dim, fontSize: 10.5, lineHeight: 1.6 }}>{IMPACT_FACTOR_SOURCES[k]}</span></label>
+          ))}
+        </div>
+        <div style={{ fontSize: FS.meta, color: C.dim, marginTop: 6 }}>القيم الافتراضية: {DEFAULT_IMPACT_FACTORS.fuelLitersPerKm} لتر/كم · {DEFAULT_IMPACT_FACTORS.co2KgPerLiter} كجم/لتر · {DEFAULT_IMPACT_FACTORS.avgUrbanSpeedKmh} كم/س. الأهداف الافتراضية: {DEFAULT_TARGETS.criticalCollectionMin} د للحاوية الحرجة.</div>
       </Disclosure>
       {canEdit && <div style={{ display: "flex", gap: SP.sm, alignItems: "center", marginTop: SP.md }}><Btn variant="primary" disabled={busy || !draft} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ"}</Btn>{draft && <Btn variant="ghost" onClick={() => setDraft(null)}>إلغاء</Btn>}{msg && <span style={{ fontSize: FS.meta, color: C.muted }}>{msg}</span>}</div>}
       <div style={{ fontSize: FS.meta, color: C.dim, marginTop: SP.sm }}>التشغيل: فوري عند قراءة حرجة، ودوري من الخادم، ويدوي من «تشغيل دورة الآن». عند تفعيل الإسناد التلقائي تتوقف مزامنة الاقتراحات من المتصفح.</div>
@@ -6962,6 +7401,7 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
   const [mid, setMid] = useState(scope.all ? "east" : scope.municipalityId);
   const [section, setSection] = useState(initialSection || "predict");
   const { settings: dispatchSettings } = useDispatchSettings(true);
+  const { decisions: gapDecisions } = useDispatchDecisions(true, scope.all ? null : scope.municipalityId);
   const [scenario, setScenario] = useState({ type: "vehicle_down", vehicleId: "", driverId: "", factor: 1.5, count: 3, delayMin: 20, delta: -1, fromMunicipalityId: "east", routeId: "" });
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState("");
@@ -7018,8 +7458,9 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
       </div>
       <Tabs value={section} onChange={setSection} tabs={[
         { key: "predict", label: "التنبؤات — ماذا سيحدث؟", count: forecast.soon.length || null, tone: "warning" },
-        { key: "act", label: "التوصيات — ما أفضل إجراء؟", count: (quickPlan.additions.suggestions.length + myTransfers.length + quickPlan.plan.routes.length) || null, tone: "info" },
+        { key: "act", label: "التوصيات التشغيلية", count: (gapDecisions.filter((d) => d.gap && ["open", "observed"].includes(d.status)).length + quickPlan.additions.suggestions.length + myTransfers.length + quickPlan.plan.routes.length) || null, tone: "info" },
         { key: "impact", label: "المحاكاة — ما أثر القرار؟" },
+        { key: "perf", label: "الأداء والأثر" },
         ...(modelsDetail ? [{ key: "models", label: "تفاصيل نماذج التنبؤ" }] : []),
       ]} />
 
@@ -7042,8 +7483,12 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
         </div>
       )}
 
+      {section === "perf" && <PerformanceImpactPanel municipalityId={scope.all ? (mid || null) : scope.municipalityId} />}
       {section === "act" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Section title="تعزيز التغطية" hint="حين تعجز الموارد عن الجمع ضمن الزمن المستهدف: الإجراء الأقل كلفة أولًا، وكل أثر محسوب بمحاكاة محرك الإسناد">
+            <CoverageRecommendations decisions={scope.all && mid ? gapDecisions.filter((d) => d.municipalityId === mid) : gapDecisions} neighborhoods={neighborhoods} />
+          </Section>
           <Section title="الجولات المقترحة الآن" count={quickPlan.plan.routes.length} hint="خطة سريعة بالمسافات الجوية؛ الخطة الكاملة على الطرق الفعلية في «خطة الجمع الذكية»"
             actions={<>{onNavigate && <Btn variant="primary" onClick={() => onNavigate("control", { tab: "plan" })}>فتح خطة الجمع الذكية</Btn>}{onNavigate && dispatchSettings?.mode === "auto" && <Btn onClick={() => onNavigate("control", { tab: "dispatch" })}>الإسناد التلقائي</Btn>}</>}>
             <AttentionList max={5} empty="لا حاويات مؤهلة للجمع الآن في هذه البلدية" items={quickPlan.plan.routes.map((r) => ({ id: "qp_" + r.neighborhoodId, tone: r.driver ? "info" : "warning",
@@ -7126,7 +7571,6 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
     const scored = bins.map((bin) => ({ bin, priority: getBinPriority(bin, null, readingsByBin[bin.id] || [], ctx.forBin(bin)) }));
     const groups = groupNeighborhoodsByName(neighborhoods, bins);
     const ranked = rankNeighborhoodsForCollection(groups, scored, routes, { thermalAlertFor: makeThermalAlertFor(fireSensors), centroidFor: centroidForGroup });
-    const impact = computeImpactMetrics(groups, scored, routes, { depot: DEFAULT_DEPOT });
     const fleet = computeFleetPerformance(routes, collectionEvents, auditLog, vehicles);
     const offline = bins.filter((b) => { const c = getSensorConnectivity(b); return c === "offline" || c === "fault"; });
     const offlineHeavy = groups.map((g) => { const idSet = new Set(g.ids); const nb = bins.filter((b) => idSet.has(b.neighborhoodId)); const off = nb.filter((b) => { const c = getSensorConnectivity(b); return c === "offline" || c === "fault"; }); return { g, nb, off }; }).filter((x) => x.nb.length > 0 && x.off.length / x.nb.length >= 0.5);
@@ -7140,7 +7584,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
     offlineHeavy.forEach((x) => decisions.push({ icon: "⚫", title: `صيانة مستشعرات ${x.g.name}`, why: `${x.off.length} من ${x.nb.length} حاوية بلا بيانات موثوقة — القرارات هناك تعتمد على آخر قراءة قديمة`, state: "طلب فريق الصيانة" }));
     thermal.forEach((g) => decisions.push({ icon: "🔥", title: `متابعة التنبيه الحراري في ${g.name}`, why: "مستشعر حرارة/غاز فوق حد الإنذار", state: "إشعار الدفاع المدني عند استمرار الارتفاع" }));
     if (ctx.openCount > 0) decisions.push({ icon: "📣", title: `${ctx.openCount} بلاغ مواطن مفتوح`, why: "مرفوعة ضمن أولوية الحاويات المعنية تلقائيًا", state: "رد على المواطنين بعد الجمع" });
-    return { scored, ranked, impact, fleet, offline, decisions: decisions.slice(0, 6), groupsCount: groups.length,
+    return { scored, ranked, fleet, offline, decisions: decisions.slice(0, 6), groupsCount: groups.length,
       critical: scored.filter((s) => s.priority.tier === "critical").length,
       suggested: routes.filter((r) => r.status === "suggested").length, approved: routes.filter((r) => r.status === "approved").length, active: routes.filter((r) => r.status === "in_progress").length,
       avgFill: (() => { const v = bins.map((b) => b.lastFillLevelPercent).filter((x) => x != null && x <= 100); return v.length ? Math.round(v.reduce((a, x) => a + x, 0) / v.length) : null; })(),
@@ -7292,7 +7736,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
               <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>القرارات مقترحة من محرك القرار بمبرراتها — اعتمادها يبقى قرار الإدارة/المشرف.</div>
             </Card>
 
-            <ImpactCard impact={today.impact} compact accent={C.warning} />
+            <PerformanceImpactPanel compact />
 
             <Card title="الأسطول خلال 7 أيام" icon={<Truck size={16} color={C.muted} />}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
@@ -8147,7 +8591,13 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [neighborhoods, bins, scoredBins, routes, fireSensors, position, scopeKeys.join("|")]);
 
-  const runnableRoutes = routes.filter((r) => r.status === "approved" || r.status === "in_progress");
+  // Current route first, then a route reserved after it ("الجولة التالية"), then other approved routes.
+  const runnableRoutes = routes.filter((r) => r.status === "approved" || r.status === "in_progress")
+    .sort((a, b) => (a.status === "in_progress" ? -1 : b.status === "in_progress" ? 1 : 0) || (a.dispatch?.reservedAfterRouteId ? 1 : 0) - (b.dispatch?.reservedAfterRouteId ? 1 : 0));
+  const inProgressOther = (r) => routes.find((x) => x.id !== r?.id && x.status === "in_progress") || null;
+  const expectedLine = (r) => r.dispatch?.reservedAfterRouteId && routes.some((x) => x.id === r.dispatch.reservedAfterRouteId && x.status === "in_progress")
+    ? `الجولة التالية — تبدأ بعد إنهاء جولتك الحالية${r.dispatch.expectedStartAt ? ` (متوقع ${clockText(r.dispatch.expectedStartAt)})` : ""}`
+    : r.expectedCollectionAt && r.status !== "completed" ? `الإنجاز المتوقع ${clockText(r.expectedCollectionAt)}` : null;
   const route = routes.find((r) => r.id === activeRouteId);
   const vehicle = vehicles.find((v) => v.id === route?.vehicleId);
   const collectedBinIds = useMemo(() => route?.collectedBinIds || [], [route]);
@@ -8203,6 +8653,8 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
   const handleStart = async () => {
     if (!can("driver", "routes.execute", { assignedToMe: route.driverId === user.uid })) { alert("هذه الجولة غير مسندة لك."); return; }
     if (!onShift) { alert("ابدأ مناوبتك أولًا قبل بدء الجولة."); return; }
+    const current = inProgressOther(route);
+    if (current) { alert(`أنهِ جولتك الحالية (${current.routeName}) أولًا — هذه جولتك التالية.`); return; }
     setBusy(true);
     try {
       await startRoute(route.id, route.vehicleId);
@@ -8303,9 +8755,10 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 16 }}>
               <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>{route.routeName}</div>
               <div style={{ fontSize: 12, color: C.muted }}>المركبة: {vehicle?.vehicleNumber || "—"} · الحالة: {ROUTE_STATUS_LABELS[route.status] || route.status} · {stops.length} توقف · {route.estimatedDistanceKm} كم تقريبًا</div>
-              {route.status === "approved" && (
-                <button disabled={busy} onClick={handleStart} style={btn({ marginTop: 10, width: "100%", background: C.accent, color: "#07231A" })}>بدء الجولة</button>
-              )}
+              {expectedLine(route) && <div style={{ fontSize: 12, color: C.info, marginTop: 4 }}>{expectedLine(route)}</div>}
+              {route.status === "approved" && (inProgressOther(route)
+                ? <div style={{ marginTop: 10, fontSize: 12, color: C.muted, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>تبدأ هذه الجولة بعد إنهاء {inProgressOther(route).routeName}.</div>
+                : <button disabled={busy} onClick={handleStart} style={btn({ marginTop: 10, width: "100%", background: C.accent, color: "#07231A" })}>بدء الجولة</button>)}
             </div>
 
             {route.status !== "in_progress" && (
@@ -8449,6 +8902,7 @@ const DriverPortal = ({ user, onLogout, vehicles = [], bins = [], neighborhoods 
                         <StateBadge state={r.priorityTier} />
                       </div>
                       <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{r.orderedStops?.length || 0} توقف · {r.estimatedDistanceKm} كم · {ROUTE_STATUS_LABELS[r.status] || r.status}</div>
+                      {expectedLine(r) && <div style={{ fontSize: 12, color: C.info, marginTop: 2 }}>{expectedLine(r)}</div>}
                     </div>
                   ))}
                 </div>
@@ -9200,6 +9654,7 @@ function SmartWasteManagement() {
   const { settings: dispatchSettings } = useDispatchSettings(isStaffAccount);
   const serverDispatchOn = !!dispatchSettings && (dispatchSettings.mode === "observe" || dispatchSettings.mode === "auto");
   const { decisions: dispatchDecisions } = useDispatchDecisions(isStaffAccount, scopeMid);
+  const opsData = useMemo(() => ({ routes, events: collectionEvents, vehicles, decisions: dispatchDecisions, settings: dispatchSettings }), [routes, collectionEvents, vehicles, dispatchDecisions, dispatchSettings]);
   const openEscalations = dispatchDecisions.filter((d) => d.type === "escalate" && d.status === "open").length;
   useEffect(() => {
     if (serverDispatchOn) return;
@@ -9348,6 +9803,7 @@ function SmartWasteManagement() {
   const toggleGroup = (id) => { const n = { ...collapsedGroups, [id]: !collapsedGroups[id] }; setCollapsedGroupsSaved(n); try { localStorage.setItem("swm_nav_collapsed", JSON.stringify(n)); } catch { /* per-viewer convenience only */ } };
 
   return (
+    <OpsDataContext.Provider value={opsData}>
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", overflow: "hidden" }}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
       <SessionTimeout onLogout={handleLogout} timeoutMin={30} countdownSec={10} />
@@ -9586,7 +10042,7 @@ function SmartWasteManagement() {
           {resolvedPage === "control" && (() => { const t = tabOf("control", "routes"); return (
             <HubPage value={t} onChange={(k) => setPageTabs({ control: k })} tabs={[{ key: "routes", label: "الجولات" }, { key: "dispatch", label: "الإسناد التلقائي", count: openEscalations, tone: "danger" }, { key: "plan", label: "خطة الجمع الذكية" }]}>
               {t === "routes" && <RouteManagementPage neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} vehicles={vehicles} routes={routes} driverProfiles={driverProfiles} loadingVehicles={loadingVehicles} loadingRoutes={loadingRoutes} loggedInUser={loggedInUser} dispatchSettings={dispatchSettings} draftBinId={routeDraftBinId} onConsumeDraftBin={() => setRouteDraftBinId(null)} initialRouteId={routeInitialId} onConsumeInitialRoute={() => setRouteInitialId(null)} onShowOnMap={goToMapNeighborhood} onOpenDispatch={() => setPageTabs({ control: "dispatch" })} />}
-              {t === "dispatch" && <DispatchCenter loggedInUser={loggedInUser} onOpenRoute={goToRoute} />}
+              {t === "dispatch" && <DispatchCenter loggedInUser={loggedInUser} onOpenRoute={goToRoute} routes={routes} events={collectionEvents} neighborhoods={neighborhoods} />}
               {t === "plan" && <SmartPlanPage neighborhoods={neighborhoods} bins={bins} profiles={driverProfiles} vehicles={vehicles} routes={routes} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onOpenRoute={goToRoute} />}
             </HubPage>
           ); })()}
@@ -9604,6 +10060,7 @@ function SmartWasteManagement() {
       {/* المساعد الذكي — للموظف والإدارة العليا */}
       <AIAssistant role={userRole} />
     </div>
+    </OpsDataContext.Provider>
   );
 }
 

@@ -70,6 +70,10 @@ export function analyzeResourceGaps(state, plan, settings = {}, { now = Date.now
   const extraActions = [];
   const nName = (nid) => state.neighborhoods?.find((n) => n.id === nid)?.name || "";
   const binById = new Map((state.bins || []).map((b) => [b.id, b]));
+  // Capacity is judged AFTER this cycle's own assignments (a driver given a route a moment ago is not spare capacity).
+  const routesAfter = [...(state.routes || []), ...plan.actions.filter((a) => a.type === "create_assign").map((a) => ({
+    id: `pending_${a.key}`, routeName: a.route?.routeName, status: "approved", driverId: a.driverId, vehicleId: a.vehicleId, binIds: a.binIds, estimatedWasteLiters: a.route?.estimatedWasteLiters || 0,
+    dispatch: a.reservation ? { reservedAfterRouteId: a.reservation.afterRouteId } : {} }))];
 
   const subjects = [
     ...plan.actions.filter((a) => a.type === "escalate" && GAP_KINDS.includes(a.kind)).map((a) => ({ action: a, kind: a.kind, beforeMin: null })),
@@ -89,17 +93,17 @@ export function analyzeResourceGaps(state, plan, settings = {}, { now = Date.now
     const workloadMin = Math.round(estimateTravelMinutes(km || 0.0001) + needBins.length * ASSUMPTIONS.minutesPerStop);
 
     // Capacity snapshot from the real driver states.
-    const states = (state.profiles || []).map((p) => ({ p, st: driverOperationalState(p, { vehicle: state.vehicles.find((v) => v.id === p.vehicleId), routes: state.routes, incidents: state.incidents, now, tzOffsetMin: S.tzOffsetMin }) }));
+    const states = (state.profiles || []).map((p) => ({ p, st: driverOperationalState(p, { vehicle: state.vehicles.find((v) => v.id === p.vehicleId), routes: routesAfter, incidents: state.incidents, now, tzOffsetMin: S.tzOffsetMin }) }));
     const covering = states.filter((x) => (x.p.neighborhoodKeys || []).includes(key));
     const approachFrom = (pt) => (pt && first ? estimateTravelMinutes(haversineDistanceKm(pt.lat, pt.lng, first.lat, first.lng)) : null);
     const depot = state.depot || null;
     const byState = Object.fromEntries(Object.values(DRIVER_STATES).map((k) => [k, covering.filter((x) => x.st.state === k).length]));
-    const availableVehicles = (state.vehicles || []).filter((v) => v.status === "available" && !state.routes.some((r) => ["approved", "in_progress"].includes(r.status) && r.vehicleId === v.id)).length;
+    const availableVehicles = (state.vehicles || []).filter((v) => v.status === "available" && !routesAfter.some((r) => ["approved", "in_progress"].includes(r.status) && r.vehicleId === v.id)).length;
     // Capacity that can act within the target: each covering working driver contributes target − (time until free + approach).
     let capacityWithinTargetMin = 0;
     for (const x of covering) {
       if (![DRIVER_STATES.AVAILABLE, DRIVER_STATES.ON_ROUTE].includes(x.st.state)) continue;
-      const freeIn = x.st.state === DRIVER_STATES.ON_ROUTE ? x.st.finishInMin ?? T.criticalCollectionMin : 0;
+      const freeIn = x.st.state === DRIVER_STATES.ON_ROUTE ? (x.st.finishInMin ?? x.st.activeRoutes.reduce((m, r) => m + (r.binIds || []).length * ASSUMPTIONS.minutesPerStop, 0)) : 0;
       const origin = x.st.state === DRIVER_STATES.ON_ROUTE ? x.st.endPoint : (state.vehicles.find((v) => v.id === x.p.vehicleId)?.depotLat != null ? { lat: state.vehicles.find((v) => v.id === x.p.vehicleId).depotLat, lng: state.vehicles.find((v) => v.id === x.p.vehicleId).depotLng } : depot);
       const usable = T.criticalCollectionMin - freeIn - (approachFrom(origin) ?? T.criticalCollectionMin);
       capacityWithinTargetMin += Math.max(0, Math.min(usable, x.st.shift.known ? x.st.shift.minutesLeft : usable));
@@ -177,7 +181,7 @@ export function analyzeResourceGaps(state, plan, settings = {}, { now = Date.now
         st.profiles.push({ uid: "sim-crew-driver", fullName: "سائق إضافي (محاكاة)", accountStatus: "active", shiftStatus: "on_shift", availability: "available", vehicleId: "sim-crew-vehicle", neighborhoodKeys: [key], municipalityId: state.municipalityId, simulated: true });
       }) : null;
       push(6, { feasible: !!out?.allServed, afterMin: out?.worstMin ?? null, action: `إضافة طاقم واحد (سائق + مركبة بسعة ${medianCap} لتر) يغطي ${nName(nid)} خلال فترة الذروة`,
-        cause: gapMin > 0 ? `حجم العمل ${workloadMin} د يتجاوز القدرة المتاحة ضمن الهدف (${capacityWithinTargetMin} د)` : "لا قدرة مؤهلة متاحة الآن", confidence: out ? "medium" : null,
+        cause: !start ? "تعذر حساب أثر طاقم إضافي: لا مستودع مسجل لنقطة انطلاقه (لا تُفترض نقطة انطلاق)" : gapMin > 0 ? `حجم العمل ${workloadMin} د يتجاوز القدرة المتاحة ضمن الهدف (${capacityWithinTargetMin} د)` : "لا قدرة مؤهلة متاحة الآن", confidence: out ? "medium" : null,
         constraints: ["محاكاة: انطلاق من مستودع البلدية وتقدير المسافة جويًا", "قرار تكلفة يتطلب اعتماد الأمانة"], simulated: true });
     }
 

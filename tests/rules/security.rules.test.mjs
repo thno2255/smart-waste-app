@@ -45,6 +45,7 @@ await env.withSecurityRulesDisabled(async (c) => {
   await put("bins/bN", { name: "bN", municipalityId: "north", neighborhoodId: "nN", lastFillLevelPercent: 50, simulated: true, demo: true });
   await put("resource_transfers/T0", { resourceType: "crew", fromMunicipalityId: "north", toMunicipalityId: "east", status: "proposed" });
   await put("rate_limits/k", { count: 1 });
+  await put("collection_routes/RD", { routeName: "RD", municipalityId: "east", status: "completed", demo: true, binIds: ["bE"], collectedBinIds: ["bE"] });
   await put("collection_routes/RE", { routeName: "RE", municipalityId: "east", status: "approved", driverId: "drvE", vehicleId: "VE", binIds: ["bE"], collectedBinIds: [] });
   await put("collection_routes/RE2", { routeName: "RE2", municipalityId: "east", status: "in_progress", driverId: "drvE2", vehicleId: "VE2", binIds: ["bE2"], collectedBinIds: [] });
   await put("collection_routes/RN", { routeName: "RN", municipalityId: "north", status: "approved", driverId: "drvN", vehicleId: "VN", binIds: ["bN"], collectedBinIds: [] });
@@ -206,6 +207,14 @@ const CASES = [
   ["SEC-14", "amanah", "عميل", "dispatch_settings", "تحديث", "معامل انبعاث نصي", "deny", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "observe", scope: "demo_only", impactFactors: { co2KgPerLiter: "2.68" } })],
   ["SEC-14", "drvE", "عميل", "dispatch_decisions", "قراءة", "السائق يقرأ سجل قرارات الإسناد", "deny", (f) => getDoc(doc(f, "dispatch_decisions/escE"))],
   ["ALLOW", "amanah", "عميل", "dispatch_settings", "تحديث", "الأمانة تضبط الأهداف ومعاملات الأثر (ومعامل غير متاح = null)", "allow", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "auto", scope: "demo_only", targets: { criticalCollectionMin: 45, onTimePct: 90, maxRouteKm: 35, vehicleUtilizationPct: 70, maxLateBins: 2 }, impactFactors: { fuelLitersPerKm: null, co2KgPerLiter: 2.68, avgUrbanSpeedKmh: 30 } })],
+  // ── SEC-15 demo-scene history is the only client-written collection data, and it cannot touch real routes ──
+  ["SEC-15", "opsE", "عميل", "collection_events", "إنشاء", "حدث جمع غير موسوم كتجريبي على جولة تجريبية مكتملة", "deny", (f) => setDoc(doc(f, "collection_events/h1"), { routeId: "RD", binId: "bE", municipalityId: "east" })],
+  ["SEC-15", "opsE", "عميل", "collection_events", "إنشاء", "حدث جمع تجريبي على جولة حقيقية جارية", "deny", (f) => setDoc(doc(f, "collection_events/h2"), { routeId: "RE2", binId: "bE2", municipalityId: "east", demo: true, _demoSeedVersion: "v1" })],
+  ["SEC-15", "drvE", "عميل", "collection_events", "إنشاء", "السائق ينشئ حدث جمع تجريبيًا", "deny", (f) => setDoc(doc(f, "collection_events/h3"), { routeId: "RD", binId: "bE", municipalityId: "east", demo: true, _demoSeedVersion: "v1" })],
+  ["SEC-15", "opsE", "عميل", "collection_routes", "إنشاء", "جولة حقيقية تُنشأ مكتملة بتقدم مزوّر", "deny", (f) => setDoc(doc(f, "collection_routes/RF"), { routeName: "RF", municipalityId: "east", status: "completed", binIds: ["bE2"], collectedBinIds: ["bE2"] })],
+  ["ALLOW", "opsE", "عميل", "collection_events", "إنشاء", "سجل تاريخي تجريبي لمشهد المحاكاة على جولة تجريبية مكتملة", "allow", (f) => setDoc(doc(f, "collection_events/h4"), { routeId: "RD", binId: "bE", municipalityId: "east", demo: true, _demoSeedVersion: "v1" })],
+  ["ALLOW", "opsE", "عميل", "collection_routes", "إنشاء", "جولة مقترحة جديدة بلا تقدم", "allow", (f) => setDoc(doc(f, "collection_routes/RN2"), { routeName: "RN2", municipalityId: "east", status: "suggested", binIds: ["bE2"], collectedBinIds: [] })],
+  ["SEC-15", "opsE", "عميل", "sensor_readings", "إنشاء", "قراءة مستشعر موسومة تجريبية من العميل", "deny", (f) => setDoc(doc(f, "sensor_readings/x1"), { bin_id: "bE", municipalityId: "east", demo: true, _demoSeedVersion: "v1", routeId: "RD" })],
 ];
 void D;
 

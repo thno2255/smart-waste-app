@@ -187,6 +187,7 @@ export function computeOperationalImpact({ routes = [], events = [], decisions =
   const fuelOf = (km) => (km == null || factors.fuelLitersPerKm == null ? null : round1(km * factors.fuelLitersPerKm));
   const co2Of = (fuel) => (fuel == null || factors.co2KgPerLiter == null ? null : round1(fuel * factors.co2KgPerLiter));
   const hoursOf = (km) => (km == null || !factors.avgUrbanSpeedKmh ? null : round1(km / factors.avgUrbanSpeedKmh));
+  const minutesOf = (km) => (km == null || !factors.avgUrbanSpeedKmh ? null : Math.round((km / factors.avgUrbanSpeedKmh) * 60));
   const target = targets.criticalCollectionMin ?? null;
 
   // ── realised ──
@@ -195,7 +196,7 @@ export function computeOperationalImpact({ routes = [], events = [], decisions =
   const responses = [], critical = [];
   let loadL = 0, capL = 0, utilRoutes = 0;
   for (const r of completed) {
-    const evs = (eventsByRoute[r.id] || []).sort((a, b) => String(a.confirmedAt).localeCompare(String(b.confirmedAt)));
+    const evs = (eventsByRoute[r.id] || []).sort((a, b) => String(a.confirmedAt || a.collectedAt).localeCompare(String(b.confirmedAt || b.collectedAt)));
     const stopById = new Map((r.orderedStops || []).map((s) => [s.binId, s]));
     const done = evs.map((e) => ({ ...(stopById.get(e.binId) || {}), binId: e.binId, fillLevelPercent: e.fillBefore })).filter((s) => s.lat != null);
     const depot = depotOf(r);
@@ -203,8 +204,8 @@ export function computeOperationalImpact({ routes = [], events = [], decisions =
     const t0 = r.dispatch?.at || r.approvedAt;
     for (const e of evs) {
       if (!t0) continue;
-      const m = Math.round((new Date(e.confirmedAt) - new Date(t0)) / 60000);
-      if (m < 0) continue;
+      const m = Math.round((new Date(e.confirmedAt || e.collectedAt) - new Date(t0)) / 60000);
+      if (!Number.isFinite(m) || m < 0) continue;
       responses.push(m);
       if (Number(e.fillBefore) >= 85) critical.push(m);
     }
@@ -220,7 +221,7 @@ export function computeOperationalImpact({ routes = [], events = [], decisions =
     routesCompleted: completed.length,
     binsCollected: Object.values(eventsByRoute).reduce((a, l) => a + l.length, 0),
     measuredRoutes, distanceKm: measuredRoutes ? round1(actualKm) : null, referenceKm: measuredRoutes ? round1(refKm) : null,
-    kmSaved, fuelL: fuelOf(kmSaved), co2Kg: co2Of(fuelOf(kmSaved)), hoursSaved: hoursOf(kmSaved),
+    kmSaved, fuelL: fuelOf(kmSaved), co2Kg: co2Of(fuelOf(kmSaved)), hoursSaved: hoursOf(kmSaved), minutesSaved: minutesOf(kmSaved),
     criticalMeasured: critical.length,
     onTimePct: target != null && critical.length ? Math.round((critical.filter((m) => m <= target).length / critical.length) * 100) : null,
     lateCritical: critical.length ? late : null,
@@ -241,7 +242,7 @@ export function computeOperationalImpact({ routes = [], events = [], decisions =
   const eSaved = eMeasured ? round1(Math.max(0, eRef - eKm)) : null;
   const expected = {
     routesPlanned: active.length, binsPlanned: active.reduce((a, r) => a + (r.binIds?.length || 0), 0), measuredRoutes: eMeasured,
-    kmSaved: eSaved, fuelL: fuelOf(eSaved), co2Kg: co2Of(fuelOf(eSaved)), hoursSaved: hoursOf(eSaved),
+    kmSaved: eSaved, fuelL: fuelOf(eSaved), co2Kg: co2Of(fuelOf(eSaved)), hoursSaved: hoursOf(eSaved), minutesSaved: minutesOf(eSaved),
     avgExpectedCollectionMin: eCompletion.length ? Math.round(avg(eCompletion)) : null,
   };
   return { window: { from: from != null ? new Date(from).toISOString() : null, to: new Date(to).toISOString() }, realised, expected, targets, factors,

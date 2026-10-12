@@ -78,3 +78,15 @@ describe("resource-gap recommendations — cheapest measure first, computed by r
     expect(JSON.stringify(run(st).gaps)).toBe(JSON.stringify(run(st).gaps));
   });
 });
+
+describe("capacity snapshot reflects this cycle's own assignments", () => {
+  it("a driver assigned a route in the same cycle is not counted as spare capacity for another neighbourhood", () => {
+    const bins = [k("k1", 92, 0), k("k2", 90, 1), k("k3", 88, 2), bin("s1", "n2", 95, 26.33, 44.04), bin("s2", "n2", 93, 26.331, 44.041), bin("s3", "n2", 91, 26.332, 44.042)];
+    const { plan, gaps } = run(state({ bins, profiles: [driver("D1")], vehicles: [vehicle("VD1")] }));
+    expect(plan.actions.filter((a) => a.type === "create_assign").length).toBe(1);
+    const g = gaps[0].gap;
+    expect(g.capacity.byState.AVAILABLE).toBe(0);
+    expect(g.capacity.byState.ON_ROUTE).toBe(1);
+    expect(g.capacity.availableVehicles).toBe(0);
+  });
+});

@@ -14,7 +14,7 @@
 
 import { collection, addDoc, getDocs, query, limit, doc, setDoc, getDoc, updateDoc, writeBatch, where } from "firebase/firestore";
 import { db } from "./firebase";
-import { COLLECTIONS, applyRouteReconciliation } from "./firestoreService";
+import { COLLECTIONS, applyRouteReconciliation, auditActorId } from "./firestoreService";
 import { defaultAssignmentFor } from "./municipalities";
 /** Municipality of a neighborhood doc: an explicit admin value wins, else the provenance-tagged file default. */
 const municipalityIdForNeighborhoodDoc = (nDoc) => nDoc?.municipalityId || defaultAssignmentFor(nDoc?.name)?.municipalityId || null;
@@ -937,21 +937,26 @@ export async function seedFleetHistory(seededBins, neighborhoodDocs, vehicleIds)
         demo: true, _demoSeedVersion: DEMO_SEED_VERSION, createdAt: approvedAt,
       });
       const batch = writeBatch(db);
+      const munId = municipalityIdForNeighborhoodDoc(neighborhoodDocs.find((n) => n.id === nid));
+      // Simulated history is recorded under the signed-in user who installs the scene (audit integrity: nobody writes as
+      // someone else); the simulated driver is kept in the details.
+      const demoAudit = (action, details) => batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action, actorId: auditActorId(), actorName: "مشهد المحاكاة", municipalityId: munId,
+        details: { ...details, simulatedDriverId: driver.id, simulatedDriverName: driver.name }, demo: true, createdAt: completedAt });
       nBins.forEach((b, i) => {
         if (i === skipIdx) {
-          batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "route_stop_skipped", actorId: driver.id, actorName: driver.name, details: { routeId: routeRef.id, binId: b.id, routeName: "" }, demo: true, createdAt: completedAt });
+          demoAudit("route_stop_skipped", { routeId: routeRef.id, binId: b.id, routeName: "" });
           return;
         }
         batch.set(doc(collection(db, COLLECTIONS.COLLECTION_EVENTS)), {
-          binId: b.id, routeId: routeRef.id, vehicleId, operatorId: driver.id,
+          binId: b.id, routeId: routeRef.id, vehicleId, operatorId: driver.id, municipalityId: munId,
           fillBefore: 72 + Math.round(rand() * 26), fillAfter: 0, source: "route",
           collectedAt: completedAt, createdAt: completedAt, demo: true, _demoSeedVersion: DEMO_SEED_VERSION,
         });
       });
       if (rand() < 0.25) {
-        batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: rand() < 0.5 ? "route_obstacle_reported" : "route_fault_reported", actorId: driver.id, actorName: driver.name, details: { routeId: routeRef.id, routeName: "" }, demo: true, createdAt: completedAt });
+        demoAudit(rand() < 0.5 ? "route_obstacle_reported" : "route_fault_reported", { routeId: routeRef.id, routeName: "" });
       }
-      batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "route_completed", actorId: driver.id, actorName: driver.name, details: { routeId: routeRef.id, by: "driver" }, demo: true, createdAt: completedAt });
+      demoAudit("route_completed", { routeId: routeRef.id, by: "driver" });
       await batch.commit();
       created += 1;
     }

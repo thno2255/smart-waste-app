@@ -163,7 +163,12 @@ export function buildEscalationExplanation({ now, municipalityId, neighborhoodId
   };
 }
 
-const minutesText = (m) => (m == null ? "غير متاح" : m < 60 ? `${m} دقيقة` : `${Math.floor(m / 60)} س ${m % 60 ? `${m % 60} د` : ""}`.trim());
+/** Minutes in Arabic with number agreement (1 دقيقة · 2 دقيقتان · 3–10 دقائق · 11+ دقيقة). */
+export const minutesText = (m) => {
+  if (m == null) return "غير متاح";
+  if (m >= 60) return `${Math.floor(m / 60)} س${m % 60 ? ` و${m % 60} د` : ""}`;
+  return m === 1 ? "دقيقة واحدة" : m === 2 ? "دقيقتين" : m >= 3 && m <= 10 ? `${m} دقائق` : `${m} دقيقة`;
+};
 
 /**
  * One-paragraph summary from codes only (fixed templates).
@@ -171,7 +176,7 @@ const minutesText = (m) => (m == null ? "غير متاح" : m < 60 ? `${m} دق�
  */
 export function explanationSummary(exp) {
   if (!exp || exp.v !== EXPLANATION_VERSION) return null;
-  if (exp.decisionType === "AUTO_ASSIGNMENT" || exp.decisionType === "NEXT_ROUTE_RESERVATION") {
+  if (["AUTO_ASSIGNMENT", "NEXT_ROUTE_RESERVATION", "REASSIGNMENT"].includes(exp.decisionType)) {
     const c = exp.selection.reasonCodes || [];
     const why = [];
     if (c.includes("NEXT_ROUTE_AFTER_CURRENT")) why.push(`سيبدأها فور إنهاء جولته الحالية خلال نحو ${minutesText(exp.selection.startAfterMin)}`);
@@ -179,13 +184,18 @@ export function explanationSummary(exp) {
     else if (c.includes("HIGHEST_SCORE_NOT_EARLIEST")) why.push("الأعلى تقييمًا بين المؤهلين (من يصل أبكر لم يستوفِ كل المعايير)");
     if (c.includes("SUFFICIENT_CAPACITY")) why.push("ومركبته تستوعب الحمولة المطلوبة");
     if (c.includes("SHIFT_AVAILABLE")) why.push("ومناوبته تسمح بإكمال الجولة");
+    const timing = `الجمع المتوقع خلال ${minutesText(exp.timing.completionMin)} (أول حاوية خلال ${minutesText(exp.timing.etaMin)}).`;
+    if (exp.decisionType === "REASSIGNMENT") {
+      return `أُعيد إسناد الجولة إلى ${exp.selection.driverName} لأن ${exp.previousDriver?.blocker || "السائق السابق لم يعد متاحًا"}؛ واختير لأنه ${why.join("، ")}. ${timing}`;
+    }
     const verb = exp.decisionType === "NEXT_ROUTE_RESERVATION" ? "حُجزت الجولة التالية لـ" : "أُسندت الجولة إلى ";
-    return `${verb}${exp.selection.driverName} لأنه ${why.join("، ")}. الجمع المتوقع خلال ${minutesText(exp.timing.completionMin)} (أول حاوية خلال ${minutesText(exp.timing.etaMin)}).`;
+    return `${verb}${exp.selection.driverName} لأنه ${why.join("، ")}. ${timing}`;
   }
   if (exp.decisionType === "ROUTE_INSERTION") {
     return `أُضيفت ${exp.trigger.bins[0]?.name || "الحاوية"} إلى ${exp.selection.routeName} لدى ${exp.selection.driverName || "السائق"} لأن الإدراج يضيف ${minutesText(exp.timing.addedMin)} فقط ضمن الحد المسموح، بدل إنشاء جولة جديدة.`;
   }
   if (exp.decisionType === "ESCALATION") {
+    if (exp.escalationKind === "target_gap") return "أُسندت الجولة بأفضل خيار متاح، لكن الجمع المتوقع يتجاوز الزمن المستهدف، فرُفعت توصية لمعالجة فجوة الموارد.";
     const ev = exp.candidates;
     return ev ? `دُرس ${ev.evaluated} سائق ولم يستوفِ أيٌّ منهم كل القيود، فرُفعت الحالة لموظف العمليات.` : "رُفعت الحالة لموظف العمليات لأنها تتطلب قرارًا بشريًا.";
   }
