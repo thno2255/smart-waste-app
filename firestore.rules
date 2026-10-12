@@ -133,7 +133,20 @@ service cloud.firestore {
     // ── Autonomous dispatch (written by the server runner via firebase-admin) ──
     match /dispatch_settings/{id} {
       allow read: if isEmployee();
-      allow write: if isAdmin() && request.resource.data.mode in ["off", "observe", "auto"] && request.resource.data.scope in ["demo_only", "all"];
+      allow write: if isAdmin() && request.resource.data.mode in ["off", "observe", "auto"] && request.resource.data.scope in ["demo_only", "all"]
+                   && validTargets(request.resource.data.get("targets", {})) && validImpactFactors(request.resource.data.get("impactFactors", {}));
+    }
+    // Operational targets and impact factors are decision inputs: typed, bounded, no extra keys.
+    function numIn(m, k, lo, hi) { return !(k in m) || (m[k] is number && m[k] >= lo && m[k] <= hi); }
+    function optNumIn(m, k, lo, hi) { return !(k in m) || m[k] == null || (m[k] is number && m[k] >= lo && m[k] <= hi); }
+    function validTargets(t) {
+      return t == null || (t is map && t.keys().hasOnly(["criticalCollectionMin", "onTimePct", "maxRouteKm", "vehicleUtilizationPct", "maxLateBins"])
+        && numIn(t, "criticalCollectionMin", 5, 1440) && numIn(t, "onTimePct", 0, 100) && numIn(t, "maxRouteKm", 1, 500)
+        && numIn(t, "vehicleUtilizationPct", 0, 100) && numIn(t, "maxLateBins", 0, 1000));
+    }
+    function validImpactFactors(f) {
+      return f == null || (f is map && f.keys().hasOnly(["fuelLitersPerKm", "co2KgPerLiter", "avgUrbanSpeedKmh"])
+        && optNumIn(f, "fuelLitersPerKm", 0, 5) && optNumIn(f, "co2KgPerLiter", 0, 10) && optNumIn(f, "avgUrbanSpeedKmh", 1, 120));
     }
     match /dispatch_decisions/{id} {
       allow read: if isEmployee() && inMun(resource.data);

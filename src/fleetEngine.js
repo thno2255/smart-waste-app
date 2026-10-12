@@ -170,18 +170,19 @@ export function eligibleDriversFor(neighborhoodName, { profiles = [], vehicles =
   const key = normalizeNeighborhoodName(neighborhoodName);
   const vehicleById = new Map(vehicles.map((v) => [v.id, v]));
   return profiles.map((p) => {
-    const reasons = [];
-    if (p.accountStatus && p.accountStatus !== "active") reasons.push("الحساب غير مفعّل");
-    if (p.shiftStatus !== "on_shift") reasons.push("خارج المناوبة");
-    if (p.availability === "unavailable") reasons.push("غير متاح");
-    if (!(p.neighborhoodKeys || []).includes(key)) reasons.push("خارج نطاق التغطية");
+    const reasons = [], codes = [];   // Arabic text for people, stable codes for decision records
+    const add = (code, text) => { codes.push(code); reasons.push(text); };
+    if (p.accountStatus && p.accountStatus !== "active") add("ACCOUNT_INACTIVE", "الحساب غير مفعّل");
+    if (p.shiftStatus !== "on_shift") add("OFF_SHIFT", "خارج المناوبة");
+    if (p.availability === "unavailable") add("DRIVER_UNAVAILABLE", "غير متاح");
+    if (!(p.neighborhoodKeys || []).includes(key)) add("OUTSIDE_COVERAGE", "خارج نطاق التغطية");
     const v = p.vehicleId ? vehicleById.get(p.vehicleId) : null;
-    if (!p.vehicleId) reasons.push("لا توجد مركبة مسندة");
-    else if (!v) reasons.push("المركبة المسندة غير موجودة");
-    else if (v.status === "maintenance" || v.status === "offline") reasons.push(`المركبة ${v.status === "maintenance" ? "في الصيانة" : "غير متصلة"}`);
+    if (!p.vehicleId) add("NO_VEHICLE", "لا توجد مركبة مسندة");
+    else if (!v) add("VEHICLE_MISSING", "المركبة المسندة غير موجودة");
+    else if (v.status === "maintenance" || v.status === "offline") add("VEHICLE_FAULT", `المركبة ${v.status === "maintenance" ? "في الصيانة" : "غير متصلة"}`);
     const activeRoute = routes.find((r) => ACTIVE_ROUTE_STATUSES.includes(r.status) && r.driverId === p.uid);
-    if (activeRoute) reasons.push(`لديه جولة نشطة: ${activeRoute.routeName}`);
-    return { profile: p, vehicle: v || null, eligible: reasons.length === 0, reasons, at };
+    if (activeRoute) add("HAS_ACTIVE_ROUTE", `لديه جولة نشطة: ${activeRoute.routeName}`);
+    return { profile: p, vehicle: v || null, eligible: reasons.length === 0, reasons, codes, activeRoute: activeRoute || null, at };
   }).sort((a, b) => Number(b.eligible) - Number(a.eligible));
 }
 

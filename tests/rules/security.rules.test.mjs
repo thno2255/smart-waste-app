@@ -199,6 +199,13 @@ const CASES = [
   ["ALLOW", "drvE2", "عميل", "collection_routes", "تحديث", "السائق ينهي جولته الجارية (الحالة فقط)", "allow", (f) => updateDoc(doc(f, "collection_routes/RE2"), { status: "completed", completedAt: "t" })],
   ["ALLOW", "opsE", "عميل", "bins", "تحديث", "المحاكي يحدّث وقت جمع حاوية محاكاة", "allow", (f) => updateDoc(doc(f, "bins/bE"), { lastCollectionAt: "t" })],
   ["ALLOW", "amanah", "عميل", "resource_transfers", "تحديث", "الأمانة تعتمد نقلًا مقترحًا", "allow", (f) => updateDoc(doc(f, "resource_transfers/T0"), { status: "approved", decidedBy: "amanah", decidedAt: "t" })],
+  // ── SEC-14 operational targets / impact factors are decision inputs: Amanah only, typed and bounded ──
+  ["SEC-14", "opsE", "عميل", "dispatch_settings", "تحديث", "موظف العمليات يغيّر الأهداف التشغيلية", "deny", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "observe", scope: "demo_only", targets: { criticalCollectionMin: 30 } })],
+  ["SEC-14", "amanah", "عميل", "dispatch_settings", "تحديث", "هدف خارج المدى (0 دقيقة)", "deny", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "observe", scope: "demo_only", targets: { criticalCollectionMin: 0 } })],
+  ["SEC-14", "amanah", "عميل", "dispatch_settings", "تحديث", "مفتاح غير معروف داخل الأهداف", "deny", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "observe", scope: "demo_only", targets: { anything: 1 } })],
+  ["SEC-14", "amanah", "عميل", "dispatch_settings", "تحديث", "معامل انبعاث نصي", "deny", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "observe", scope: "demo_only", impactFactors: { co2KgPerLiter: "2.68" } })],
+  ["SEC-14", "drvE", "عميل", "dispatch_decisions", "قراءة", "السائق يقرأ سجل قرارات الإسناد", "deny", (f) => getDoc(doc(f, "dispatch_decisions/escE"))],
+  ["ALLOW", "amanah", "عميل", "dispatch_settings", "تحديث", "الأمانة تضبط الأهداف ومعاملات الأثر (ومعامل غير متاح = null)", "allow", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "auto", scope: "demo_only", targets: { criticalCollectionMin: 45, onTimePct: 90, maxRouteKm: 35, vehicleUtilizationPct: 70, maxLateBins: 2 }, impactFactors: { fuelLitersPerKm: null, co2KgPerLiter: 2.68, avgUrbanSpeedKmh: 30 } })],
 ];
 void D;
 

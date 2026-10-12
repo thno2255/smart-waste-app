@@ -19,6 +19,8 @@ import { FieldValue } from "firebase-admin/firestore";
 import { planDispatch, actionInScope, cheapestInsertion, driverBlocker, pendingStops, DEFAULT_DISPATCH_SETTINGS, ESCALATION_LABELS } from "../../src/autoDispatchEngine.js";
 import { makeBinContext } from "../../src/binContext.js";
 import { driverOrigin } from "../../src/assignmentEngine.js";
+import { routeRemaining } from "../../src/driverState.js";
+import { analyzeResourceGaps } from "../../src/resourceGapEngine.js";
 import { fetchRoadMatrix } from "../../src/roadMatrix.js";
 
 /**
@@ -28,7 +30,13 @@ import { fetchRoadMatrix } from "../../src/roadMatrix.js";
 export async function computeRoadTravel(state, roadQueries, { now = Date.now(), roadMatrix = fetchRoadMatrix } = {}) {
   const stops = (roadQueries || []).filter((q) => q.firstStop?.lat != null);
   if (stops.length === 0) return { roadTravel: null, routingStatus: "skipped" };
-  const origins = state.profiles.map((p) => ({ uid: p.uid, o: driverOrigin(p, state.vehicles.find((v) => v.id === p.vehicleId), { now, fallback: state.depot }) })).filter((x) => x.o?.lat != null).slice(0, 40);
+  const origins = state.profiles.map((p) => ({ uid: p.uid, o: driverOrigin(p, state.vehicles.find((v) => v.id === p.vehicleId), { now, fallback: state.depot }) })).filter((x) => x.o?.lat != null);
+  // Drivers on a route in progress: also from where they will be when it ends (next-route reservation).
+  for (const r of state.routes.filter((x) => x.status === "in_progress" && x.driverId)) {
+    const end = routeRemaining(r).endPoint;
+    if (end) origins.push({ uid: `${r.driverId}@next`, o: end });
+  }
+  origins.splice(40);
   if (origins.length === 0) return { roadTravel: null, routingStatus: "skipped" };
   let matrix = null;
   try { matrix = await roadMatrix([...origins.map((x) => x.o), ...stops.map((q) => q.firstStop)]); } catch { matrix = null; }
@@ -90,6 +98,9 @@ const decisionBase = (a, ctx) => ({
   driverId: a.driverId || null, driverName: a.driverName || null, vehicleId: a.vehicleId || null, vehicleNumber: a.vehicleNumber || null,
   fromDriverId: a.fromDriverId || null, alternatives: a.alternatives || [], approachMin: a.approachMin ?? null, detourKm: a.detourKm ?? null, addedMin: a.addedMin ?? null,
   urgent: !!a.urgent, travelSource: a.travelSource || null, routingNote: a.routingNote || null, runId: ctx.runId, trigger: ctx.trigger, mode: ctx.mode, demo: ctx.demo, updatedAt: iso(ctx.now),
+  // Structured decision record (decisionExplain) + resource-gap analysis (resourceGapEngine) — never free text from a model.
+  explanation: a.explanation || null, gap: a.gap || null, need: a.need || null, reservation: a.reservation || null,
+  etaMin: a.etaMin ?? null, completionMin: a.completionMin ?? null, expectedCollectionAt: a.completionMin != null ? iso(ctx.now + a.completionMin * 60000) : null, targetMissed: !!a.targetMissed,
 });
 
 /** Observe mode (or out-of-scope in auto): record the decision once, refresh it on later cycles. */
@@ -98,7 +109,7 @@ async function recordObserved(db, a, ctx, note = null) {
   await db.runTransaction(async (t) => {
     const cur = await t.get(ref);
     if (cur.exists && ["executed", "resolved", "dismissed"].includes(cur.get("status"))) return;
-    if (cur.exists) t.update(ref, { lastSeenAt: iso(ctx.now), seenCount: FieldValue.increment(1), runId: ctx.runId, reason: a.reason, note });
+    if (cur.exists) t.update(ref, { lastSeenAt: iso(ctx.now), seenCount: FieldValue.increment(1), runId: ctx.runId, reason: a.reason, note, explanation: a.explanation || null, gap: a.gap || null });
     else t.set(ref, { ...decisionBase(a, ctx), status: "observed", note, createdAt: iso(ctx.now), lastSeenAt: iso(ctx.now), seenCount: 1 });
   });
   return "observed";
@@ -128,18 +139,30 @@ async function execute(db, a, ctx) {
       const [prof, veh, sugg] = await Promise.all([t.get(db.collection("driver_profiles").doc(a.driverId)), t.get(db.collection("vehicles").doc(a.vehicleId)),
         t.get(db.collection("collection_routes").where("municipalityId", "==", ctx.mid).where("status", "==", "suggested"))]);
       if (a.binIds.some((id) => busyBins.has(id))) return reject("إحدى الحاويات أُضيفت لجولة أخرى قبل التنفيذ");
-      if (activeRoutes.some((r) => r.driverId === a.driverId)) return reject("السائق حصل على جولة نشطة قبل التنفيذ");
-      if (activeRoutes.some((r) => r.vehicleId === a.vehicleId)) return reject("المركبة في جولة نشطة");
+      if (a.reservation) {
+        // Next-route reservation: the driver's ONLY active route must still be the one in progress, with no other reservation.
+        const mine = activeRoutes.filter((r) => r.driverId === a.driverId);
+        if (mine.length !== 1 || mine[0].id !== a.reservation.afterRouteId || mine[0].status !== "in_progress") return reject("تغيّرت جولة السائق الحالية قبل الحجز");
+        if (activeRoutes.some((r) => r.dispatch?.reservedAfterRouteId === a.reservation.afterRouteId)) return reject("للسائق جولة تالية محجوزة");
+        if (activeRoutes.some((r) => r.vehicleId === a.vehicleId && r.id !== a.reservation.afterRouteId)) return reject("المركبة في جولة نشطة أخرى");
+      } else {
+        if (activeRoutes.some((r) => r.driverId === a.driverId)) return reject("السائق حصل على جولة نشطة قبل التنفيذ");
+        if (activeRoutes.some((r) => r.vehicleId === a.vehicleId)) return reject("المركبة في جولة نشطة");
+      }
       const blocker = driverBlocker({ driverId: a.driverId, vehicleId: a.vehicleId }, { profiles: prof.exists ? [{ uid: prof.id, ...prof.data() }] : [], vehicles: veh.exists ? [{ id: veh.id, ...veh.data() }] : [] });
       if (blocker) return reject(blocker);
       const routeRef = db.collection("collection_routes").doc(`auto_${a.key}`);
       t.set(routeRef, { ...a.route, status: "approved", driverId: a.driverId, driverName: a.driverName, vehicleId: a.vehicleId, approvedBy: SYSTEM.uid, approvedAt: iso(ctx.now), startedAt: null, completedAt: null, manualBinIds: [], collectedBinIds: [],
-        dispatch: { auto: true, key: a.key, runId: ctx.runId, trigger: ctx.trigger, reason: a.reason, score: a.score ?? null, confidence: a.confidence || null, approachMin: a.approachMin ?? null, alternatives: a.alternatives || [], nearestOverridden: a.nearestOverridden || null, urgent: !!a.urgent, at: iso(ctx.now) },
+        dispatch: { auto: true, key: a.key, runId: ctx.runId, trigger: ctx.trigger, reason: a.reason, score: a.score ?? null, confidence: a.confidence || null, approachMin: a.approachMin ?? null, alternatives: a.alternatives || [], nearestOverridden: a.nearestOverridden || null, urgent: !!a.urgent, at: iso(ctx.now),
+          explanation: a.explanation || null, reservedAfterRouteId: a.reservation?.afterRouteId || null, expectedStartAt: a.reservation ? iso(ctx.now + a.reservation.startAfterMin * 60000) : null },
+        expectedCollectionAt: a.completionMin != null ? iso(ctx.now + a.completionMin * 60000) : null, expectedFirstArrivalAt: a.etaMin != null ? iso(ctx.now + a.etaMin * 60000) : null,
         demo: ctx.demo, createdAt: iso(ctx.now), updatedAt: iso(ctx.now) });
       // the auto route supersedes open suggestions for the same neighborhood (kept in history)
       for (const d of sugg.docs) if ((d.get("neighborhoodIds") || []).includes(a.neighborhoodId)) t.update(d.ref, { status: "withdrawn", withdrawnAt: iso(ctx.now), withdrawReason: `حلّت محلها جولة مسندة تلقائيًا (${a.route.routeName})`, supersededBy: routeRef.id });
-      notify(t, db, a.driverId, { type: "route_assigned", routeId: routeRef.id, title: "مهمة جديدة مسندة لك", body: `${a.route.routeName} — ${a.binIds.length} حاوية${a.urgent ? " (عاجلة)" : ""}` }, ctx);
-      audit(t, db, "route_auto_assigned", { routeId: routeRef.id, routeName: a.route.routeName, driverId: a.driverId, driverName: a.driverName, vehicleId: a.vehicleId, bins: a.binIds.length, reason: a.reason }, ctx);
+      notify(t, db, a.driverId, a.reservation
+        ? { type: "route_reserved", routeId: routeRef.id, title: "جولتك التالية محجوزة", body: `${a.route.routeName} — ${a.binIds.length} حاوية، ابدأها بعد إنهاء جولتك الحالية` }
+        : { type: "route_assigned", routeId: routeRef.id, title: "مهمة جديدة مسندة لك", body: `${a.route.routeName} — ${a.binIds.length} حاوية${a.urgent ? " (عاجلة)" : ""}` }, ctx);
+      audit(t, db, a.reservation ? "route_auto_reserved" : "route_auto_assigned", { routeId: routeRef.id, routeName: a.route.routeName, driverId: a.driverId, driverName: a.driverName, vehicleId: a.vehicleId, bins: a.binIds.length, reason: a.reason, afterRouteId: a.reservation?.afterRouteId || null }, ctx);
       t.set(decRef, { ...decisionBase(a, ctx), routeId: routeRef.id, status: "executed", executedAt: iso(ctx.now), createdAt: dec.exists ? dec.get("createdAt") : iso(ctx.now) }, { merge: true });
     } else if (a.type === "insert") {
       const routeRef = db.collection("collection_routes").doc(a.routeId);
@@ -220,6 +243,10 @@ export async function runDispatchCycle(db, { trigger = "manual", municipalityId 
       routing = await computeRoadTravel(state, plan.roadQueries, { now, roadMatrix });
       plan = planDispatch(state, settings, { now, roadTravel: routing.roadTravel, routingStatus: routing.routingStatus });
     }
+    // Resource gaps: what would fix each unserved need / missed target (simulated with the same engine).
+    const { gaps, extraActions } = analyzeResourceGaps(state, plan, settings, { now });
+    const gapByKey = new Map(gaps.map((g) => [g.key, g.gap]));
+    plan.actions = [...plan.actions.map((a) => (gapByKey.has(a.key) && a.type === "escalate" ? { ...a, gap: gapByKey.get(a.key) } : a)), ...extraActions];
     const binsById = new Map(state.bins.map((b) => [b.id, b]));
     const tally = { ...plan.summary, routingStatus: routing.routingStatus, executed: 0, observed: 0, rejected: 0, duplicates: 0, outOfScope: 0, escalationsOpen: 0 };
     for (const a of plan.actions) {
