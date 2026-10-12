@@ -42,7 +42,7 @@ async function seed({ realBins = false } = {}) {
   }
   await b.commit();
 }
-const setMode = (mode, scope = "demo_only", extra = {}) => db.doc("dispatch_settings/config").set({ mode, scope, periodMinutes: 15, ...extra });
+const setMode = (mode, scope = "demo_only", extra = {}) => db.doc("dispatch_settings/config").set({ mode, scope, periodMinutes: 15, useRoadNetwork: false, ...extra }); // road times are covered by dispatch.e2e (deterministic fake)
 const active = async () => (await db.collection("collection_routes").where("status", "in", ["approved", "in_progress"]).get()).docs.map((d) => ({ id: d.id, ...d.data() }));
 
 console.log("\nAutonomous dispatch — integration (emulator)");

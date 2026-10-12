@@ -25,11 +25,11 @@ describe("grouping and assignment", () => {
     expect(created[0].route.status).toBeUndefined();                          // status is set by the runner at commit time
     expect(created[0].route.orderedStops.map((o) => o.order)).toEqual([1, 2, 3]);
   });
-  it("routine grouping: too few bins are deferred, an urgent bin is dispatched immediately", () => {
-    const routine = planDispatch(state({ bins: [k("k1", 88, 0)], profiles: [driver("D1")], vehicles: [vehicle("VD1")] }), {}, { now });
+  it("urgency policy: a lone HIGH bin waits for batching, a lone CRITICAL bin (≥85%) is dispatched immediately", () => {
+    const routine = planDispatch(state({ bins: [k("k1", 80, 0)], profiles: [driver("D1")], vehicles: [vehicle("VD1")] }), {}, { now });
     expect(byType(routine, "create_assign").length).toBe(0);
     expect(byType(routine, "defer")[0].reason).toContain("الحد الأدنى");
-    const urgent = planDispatch(state({ bins: [k("k1", 97, 0)], profiles: [driver("D1")], vehicles: [vehicle("VD1")] }), {}, { now });
+    const urgent = planDispatch(state({ bins: [k("k1", 92, 0)], profiles: [driver("D1")], vehicles: [vehicle("VD1")] }), {}, { now });
     expect(byType(urgent, "create_assign").length).toBe(1);
     expect(byType(urgent, "create_assign")[0].urgent).toBe(true);
   });
@@ -45,10 +45,10 @@ describe("grouping and assignment", () => {
 describe("hard operating constraints", () => {
   const bins = [k("k1", 92, 0), k("k2", 90, 1), k("k3", 88, 2)];
   it("shift, availability and vehicle state: no eligible driver → escalated, never assigned", () => {
-    for (const [p, v] of [[driver("D1", { shiftStatus: "off_shift" }), vehicle("VD1")], [driver("D1", { availability: "unavailable" }), vehicle("VD1")], [driver("D1"), vehicle("VD1", { status: "maintenance" })], [driver("D1", { neighborhoodKeys: ["الأفق"] }), vehicle("VD1")]]) {
+    for (const [p, v, kind] of [[driver("D1", { shiftStatus: "off_shift" }), vehicle("VD1"), "no_driver"], [driver("D1", { availability: "unavailable" }), vehicle("VD1"), "no_driver"], [driver("D1"), vehicle("VD1", { status: "maintenance" }), "no_vehicle"], [driver("D1", { neighborhoodKeys: ["الأفق"] }), vehicle("VD1"), "out_of_scope"]]) {
       const plan = planDispatch(state({ bins, profiles: [p], vehicles: [v] }), {}, { now });
       expect(byType(plan, "create_assign").length).toBe(0);
-      expect(byType(plan, "escalate").some((e) => e.kind === "no_driver")).toBe(true);
+      expect(byType(plan, "escalate").map((e) => e.kind)).toContain(kind);
     }
   });
   it("capacity: a load bigger than every eligible vehicle is escalated, not assigned", () => {
@@ -150,5 +150,33 @@ describe("idempotency and scope", () => {
     expect(actionInScope({ binIds: ["a", "b"] }, m, "demo_only")).toBe(false);
     expect(actionInScope({ binIds: ["b"] }, m, "all")).toBe(true);
     expect(actionInScope({ binIds: [] }, m, "demo_only")).toBe(false);
+  });
+});
+
+describe("road network travel and routing failures", () => {
+  const bins = [k("k1", 92, 0), k("k2", 90, 1), k("k3", 88, 2)];
+  it("uses real road approach times when supplied — not geographic proximity alone", () => {
+    // D1 is geographically closer but 40 min away by road; D2 is 9 min by road.
+    const near = driver("D1"), far = driver("D2");
+    const vNear = vehicle("VD1", { depotLat: 26.358, depotLng: 43.969 }), vFar = vehicle("VD2", { depotLat: 26.33, depotLng: 43.93 });
+    const st = state({ bins, depot: null, profiles: [near, far], vehicles: [vNear, vFar] });
+    const air = planDispatch(st, {}, { now });
+    expect(air.roadQueries.length).toBe(1);
+    expect(byType(air, "create_assign")[0].driverId).toBe("D1");
+    const road = planDispatch(st, {}, { now, routingStatus: "ok", roadTravel: { n1: { D1: { distanceKm: 25, durationMin: 40 }, D2: { distanceKm: 6, durationMin: 9 } } } });
+    const a = byType(road, "create_assign")[0];
+    expect(a.driverId).toBe("D2"); expect(a.travelSource).toBe("osrm"); expect(a.routingNote).toContain("شبكة الطرق");
+  });
+  it("routing service down → estimate is used and labelled; no coordinates at all → routing_failed exception", () => {
+    const down = planDispatch(state({ bins, profiles: [driver("D1")], vehicles: [vehicle("VD1")] }), {}, { now, routingStatus: "failed" });
+    expect(byType(down, "create_assign")[0].routingNote).toContain("تعذر الاتصال بخدمة المسارات");
+    const noGeo = bins.map((b) => ({ ...b, lat: null, lng: null }));
+    const blind = planDispatch(state({ bins: noGeo, depot: null, profiles: [driver("D1")], vehicles: [vehicle("VD1", { depotLat: null, depotLng: null })] }), {}, { now });
+    expect(byType(blind, "create_assign").length).toBe(0);
+    expect(byType(blind, "escalate").map((e) => e.kind)).toContain("routing_failed");
+  });
+  it("no GPS: the driver's vehicle depot is used as origin and the reason says so", () => {
+    const plan = planDispatch(state({ bins, depot: null, profiles: [driver("D1", { lastLocation: null })], vehicles: [vehicle("VD1")] }), {}, { now });
+    expect(byType(plan, "create_assign")[0].reason).toContain("مستودع المركبة");
   });
 });

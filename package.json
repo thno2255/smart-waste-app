@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:rules": "npm i --no-save --legacy-peer-deps @firebase/rules-unit-testing && firebase emulators:exec --only firestore --project swm-rules-test \"node tests/rules/firestore.rules.test.mjs\"",
     "test:integration": "firebase emulators:exec --only firestore,auth --project swm-dispatch-test \"node tests/integration/dispatch.integration.test.mjs\"",
-    "dispatch:worker": "node scripts/dispatchWorker.mjs"
+    "dispatch:worker": "node scripts/dispatchWorker.mjs",
+    "test:e2e": "firebase emulators:exec --only firestore,auth --project swm-dispatch-e2e \"node tests/integration/dispatch.e2e.test.mjs\""
   },
   "dependencies": {
     "firebase": "^12.12.0",

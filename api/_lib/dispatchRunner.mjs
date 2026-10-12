@@ -18,6 +18,28 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { planDispatch, actionInScope, cheapestInsertion, driverBlocker, pendingStops, DEFAULT_DISPATCH_SETTINGS, ESCALATION_LABELS } from "../../src/autoDispatchEngine.js";
 import { makeBinContext } from "../../src/binContext.js";
+import { driverOrigin } from "../../src/assignmentEngine.js";
+import { fetchRoadMatrix } from "../../src/roadMatrix.js";
+
+/**
+ * Real road approach times (OSRM table): every driver origin (live GPS if fresh, else vehicle depot,
+ * else city default) → the first stop of every grouped proposal. Returns { roadTravel, routingStatus }.
+ */
+export async function computeRoadTravel(state, roadQueries, { now = Date.now(), roadMatrix = fetchRoadMatrix } = {}) {
+  const stops = (roadQueries || []).filter((q) => q.firstStop?.lat != null);
+  if (stops.length === 0) return { roadTravel: null, routingStatus: "skipped" };
+  const origins = state.profiles.map((p) => ({ uid: p.uid, o: driverOrigin(p, state.vehicles.find((v) => v.id === p.vehicleId), { now, fallback: state.depot }) })).filter((x) => x.o?.lat != null).slice(0, 40);
+  if (origins.length === 0) return { roadTravel: null, routingStatus: "skipped" };
+  let matrix = null;
+  try { matrix = await roadMatrix([...origins.map((x) => x.o), ...stops.map((q) => q.firstStop)]); } catch { matrix = null; }
+  if (!matrix?.durations) return { roadTravel: null, routingStatus: "failed" };
+  const roadTravel = {};
+  stops.forEach((q, j) => {
+    roadTravel[q.neighborhoodId] = {};
+    origins.forEach((x, i) => { const d = matrix.durations[i]?.[origins.length + j]; const km = matrix.distances?.[i]?.[origins.length + j]; if (d != null && d < 1e5) roadTravel[q.neighborhoodId][x.uid] = { durationMin: Math.round(d), distanceKm: km != null && km < 1e5 ? Math.round(km * 10) / 10 : null }; });
+  });
+  return { roadTravel, routingStatus: "ok" };
+}
 
 export const SETTINGS_PATH = ["dispatch_settings", "config"];
 const ACTIVE = ["approved", "in_progress"];
@@ -67,7 +89,7 @@ const decisionBase = (a, ctx) => ({
   binIds: a.binIds || [], routeId: a.routeId || (a.type === "create_assign" ? `auto_${a.key}` : null), routeName: a.routeName || a.route?.routeName || a.proposal?.routeName || null,
   driverId: a.driverId || null, driverName: a.driverName || null, vehicleId: a.vehicleId || null, vehicleNumber: a.vehicleNumber || null,
   fromDriverId: a.fromDriverId || null, alternatives: a.alternatives || [], approachMin: a.approachMin ?? null, detourKm: a.detourKm ?? null, addedMin: a.addedMin ?? null,
-  urgent: !!a.urgent, runId: ctx.runId, trigger: ctx.trigger, mode: ctx.mode, demo: ctx.demo, updatedAt: iso(ctx.now),
+  urgent: !!a.urgent, travelSource: a.travelSource || null, routingNote: a.routingNote || null, runId: ctx.runId, trigger: ctx.trigger, mode: ctx.mode, demo: ctx.demo, updatedAt: iso(ctx.now),
 });
 
 /** Observe mode (or out-of-scope in auto): record the decision once, refresh it on later cycles. */
@@ -179,7 +201,7 @@ async function execute(db, a, ctx) {
  * @param {{trigger?:string, municipalityId?:string|null, now?:number, force?:boolean, actor?:{uid,name}|null, settingsOverride?:object}} opts
  *   trigger: "cron" | "heartbeat" (periodic, respects periodMinutes) | "critical_reading" | "simulator_event" | "manual" (always run)
  */
-export async function runDispatchCycle(db, { trigger = "manual", municipalityId = null, now = Date.now(), force = false, actor = null, settingsOverride = null } = {}) {
+export async function runDispatchCycle(db, { trigger = "manual", municipalityId = null, now = Date.now(), force = false, actor = null, settingsOverride = null, roadMatrix = fetchRoadMatrix } = {}) {
   const settings = { ...(await readDispatchSettings(db)), ...(settingsOverride || {}) };
   if (settings.mode === "off") return { skipped: "off", settings };
   const periodic = trigger === "cron" || trigger === "heartbeat";
@@ -191,9 +213,15 @@ export async function runDispatchCycle(db, { trigger = "manual", municipalityId 
   for (const mid of mids) {
     const state = await loadMunicipalityState(db, mid, now);
     if (state.bins.length === 0) continue;
-    const plan = planDispatch(state, settings, { now });
+    // Pass 1 groups the bins; pass 2 re-decides drivers with real road approach times (or a labelled fallback).
+    let plan = planDispatch(state, settings, { now });
+    let routing = { routingStatus: "skipped" };
+    if (settings.useRoadNetwork !== false && plan.roadQueries?.length) {
+      routing = await computeRoadTravel(state, plan.roadQueries, { now, roadMatrix });
+      plan = planDispatch(state, settings, { now, roadTravel: routing.roadTravel, routingStatus: routing.routingStatus });
+    }
     const binsById = new Map(state.bins.map((b) => [b.id, b]));
-    const tally = { ...plan.summary, executed: 0, observed: 0, rejected: 0, duplicates: 0, outOfScope: 0, escalationsOpen: 0 };
+    const tally = { ...plan.summary, routingStatus: routing.routingStatus, executed: 0, observed: 0, rejected: 0, duplicates: 0, outOfScope: 0, escalationsOpen: 0 };
     for (const a of plan.actions) {
       if (a.type === "defer") continue; // counted in the summary; not a decision document
       const inScope = actionInScope(a, binsById, settings.scope);

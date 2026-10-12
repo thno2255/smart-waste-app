@@ -43,13 +43,14 @@ export const DEFAULT_DISPATCH_SETTINGS = {
   mode: "observe",            // off | observe | auto
   scope: "demo_only",         // demo_only | all
   periodMinutes: 15,          // periodic cycle spacing (urgent cases bypass it)
-  minBinsPerRoute: 3,         // routine grouping: don't send a truck for fewer bins…
-  urgentFillPct: 95,          // …unless one of them is at/above this fill (immediate handling)
+  minBinsPerRoute: 3,         // routine grouping (high-priority / predicted bins): don't send a truck for fewer bins…
+  urgentFillPct: THRESHOLDS.fillCriticalPct, // …but a CRITICAL bin (≥ this fill) is handled immediately (urgency policy)
   maxApproachMin: 30,         // a driver further than this (approach time) is not auto-assigned
   maxStopsPerRoute: 18,       // hard cap per route
   insertMaxKm: 1,             // a bin may join an existing route if it is this close to a pending stop…
   insertMaxAddedMin: 15,      // …and the detour + service adds at most this many minutes
   allowInsertInProgress: true,
+  useRoadNetwork: true,       // approach time over the road network (OSRM); falls back to a labelled estimate
   notStartedEscalateMin: 90,  // an approved route not started after this long is escalated
 };
 
@@ -67,6 +68,9 @@ export const ESCALATION_LABELS = {
   no_driver: "لا سائق مؤهل داخل البلدية",
   capacity: "سعة المركبات لا تستوعب الجولة",
   too_far: "أقرب سائق مؤهل أبعد من الحد المسموح",
+  no_vehicle: "لا توجد مركبة صالحة للسائقين المتاحين",
+  out_of_scope: "الحي خارج نطاق السائقين المتاحين",
+  routing_failed: "تعذر حساب زمن الوصول",
   driver_unavailable: "سائق جولة معتمدة لم يعد متاحًا",
   vehicle_down: "مركبة جولة جارية متعطلة",
   not_started: "جولة معتمدة لم تبدأ في الوقت المتوقع",
@@ -132,7 +136,19 @@ export function driverBlocker(route, { profiles = [], vehicles = [] }) {
  * @param {object} settings  merged with DEFAULT_DISPATCH_SETTINGS
  * @param {{now?: number}} [opts]
  */
-export function planDispatch(state, settings = {}, { now = Date.now() } = {}) {
+/**
+ * Urgency policy (documented, configurable):
+ *   • CRITICAL bin (fill ≥ urgentFillPct, default = THRESHOLDS.fillCriticalPct) → handled in the SAME cycle,
+ *     triggered immediately by a critical reading; inserted into a nearby route or sent as its own route.
+ *   • HIGH / predicted-soon bins → batched: a new route needs ≥ minBinsPerRoute bins, otherwise they wait
+ *     for the next periodic cycle (periodMinutes) or join a passing route.
+ *   • Thermal / unreliable-sensor bins → never automatic; escalated to operations.
+ *
+ * @param {object} [opts.roadTravel]  { [neighborhoodId]: { [driverUid]: {distanceKm, durationMin} } } — real road
+ *   approach legs computed by the caller (OSRM). Missing entries fall back to an air-distance estimate.
+ * @param {"ok"|"failed"|"skipped"} [opts.routingStatus]
+ */
+export function planDispatch(state, settings = {}, { now = Date.now(), roadTravel = null, routingStatus = "skipped" } = {}) {
   const S = { ...DEFAULT_DISPATCH_SETTINGS, ...settings };
   const { municipalityId: mid, neighborhoods = [], bins = [], readingsByBin = {}, contextFor = () => ({}), profiles = [], vehicles = [], incidents = [] } = state;
   const depot = state.depot?.lat != null ? state.depot : null;
@@ -251,6 +267,7 @@ export function planDispatch(state, settings = {}, { now = Date.now() } = {}) {
   // ── 4+5. Group the rest per neighborhood and assign.
   const remaining = needs.filter((s) => !insertedIds.has(s.bin.id));
   const proposals = recommendRoutes(neighborhoods, remaining.map(({ bin, priority }) => ({ bin, priority })));
+  const roadQueries = []; // first stop of every grouped proposal → the caller fetches real road approach times
   for (const prop of proposals) {
     const nid = prop.neighborhoodIds?.[0];
     const propBins = prop.binIds.map((id) => binById.get(id)).filter(Boolean);
@@ -264,14 +281,26 @@ export function planDispatch(state, settings = {}, { now = Date.now() } = {}) {
       .slice(0, S.maxStopsPerRoute);
     const capped = prop.binIds.length - stops.length;
     const waste = stops.reduce((a, x) => a + x.wasteLiters, 0);
-    const rec = rankDriverCandidates({ ...prop, orderedStops: stops, estimatedWasteLiters: waste }, { profiles, vehicles, routes: active(), neighborhoodName: nName(nid), defaultOrigin: depot, now });
+    roadQueries.push({ neighborhoodId: nid, firstStop: stops.find((x) => x.lat != null) || null });
+    const rec = rankDriverCandidates({ ...prop, orderedStops: stops, estimatedWasteLiters: waste }, { profiles, vehicles, routes: active(), neighborhoodName: nName(nid), defaultOrigin: depot, now, travelByDriver: roadTravel?.[nid] || {} });
     const top = rec.recommended;
+    // Why nobody qualifies — so the exception names the real blocker.
+    const covering = rec.candidates.filter((c) => !c.verdict.reasons.includes("خارج نطاق التغطية"));
+    // Among covering drivers who are actually working (active account, on shift, available), is the vehicle the only blocker?
+    const working = covering.filter((c) => !c.verdict.reasons.some((r) => /خارج المناوبة|غير متاح|الحساب/.test(r)));
+    const vehicleOnly = working.length > 0 && working.every((c) => c.verdict.reasons.length > 0 && c.verdict.reasons.every((r) => /مركبة|المركبة/.test(r)));
     const key = `new_${mid}_${nid}_${stableHash(stops.map((x) => `${x.binId}:${bucketOf(binById.get(x.binId) || {})}`).sort().join(","))}`;
     const alternatives = rec.candidates.filter((c) => c.profile.uid !== top?.driverId).slice(0, 3).map((c) => ({ driverId: c.profile.uid, driverName: c.profile.fullName, eligible: c.verdict.eligible, approachMin: c.approachMin, why: (c.verdict.eligible ? c.flags : c.reasons).join("، ") || "تقييم أقل" }));
     const escalateWith = (kind, reason) => actions.push({ type: "escalate", kind, key: `esc_${kind}_${key}`, neighborhoodId: nid, binIds: stops.map((x) => x.binId), reason, alternatives,
-      suggestion: kind === "no_driver" ? "أسند يدويًا بمبرر، أو اطلب دعمًا من الأمانة (نقل الموارد يتطلب اعتمادها)" : kind === "capacity" ? "قسّم الجولة أو أضف رحلة تفريغ" : "راجع موقع السائقين أو أسند يدويًا",
+      suggestion: ({ no_driver: "أسند يدويًا بمبرر، أو اطلب دعمًا من الأمانة (نقل الموارد يتطلب اعتمادها)", out_of_scope: "إسناد استثنائي بمبرر من موظف العمليات، أو حدّث نطاق تغطية سائق", no_vehicle: "اربط مركبة صالحة بسائق مغطٍّ للحي", capacity: "قسّم الجولة أو أضف رحلة تفريغ", routing_failed: "حدّث موقع السائق أو مستودع المركبة، أو أسند يدويًا" })[kind] || "راجع موقع السائقين أو أسند يدويًا",
       proposal: { routeName: `جولة تلقائية - ${nName(nid)}`, stops: stops.length, wasteLiters: waste } });
-    if (!top) { escalateWith("no_driver", `${nName(nid)}: ${stops.length} حاوية تحتاج جولة — ${rec.warnings[0] || "لا سائق مؤهل"}`); continue; }
+    if (!top) {
+      if (rec.candidates.length > 0 && covering.length === 0) escalateWith("out_of_scope", `${nName(nid)}: ${stops.length} حاوية تحتاج جولة — لا يغطي أي سائق متاح هذا الحي (الإسناد خارج النطاق يحتاج تفويضًا)`);
+      else if (vehicleOnly) escalateWith("no_vehicle", `${nName(nid)}: ${stops.length} حاوية تحتاج جولة — السائقون المتاحون للحي بلا مركبة صالحة (${working.map((c) => c.verdict.reasons.join("، ")).slice(0, 2).join(" · ")})`);
+      else escalateWith("no_driver", `${nName(nid)}: ${stops.length} حاوية تحتاج جولة — ${rec.warnings[0] || "لا سائق مؤهل"}`);
+      continue;
+    }
+    if (top.approachMin == null) { escalateWith("routing_failed", `${nName(nid)}: لا يمكن حساب زمن وصول ${top.driverName} (لا موقع للسائق ولا مستودع ولا إحداثيات للتوقفات)`); continue; }
     if (top.capacityShortfall) { escalateWith("capacity", `${nName(nid)}: حمولة الجولة ${waste} لتر تتجاوز السعة المتبقية لكل مركبة مؤهلة`); continue; }
     if (top.approachMin != null && top.approachMin > S.maxApproachMin) { escalateWith("too_far", `${nName(nid)}: أقرب سائق مؤهل (${top.driverName}) يحتاج ${top.approachMin} د للوصول، والحد ${S.maxApproachMin} د`); continue; }
     const vehicle = vehicles.find((v) => v.id === top.vehicleId);
@@ -289,6 +318,7 @@ export function planDispatch(state, settings = {}, { now = Date.now() } = {}) {
     };
     actions.push({ type: "create_assign", key, neighborhoodId: nid, binIds: routeDoc.binIds, route: routeDoc, urgent: urgent.length > 0,
       driverId: top.driverId, driverName: top.driverName, vehicleId: top.vehicleId, vehicleNumber: top.vehicleNumber, approachMin: top.approachMin, travelSource: top.travelSource, score: top.score, confidence: top.confidence,
+      routingNote: top.travelSource === "osrm" ? "زمن الوصول عبر شبكة الطرق" : routingStatus === "failed" ? "تعذر الاتصال بخدمة المسارات — زمن الوصول تقدير بالمسافة الجوية" : "زمن الوصول تقدير بالمسافة الجوية",
       alternatives, nearestOverridden: top.nearestOverridden || null,
       reason: `${routeDoc.routeName}: ${routeDoc.binIds.length} حاوية (${prop.reasons.slice(0, 2).join("، ")})${urgent.length ? ` — عاجلة: ${urgent.map((b) => b.name).join("، ")}` : ""} ← ${top.driverName} على ${top.vehicleNumber}: ${top.reason}${capped > 0 ? ` · ${capped} حاوية فوق حد التوقفات تُترك للدورة التالية` : ""}${deferredIds.length ? ` · ${deferredIds.length} مؤجلة لتجاوز السعة` : ""}` });
     // the chosen driver now holds an active route in the working state
@@ -297,7 +327,7 @@ export function planDispatch(state, settings = {}, { now = Date.now() } = {}) {
 
   const count = (t) => actions.filter((a) => a.type === t).length;
   return {
-    municipalityId: mid, at: new Date(now).toISOString(), settings: S, actions,
+    municipalityId: mid, at: new Date(now).toISOString(), settings: S, actions, roadQueries, routingStatus,
     summary: { binsScored: scored.length, needCollection: needs.length, lockedOnRoutes: locked.size, inserted: count("insert"), created: count("create_assign"), reassigned: count("reassign"), released: count("release"), escalated: count("escalate"), deferred: count("defer"),
       driversFreeNow: profiles.filter((p) => p.shiftStatus === "on_shift" && p.availability !== "unavailable" && (!p.accountStatus || p.accountStatus === "active") && isUsableVehicle(vehicles.find((v) => v.id === p.vehicleId)) && !active().some((r) => r.driverId === p.uid)).length },
   };

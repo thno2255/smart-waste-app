@@ -28,6 +28,7 @@ import {
   ChevronRight, X, BellRing, ShieldAlert,
   Wifi, WifiOff, Battery, Search, Filter, Navigation, Route as RouteIcon,
   Layers, Map as MapGlyph,
+ Radar as RadarIcon, Waypoints, UserCheck, ArrowLeftRight, ChartColumn, Building2, ArrowLeft, LogIn,
 } from "lucide-react";
 
 import { MapContainer, TileLayer, GeoJSON, CircleMarker, Polyline, Polygon, Popup, Marker, useMap } from "react-leaflet";
@@ -186,7 +187,7 @@ import { MUNICIPALITIES, municipalityById, municipalityForNeighborhood, defaultA
 import { parseSteps, projectOnRoute, nextManeuver, offRouteDecision, arrivedAtStop, fixQuality, formatDistanceAr, distanceM, shouldPersistLocation } from "./navigation";
 import { INCIDENT_TYPES, canConfirmCollection, routeProgress, nextStopFor, reinstateSkippedStop, buildConfirmation } from "./executionEngine";
 import { createOfflineQueue } from "./offlineQueue";
-import { DEFAULT_SIM_CONFIG, SIM_EVENTS } from "./simulation/simulationEngine";
+import { DEFAULT_SIM_CONFIG, SIM_EVENTS, generateScenario } from "./simulation/simulationEngine";
 import { buildCollectionPlan, explainRoute, suggestAdditions } from "./collectionPlanner";
 import { makeThermalAlertFor, makeBinContext } from "./binContext";
 import { DEFAULT_DISPATCH_SETTINGS, DISPATCH_MODES, DISPATCH_SCOPES, ACTION_LABELS, ESCALATION_LABELS } from "./autoDispatchEngine";
@@ -1101,6 +1102,18 @@ const EmptyState = ({ icon, title, desc }) => (
 );
 
 
+/** Turns technical errors (Firebase codes, HTTP, network) into a short Arabic message the user can act on. */
+const friendlyError = (e) => {
+  const code = String(e?.code || ""), msg = String(e?.message || e || "");
+  if (/permission-denied|Missing or insufficient permissions|PERMISSION_DENIED|HTTP 403|Not allowed|Outside your municipality/i.test(code + msg)) return "ليست لديك صلاحية لهذا الإجراء.";
+  if (/unauthenticated|HTTP 401|Invalid token|Missing Authorization|غير مسجل الدخول/i.test(code + msg)) return "انتهت الجلسة — سجّل الدخول مجددًا ثم أعد المحاولة.";
+  if (/unavailable|network|Failed to fetch|timeout|deadline-exceeded|HTTP 5\d\d/i.test(code + msg)) return "تعذر الاتصال بالخادم — تحقق من الاتصال ثم أعد المحاولة.";
+  if (/not-found/i.test(code)) return "العنصر المطلوب غير موجود — ربما حُذف أو تغيّر.";
+  if (/[\u0600-\u06FF]/.test(msg)) return msg; // already an Arabic, user-facing message from our own code
+  console.error(e);
+  return "حدث خطأ غير متوقع — أعد المحاولة، وإن تكرر أبلغ مسؤول النظام.";
+};
+
 // ======================== DESIGN SYSTEM (shared primitives) ========================
 // One vocabulary for every page: spacing 4/8/12/16/24 · type 11.5 meta / 13 body / 15 section / 18 page / 22 numbers
 // · radius 10–12 · status colours only for states (never decoration) · no gradients or motion.
@@ -1256,9 +1269,9 @@ function demoPositionForBin(bin, feature) {
 const MAP_FILTERS = [
   { key: "all", label: "عرض الكل" },
   { key: "critical", label: "الحاويات الحرجة" },
-  { key: "offline", label: "Offline" },
+  { key: "offline", label: "مستشعرات غير متصلة" },
   { key: "thermal", label: "تنبيه حراري" },
-  { key: "needsCollection", label: "تحتاج جمع" },
+  { key: "needsCollection", label: "تحتاج جمعًا" },
 ];
 
 const MAP_LEGEND = [
@@ -1830,7 +1843,7 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
               {supportMsg && <div style={{ fontSize: 12, color: C.text, marginTop: 6 }}>{supportMsg}</div>}
               {open.length > 0 && <div style={{ fontSize: 12, color: C.info, marginTop: 6 }}>طلب دعم مفتوح لدى الأمانة: {open.map((r) => r.need).join("، ")}</div>}
               {can(loggedInUser?.role, "support.request") && open.length === 0 && (
-                <button disabled={supportBusy} onClick={async () => { const need = window.prompt("ما المطلوب من الأمانة؟ (مثال: مركبة إضافية لمناوبة اليوم)", "مركبة إضافية مع سائق"); if (!need) return; setSupportBusy(true); try { await createSupportRequest({ municipalityId: mid, need, note: "", pressureIndex: myPressure.index, pressureLevel: myPressure.level, evidence: myPressure.reasons, critical: myPressure.critical, readyDrivers: myPressure.readyDrivers, usableVehicles: myPressure.usableVehicles }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); await writeAuditLog("support_request_created", loggedInUser?.uid, loggedInUser?.name, { municipalityId: mid, need, pressureIndex: myPressure.index }); setSupportMsg("📨 أُرسل طلب الدعم إلى الأمانة مع أدلة الضغط التشغيلي"); } catch (e) { setSupportMsg("❌ " + (e?.message || e)); } finally { setSupportBusy(false); } }} style={{ ...smallBtn(C.warning, true), color: "#fff", marginTop: 8 }}>📨 طلب دعم من الأمانة</button>
+                <button disabled={supportBusy} onClick={async () => { const need = window.prompt("ما المطلوب من الأمانة؟ (مثال: مركبة إضافية لمناوبة اليوم)", "مركبة إضافية مع سائق"); if (!need) return; setSupportBusy(true); try { await createSupportRequest({ municipalityId: mid, need, note: "", pressureIndex: myPressure.index, pressureLevel: myPressure.level, evidence: myPressure.reasons, critical: myPressure.critical, readyDrivers: myPressure.readyDrivers, usableVehicles: myPressure.usableVehicles }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); await writeAuditLog("support_request_created", loggedInUser?.uid, loggedInUser?.name, { municipalityId: mid, need, pressureIndex: myPressure.index }); setSupportMsg("📨 أُرسل طلب الدعم إلى الأمانة مع أدلة الضغط التشغيلي"); } catch (e) { setSupportMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setSupportBusy(false); } }} style={{ ...smallBtn(C.warning, true), color: "#fff", marginTop: 8 }}>📨 طلب دعم من الأمانة</button>
               )}
             </Card>
           ); })()}
@@ -1872,7 +1885,7 @@ const MunicipalitiesPage = ({ neighborhoods = [], bins = [], fireSensors = [], r
 const MapPage = ({ neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], profiles = [], loading, onViewBins, onAddToRoute, onOpenRoute, initialSelectedKey = null }) => {
   if (loading) return <EmptyState icon="⏳" title="جاري تحميل الخريطة…" />;
   if (neighborhoods.length === 0) {
-    return <EmptyState icon="🗺️" title="لا توجد أحياء مسجلة بعد" desc="شغّل ترحيل البيانات من صفحة الإعدادات لإنشاء الأحياء والحاويات من بيانات المحطات القديمة." />;
+    return <EmptyState icon="🗺️" title="لا توجد أحياء مسجلة بعد" desc="تُهيّأ الأحياء والحاويات من «الإعدادات ← البلديات والبيانات والتكامل»." />;
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -2020,6 +2033,35 @@ const ImpactCard = ({ impact, compact = false, accent = C.accent }) => {
   );
 };
 
+/** Compact dispatch status for the operations dashboard: summary first, details one click away. */
+const DispatchSummary = ({ settings, decisions = [], routes = [], onOpen, onOpenRoute }) => {
+  const { runs } = useDispatchRuns(true, 5);
+  const s = { ...DEFAULT_DISPATCH_SETTINGS, ...(settings || {}) };
+  const lastRun = runs[0];
+  const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+  const autoToday = routes.filter((r) => r.dispatch?.auto && String(r.dispatch.at || r.createdAt || "") >= dayStart.toISOString());
+  const by = (st) => autoToday.filter((r) => r.status === st).length;
+  const pending = decisions.filter((d) => d.type === "escalate" && d.status === "open");
+  const recent = decisions.filter((d) => d.status === "executed").slice(0, 3);
+  return (
+    <Section title="الإسناد التلقائي" actions={<><DispatchModeBadge settings={settings} />{onOpen && <Btn variant="ghost" onClick={onOpen}>التفاصيل</Btn>}</>}>
+      <KpiRow>
+        <KpiTile label="آخر تشغيل ناجح" value={lastRun ? getReadingAgeLabel(lastRun.finishedAt || lastRun.startedAt) : "—"} tone={lastRun ? "neutral" : "warning"} hint={`دوري كل ${s.periodMinutes} د · الحرجة فورًا`} />
+        <KpiTile label="جولات أُسندت تلقائيًا اليوم" value={autoToday.length} tone="ok" hint={autoToday.length ? `معتمدة ${by("approved")} · جارية ${by("in_progress")} · مكتملة ${by("completed")}` : null} />
+        <KpiTile label="تنتظر معالجة استثنائية" value={pending.length} tone={pending.length ? "danger" : "ok"} onClick={onOpen} />
+      </KpiRow>
+      {s.mode !== "auto" && <div style={{ fontSize: FS.meta, color: C.info, marginTop: SP.sm }}>{s.mode === "observe" ? "وضع المراقبة: يحسب المحرك القرارات ويسجلها دون تنفيذ." : "الإسناد التلقائي متوقف — الإسناد يدوي."}</div>}
+      {recent.length > 0 && (
+        <Disclosure summary="أسباب آخر الإسنادات">
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {recent.map((d) => <div key={d.id} style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}><b style={{ color: C.text }}>{d.routeName}</b> ← {d.driverName} · {getReadingAgeLabel(d.executedAt)}{onOpenRoute && d.routeId ? <> · <button onClick={() => onOpenRoute(d.routeId)} style={{ background: "none", border: "none", color: C.info, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 12, padding: 0 }}>فتح</button></> : null}<div>{d.reason}</div></div>)}
+          </div>
+        </Disclosure>
+      )}
+    </Section>
+  );
+};
+
 // ======================== DASHBOARD (operations: attention → few KPIs → map → details on demand) ========================
 const DashboardPage = ({ alerts = [], neighborhoods = [], bins = [], fireSensors = [], recentReadings = [], routes = [], citizenReports = [], profiles = [], incidents = [], loggedInUser, loadingBins, loadingNeighborhoods, onViewBins, onOpenRoute, onShowOnMap, onNavigate }) => {
   const scope = scopeFor(loggedInUser);
@@ -2052,11 +2094,11 @@ const DashboardPage = ({ alerts = [], neighborhoods = [], bins = [], fireSensors
 
   // ── What needs attention, ranked: dispatch exceptions → uncovered demand → safety → field → data quality → citizens.
   const attention = [];
-  for (const d of escalations.slice(0, 6)) attention.push({ id: "esc_" + d.id, tone: ["thermal", "vehicle_down", "driver_unavailable"].includes(d.kind) ? "danger" : "warning", title: `${ESCALATION_LABELS[d.kind] || d.kind}${d.routeName ? ` — ${d.routeName}` : ""}`, meta: `رفعه الإسناد الذاتي · ${getReadingAgeLabel(d.createdAt)}`, detail: <>{d.reason}{d.suggestion && <div style={{ color: C.text }}><b>المقترح:</b> {d.suggestion}</div>}</>, actionLabel: "معالجة", onAction: () => go("control", { tab: "dispatch" }) });
-  if (escalations.length > 6) attention.push({ id: "esc_more", tone: "warning", title: `${escalations.length - 6} حالة أخرى من الإسناد الذاتي`, actionLabel: "عرضها", onAction: () => go("control", { tab: "dispatch" }) });
+  for (const d of escalations.slice(0, 6)) attention.push({ id: "esc_" + d.id, tone: ["thermal", "vehicle_down", "driver_unavailable"].includes(d.kind) ? "danger" : "warning", title: `${ESCALATION_LABELS[d.kind] || d.kind}${d.routeName ? ` — ${d.routeName}` : ""}`, meta: `رفعه الإسناد التلقائي · ${getReadingAgeLabel(d.createdAt)}`, detail: <>{d.reason}{d.suggestion && <div style={{ color: C.text }}><b>المقترح:</b> {d.suggestion}</div>}</>, actionLabel: "معالجة", onAction: () => go("control", { tab: "dispatch" }) });
+  if (escalations.length > 6) attention.push({ id: "esc_more", tone: "warning", title: `${escalations.length - 6} حالة أخرى من الإسناد التلقائي`, actionLabel: "عرضها", onAction: () => go("control", { tab: "dispatch" }) });
   for (const r of thermal) attention.push({ id: "th_" + r.group.key, tone: "danger", title: `تنبيه حراري — ${r.group.name}`, meta: "لا تُجمع الحاويات الساخنة بمكبس قبل تقييم الخطر", actionLabel: "التنبيهات الحرارية", onAction: () => go("fire") });
   for (const r of withoutRoute.slice(0, 4)) attention.push({ id: "nr_" + r.group.key, tone: r.priority.tier === "critical" ? "danger" : "warning", title: `${r.group.name}: ${r.eligibleBins.length} حاوية تحتاج جمعًا بلا جولة`, meta: r.priority.reasons?.[0] || "", detail: r.eligibleBins.slice(0, 8).map((s) => `${s.bin.name} (${s.bin.lastFillLevelPercent ?? "—"}%)`).join("، "),
-    actions: onShowOnMap ? <Btn variant="ghost" onClick={() => onShowOnMap(r.group.key)}>على الخريطة</Btn> : null, actionLabel: dispatchAuto ? "الإسناد الذاتي" : "إنشاء جولة", onAction: () => go("control", { tab: dispatchAuto ? "dispatch" : "routes" }) });
+    actions: onShowOnMap ? <Btn variant="ghost" onClick={() => onShowOnMap(r.group.key)}>على الخريطة</Btn> : null, actionLabel: dispatchAuto ? "الإسناد التلقائي" : "إنشاء جولة", onAction: () => go("control", { tab: dispatchAuto ? "dispatch" : "routes" }) });
   if (withoutRoute.length > 4) attention.push({ id: "nr_more", tone: "warning", title: `${withoutRoute.length - 4} حي آخر يحتاج جمعًا بلا جولة`, actionLabel: "الجولات", onAction: () => go("control") });
   if (!dispatchAuto && suggested.length) attention.push({ id: "sugg", tone: "info", title: `${suggested.length} جولة مقترحة بانتظار الاعتماد والإسناد`, actionLabel: "مراجعة", onAction: () => go("control", { tab: "routes" }) });
   if (openIncidents.length) attention.push({ id: "inc", tone: "danger", title: `${openIncidents.length} بلاغ ميداني مفتوح من السائقين`, detail: openIncidents.slice(0, 6).map((i) => `${(INCIDENT_TYPES[i.type] || {}).label || i.type} — ${i.routeName || ""}`).join(" · "), actionLabel: "متابعة الأسطول", onAction: () => go("drivers", { tab: "live" }) });
@@ -2085,6 +2127,8 @@ const DashboardPage = ({ alerts = [], neighborhoods = [], bins = [], fireSensors
         <KpiTile label="سائقون متاحون الآن" value={freeDrivers} tone={freeDrivers ? "ok" : "warning"} onClick={() => go("drivers", { tab: "live" })} />
         <KpiTile label="مستشعرات غير متصلة" value={offlineBins.length} tone={offlineBins.length ? "warning" : "ok"} hint={avgFill != null ? `متوسط الامتلاء ${avgFill}%` : null} />
       </KpiRow>
+
+      <DispatchSummary settings={dispatchSettings} decisions={decisions} routes={routes} onOpen={() => go("control", { tab: "dispatch" })} onOpenRoute={onOpenRoute} />
 
       <Section title="الخريطة التشغيلية" actions={<Btn variant="ghost" onClick={() => go("map")}>فتح بالحجم الكامل</Btn>}>
         <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={profiles} height={360} compact onViewBins={onViewBins} onOpenRoute={onOpenRoute} />
@@ -2147,7 +2191,7 @@ const NEIGHBORHOOD_FILTERS = [
   { key: "medium",   label: "يحتاج متابعة" },
   { key: "high",     label: "أولوية مرتفعة" },
   { key: "critical", label: "حرج" },
-  { key: "offline",  label: "بلا بيانات / Offline" },
+  { key: "offline",  label: "بلا بيانات / غير متصلة" },
 ];
 
 const NeighborhoodsPage = ({ neighborhoods = [], bins = [], fireSensors = [], routes = [], citizenReports = [], loading, onViewBins, onOpenRoute, onShowOnMap }) => {
@@ -2188,7 +2232,7 @@ const NeighborhoodsPage = ({ neighborhoods = [], bins = [], fireSensors = [], ro
 
   if (loading) return <EmptyState icon="⏳" title="جاري تحميل الأحياء…" />;
   if (neighborhoods.length === 0) {
-    return <EmptyState icon="🏘️" title="لا توجد أحياء مسجلة بعد" desc="شغّل ترحيل البيانات من صفحة الإعدادات لإنشاء الأحياء من بيانات المحطات القديمة." />;
+    return <EmptyState icon="🏘️" title="لا توجد أحياء مسجلة بعد" desc="تُهيّأ الأحياء والحاويات من «الإعدادات ← البلديات والبيانات والتكامل»." />;
   }
 
   return (
@@ -2262,8 +2306,8 @@ const BIN_FILTERS = [
   { key: "medium",   label: "يحتاج متابعة" },
   { key: "high",     label: "مرتفع" },
   { key: "critical", label: "حرج" },
-  { key: "offline",  label: "Offline" },
-  { key: "fault",    label: "Fault" },
+  { key: "offline",  label: "غير متصلة" },
+  { key: "fault",    label: "خلل بالمستشعر" },
 ];
 
 /**
@@ -2416,7 +2460,7 @@ const BinsPage = ({ neighborhoods = [], bins = [], routes = [], fireSensors = []
 
   if (loading) return <EmptyState icon="⏳" title="جاري تحميل الحاويات…" />;
   if (bins.length === 0) {
-    return <EmptyState icon="📦" title="لا توجد حاويات مسجلة بعد" desc="شغّل ترحيل البيانات من صفحة الإعدادات لإنشاء الحاويات من بيانات المحطات القديمة." />;
+    return <EmptyState icon="📦" title="لا توجد حاويات مسجلة بعد" desc="تُهيّأ الأحياء والحاويات من «الإعدادات ← البلديات والبيانات والتكامل»." />;
   }
 
   return (
@@ -2645,7 +2689,7 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
               <StatCard title="جولات نشطة" value={activeCount} icon={<Truck size={20} color="#fff" />} gradient="linear-gradient(135deg, #8b5cf6, #6d28d9)" />
               <StatCard title="جولات مكتملة" value={completedCount} icon={<CheckCircle size={20} color="#fff" />} gradient="linear-gradient(135deg, #10b981, #059669)" />
               <StatCard title="حاويات حرجة الآن" value={criticalBinCount} icon={<AlertTriangle size={20} color="#fff" />} gradient="linear-gradient(135deg, #ef4444, #dc2626)" />
-              <StatCard title="نسبة الحساسات المتصلة" value={onlinePct ?? "—"} unit={onlinePct != null ? "%" : ""} icon={<Wifi size={20} color="#fff" />} gradient="linear-gradient(135deg, #06b6d4, #0891b2)" />
+              <StatCard title="نسبة المستشعرات المتصلة" value={onlinePct ?? "—"} unit={onlinePct != null ? "%" : ""} icon={<Wifi size={20} color="#fff" />} gradient="linear-gradient(135deg, #06b6d4, #0891b2)" />
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
@@ -4627,7 +4671,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
       </Section>
       {adminTools && <DispatchSettingsCard loggedInUser={loggedInUser} />}
       {adminTools && (
-        <Section title="مزامنة الاقتراحات من المتصفح (النمط القديم)" collapsible defaultOpen={false} hint="تعمل فقط حين يكون الإسناد الذاتي متوقفًا">
+        <Section title="مزامنة الاقتراحات من المتصفح (النمط القديم)" collapsible defaultOpen={false} hint="تعمل فقط حين يكون الإسناد التلقائي متوقفًا">
       <Card title="🔄 مزامنة الجولات المقترحة تلقائيًا" icon={<RouteIcon size={16} color={C.muted} />}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
@@ -4647,7 +4691,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
           <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 10px" }}>
             يكتب البلديات الست (الأسماء والهواتف والمساحات من المصادر الرسمية) ويسند كل حي بلا تبعية إلى بلديته وفق القراءة البصرية لخرائط النطاق الرسمية (موسومة «غير متحقق منها»)، ثم ينسخ معرّف البلدية على الحاويات والجولات والمركبات والسائقين والبلاغات لتفعيل عزل البيانات. لا يستبدل أي تبعية حُددت يدويًا.
           </p>
-          <button disabled={munSeedBusy} onClick={async () => { setMunSeedBusy(true); try { const r = await seedMunicipalitiesAndBackfill({ municipalities: MUNICIPALITIES, defaultAssignmentFor, municipalityForNeighborhood, provenance: DATA_PROVENANCE }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); setMunSeedMsg(`✅ ${r.municipalities} بلديات · ${r.neighborhoodsAssigned} حي أُسند · ${r.bins} حاوية · ${r.routes} جولة · ${r.vehicles} مركبة · ${r.profiles} سائق · ${r.incidents} بلاغ${r.unassignedNeighborhoods.length ? ` · بلا تبعية: ${r.unassignedNeighborhoods.join("، ")}` : ""}`); } catch (e) { setMunSeedMsg("❌ " + (e?.message || e)); } finally { setMunSeedBusy(false); } }} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #06b6d4, #0e7490)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{munSeedBusy ? "جاري التهيئة…" : "🏛️ تهيئة البلديات وتوزيع الأحياء"}</button>
+          <button disabled={munSeedBusy} onClick={async () => { setMunSeedBusy(true); try { const r = await seedMunicipalitiesAndBackfill({ municipalities: MUNICIPALITIES, defaultAssignmentFor, municipalityForNeighborhood, provenance: DATA_PROVENANCE }, { uid: loggedInUser?.uid, name: loggedInUser?.name }); setMunSeedMsg(`✅ ${r.municipalities} بلديات · ${r.neighborhoodsAssigned} حي أُسند · ${r.bins} حاوية · ${r.routes} جولة · ${r.vehicles} مركبة · ${r.profiles} سائق · ${r.incidents} بلاغ${r.unassignedNeighborhoods.length ? ` · بلا تبعية: ${r.unassignedNeighborhoods.join("، ")}` : ""}`); } catch (e) { setMunSeedMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setMunSeedBusy(false); } }} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #06b6d4, #0e7490)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT }}>{munSeedBusy ? "جاري التهيئة…" : "🏛️ تهيئة البلديات وتوزيع الأحياء"}</button>
           {munSeedMsg && <div style={{ fontSize: 12, color: C.text, marginTop: 8 }}>{munSeedMsg}</div>}
         </Card>
       )}
@@ -4899,7 +4943,7 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
         </button>
       </Card>
 
-      <Card title="🎮 وضع العرض التجريبي (Demo Mode)" icon={<Sparkles size={16} color={C.muted} />}>
+      <Card title="🎮 وضع العرض التجريبي" icon={<Sparkles size={16} color={C.muted} />}>
         <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.8, margin: "0 0 14px" }}>
           تحكّم مباشر بحالة أي حاوية لأغراض العرض أمام اللجنة — التغيير ينعكس فورًا على الأولوية،
           التنبيهات، الخريطة، والجولات المقترحة. كل قراءة تجريبية تُوسم demo:true ولا تُخلط بقراءات حقيقية.
@@ -4926,8 +4970,8 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetReading(demoBinId, demoFill, demoTemp))} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>📡 محاكاة قراءة جديدة</button>
-              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetOffline(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>📴 جعل Offline</button>
-              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetFault(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>⚠️ محاكاة Fault</button>
+              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetOffline(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>📴 فصل المستشعر</button>
+              <button disabled={demoBusy} onClick={() => runDemoAction(() => demoSetFault(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.danger}`, background: C.danger + "15", color: C.danger, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>⚠️ محاكاة خلل بالمستشعر</button>
               <button disabled={demoBusy} onClick={() => runDemoAction(() => demoReset(demoBinId))} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${C.info}`, background: C.info + "15", color: C.info, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>🔄 إعادة ضبط</button>
             </div>
             {demoMsg && <div style={{ marginTop: 10, fontSize: 12, color: demoMsg.startsWith("✅") ? C.accent : demoMsg.startsWith("❌") ? C.danger : C.warning }}>{demoMsg}</div>}
@@ -5547,13 +5591,13 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
       if (sim.leader !== SIM_TAB_ID) await setSimulationStatus("running", { leader: SIM_TAB_ID });
       tickingRef.current = true;
       try { const r = await tickSimulation(); if (r) setTickLog((l) => [{ at: new Date().toLocaleTimeString("ar-SA"), ...r }, ...l].slice(0, 12)); }
-      catch (e) { console.error("[sim-tick]", e); setMsg("❌ " + (e?.message || e)); }
+      catch (e) { console.error("[sim-tick]", e); setMsg("تعذر تنفيذ العملية: " + friendlyError(e)); }
       finally { tickingRef.current = false; }
     }, interval);
     return () => clearInterval(id);
   }, [sim, canControl]);
 
-  const run = async (label, fn) => { setBusy(label); setMsg(""); try { const r = await fn(); if (r) setMsg(r); } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); } };
+  const run = async (label, fn) => { setBusy(label); setMsg(""); try { const r = await fn(); if (r) setMsg(r); } catch (e) { setMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setBusy(""); } };
   const install = () => run("install", async () => {
     if (!window.confirm("سيُحذف المشهد التجريبي السابق (الصفوف الموسومة demo فقط) ويُبنى مشهد المحاكاة بنفس الـseed. البيانات الحقيقية لا تُمس. متابعة؟")) return "";
     const r = await installSimulation(cfg, { neighborhoods, featuresByKey: FEATURE_BY_KEY, actor, withHistory: true, vehicleIds: vehicles.filter((v) => v.demo).map((v) => v.id) });
@@ -5565,7 +5609,7 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
     let dispatchNote = "";
     const evMid = r.bin?.municipalityId || evMun || scope.municipalityId || null;
     if (["critical_fill", "heat_spike"].includes(type) && evMid) {
-      try { const d = await requestDispatchCycle({ municipalityId: evMid, trigger: "simulator_event" }); const t = d.municipalities?.[evMid]; dispatchNote = d.skipped ? "" : t ? ` · الإسناد الذاتي: ${d.mode === "auto" ? `${t.executed} قرار نُفّذ` : `${t.observed} توصية (مراقبة)`}${t.escalated ? `، ${t.escalated} مرفوعة` : ""}` : ""; } catch { dispatchNote = " · تعذر الاتصال بخادم الإسناد"; }
+      try { const d = await requestDispatchCycle({ municipalityId: evMid, trigger: "simulator_event" }); const t = d.municipalities?.[evMid]; dispatchNote = d.skipped ? "" : t ? ` · الإسناد التلقائي: ${d.mode === "auto" ? `${t.executed} قرار نُفّذ` : `${t.observed} توصية (مراقبة)`}${t.escalated ? `، ${t.escalated} مرفوعة` : ""}` : ""; } catch { dispatchNote = " · تعذر الاتصال بخادم الإسناد"; }
     }
     return `${SIM_EVENTS[type].icon} ${SIM_EVENTS[type].label} → ${r.bin.name}${dispatchNote}`;
   });
@@ -5586,7 +5630,7 @@ const SimulationPage = ({ neighborhoods = [], bins = [], vehicles = [], loggedIn
       <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 1fr) minmax(320px, 1.3fr)", gap: 14 }}>
         <Card title="⚙️ إعدادات السيناريو (تجريبية، قابلة للتعديل)" icon={<SettingsIcon size={16} color={C.muted} />}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <label style={{ fontSize: 11, color: C.muted, gridColumn: "1 / -1" }}>Seed<input value={cfg.seed} disabled={!canInstall} onChange={(e) => setCfg({ ...cfg, seed: e.target.value })} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: "monospace", direction: "ltr", boxSizing: "border-box" }} /></label>
+            <label style={{ fontSize: 11, color: C.muted, gridColumn: "1 / -1" }}>بذرة التوليد (تعيد المشهد نفسه)<input value={cfg.seed} disabled={!canInstall} onChange={(e) => setCfg({ ...cfg, seed: e.target.value })} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: "monospace", direction: "ltr", boxSizing: "border-box" }} /></label>
             {num("totalBins", "عدد الحاويات", 10, 1000)}
             {num("offlineSensors", "مستشعرات منقطعة", 0, 200)}
             {num("faultSensors", "مستشعرات معطلة", 0, 200)}
@@ -5675,7 +5719,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
   }, [newlyPassed.join("|"), session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const patch = (data) => setDoc(DEMO_SESSION_REF(), { ...data, updatedAt: new Date().toISOString() }, { merge: true });
-  const run = (label, fn) => async () => { setBusy(label); setMsg(""); try { const r = await fn(); if (r) setMsg(r); } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); } };
+  const run = (label, fn) => async () => { setBusy(label); setMsg(""); try { const r = await fn(); if (r) setMsg(r); } catch (e) { setMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setBusy(""); } };
   const mid = session?.municipalityId || null;
   const munNeighborhoods = neighborhoods.filter((n) => municipalityForNeighborhood(n) === mid);
   const munKeys = munNeighborhoods.map((n) => normalizeNeighborhoodName(n.name));
@@ -5791,7 +5835,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>🎬 وضع العرض — سيناريو لجنة التحكيم</div>
-          <div style={{ fontSize: 12, color: C.dim }}>{DEMO_STEPS.length} خطوة: الأمانة ← البلدية ← الموظف ← السائق ← نقص الموارد ← النقل بين البلديات ← مؤشرات المدينة. الخطوات الإجرائية تُنفَّذ بزر؛ خطوات السائق ومدير البلدية تُكتشف تلقائيًا من البيانات الحية. الحالة محفوظة في قاعدة البيانات فلا تضيع عند تحديث الصفحة.</div>
+          <div style={{ fontSize: 12, color: C.dim }}>{DEMO_STEPS.length} خطوة: الأمانة ← البلدية ← الموظف ← السائق ← نقص الموارد ← النقل بين البلديات ← مؤشرات المدينة. الخطوات الإجرائية تُنفَّذ بزر؛ خطوات السائق ومتخذ القرار بالبلدية تُكتشف تلقائيًا من البيانات الحية. الحالة محفوظة في قاعدة البيانات فلا تضيع عند تحديث الصفحة.</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {!session && <button disabled={!!busy} onClick={actions.start} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: C.accent, color: "#07231A", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>▶️ بدء الجلسة</button>}
@@ -5816,7 +5860,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
                   <select value={pickMid} onChange={(e) => setPickMid(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>{MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.nameAr}</option>)}</select>
                 )}
                 {act && (current || (done && st.key === "city")) && <button disabled={!!busy || (!current && !done)} onClick={act} style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: C.info, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>{busy === st.key ? "…" : st.kind === "nav" ? "افتح" : "نفّذ"}</button>}
-                {st.key === "support" && current && <span style={{ fontSize: 11.5, color: C.warning }}>🏛️ من حساب مدير البلدية ({mid ? `manager.${mid}@…` : ""}) في نافذة ثانية: البلديات والنطاقات → مؤشرات الأداء → «طلب دعم من الأمانة».</span>}
+                {st.key === "support" && current && <span style={{ fontSize: 11.5, color: C.warning }}>🏛️ من حساب متخذ القرار بالبلدية ({mid ? `manager.${mid}@…` : ""}) في نافذة ثانية: البلديات والنطاقات → مؤشرات الأداء → «طلب دعم من الأمانة».</span>}
                 {["recommend", "transferApprove", "transferExecute"].includes(st.key) && current && !isAmanah && <span style={{ fontSize: 11.5, color: C.warning }}>🏛️ من حساب متخذ القرار بالأمانة: بوابة متخذي القرار → القيادة الاستراتيجية.</span>}
                 {st.key === "inbox" && current && <span style={{ fontSize: 11.5, color: C.warning }}>📱 سجّل دخول السائق ({profiles.find((p) => p.uid === session.driverId)?.email || "حساب السائق"}) على جهاز ثانٍ، ابدأ المناوبة ثم الجولة.</span>}
               </div>
@@ -5864,7 +5908,7 @@ const SmartPlanPage = ({ neighborhoods = [], bins = [], profiles = [], vehicles 
       setPlan(p);
       await saveOptimizationRun({ municipalityId: mid, summary: p.summary, constraints: p.constraints, routes: p.routes.map((r) => ({ neighborhoodId: r.neighborhoodId, neighborhoodName: r.neighborhoodName, stops: r.stops.length, deferred: r.deferredStops.length, distanceKm: r.distanceKm, durationMin: r.durationMin, matrixSource: r.matrixSource, driver: r.driver ? { driverId: r.driver.driverId, driverName: r.driver.driverName, vehicleNumber: r.driver.vehicleNumber } : null })), assumptions: p.assumptions, demo: munBins.some((b) => b.demo) }, actor);
       setMsg(`✅ خُطّطت ${p.routes.length} جولة لـ ${p.summary.served} حاوية${p.summary.unassignedRoutes ? ` · ${p.summary.unassignedRoutes} بلا سائق` : ""}${p.summary.deferred ? ` · ${p.summary.deferred} مؤجلة` : ""}`);
-    } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); }
+    } catch (e) { setMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setBusy(""); }
   };
 
   /** Writes the plan as SUGGESTED routes (withdrawing older suggestions of the same neighborhoods) — nothing is dispatched until approval. */
@@ -5882,7 +5926,7 @@ const SmartPlanPage = ({ neighborhoods = [], bins = [], profiles = [], vehicles 
       const res = await applyRouteReconciliation({ toCreate, toUpdate: [], toWithdraw }, { planner: true });
       await writeAuditLog("plan_applied", actor.uid, actor.name, { municipalityId: mid, created: res.created, withdrawn: res.withdrawn, served: plan.summary.served });
       setMsg(`✅ أُنشئت ${res.created} جولة مقترحة من الخطة (سُحب ${res.withdrawn} اقتراح قديم) — اعتمد الإسناد المقترح لكل جولة`);
-    } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); }
+    } catch (e) { setMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setBusy(""); }
   };
 
   const approveSuggested = async (route) => {
@@ -6226,10 +6270,10 @@ const DispatchCenter = ({ loggedInUser, onOpenRoute }) => {
     setBusy("run"); setMsg("");
     try {
       const r = await requestDispatchCycle({ municipalityId: mid, trigger: "manual" });
-      if (r.skipped) setMsg(r.skipped === "off" ? "الإسناد الذاتي متوقف من الإعدادات." : "لم يحن موعد الدورة.");
+      if (r.skipped) setMsg(r.skipped === "off" ? "الإسناد التلقائي متوقف من الإعدادات." : "لم يحن موعد الدورة.");
       else { const t = Object.values(r.municipalities || {}).reduce((a, x) => ({ c: a.c + x.created, i: a.i + x.inserted, e: a.e + x.escalated, x: a.x + x.executed, o: a.o + x.observed }), { c: 0, i: 0, e: 0, x: 0, o: 0 });
         setMsg(r.mode === "auto" ? `اكتملت الدورة: ${t.x} قرار نُفّذ (${t.c} جولة جديدة، ${t.i} إضافة)، ${t.e} حالة رُفعت لك.` : `اكتملت دورة المراقبة: ${t.o} توصية سُجلت دون تنفيذ، ${t.e} حالة استثنائية.`); }
-    } catch (e) { setMsg("تعذر تشغيل الدورة: " + (e?.message || e)); } finally { setBusy(""); }
+    } catch (e) { setMsg("تعذر تشغيل الدورة: " + friendlyError(e)); } finally { setBusy(""); }
   };
   const close = (d, status) => async () => {
     const note = window.prompt(status === "resolved" ? "كيف عولجت الحالة؟" : "سبب التجاهل:", "") ?? null; if (note === null) return;
@@ -6248,7 +6292,7 @@ const DispatchCenter = ({ loggedInUser, onOpenRoute }) => {
     <div style={{ display: "flex", flexDirection: "column", gap: SP.md }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: SP.sm, flexWrap: "wrap", background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 14px" }}>
         <div style={{ display: "flex", gap: SP.sm, alignItems: "center", flexWrap: "wrap", fontSize: FS.body, color: C.muted }}>
-          <b style={{ color: C.text }}>الإسناد الذاتي:</b> <DispatchModeBadge settings={settings} />
+          <b style={{ color: C.text }}>الإسناد التلقائي:</b> <DispatchModeBadge settings={settings} />
           <span>آخر دورة: {lastRun ? `${getReadingAgeLabel(lastRun.startedAt)} (${({ cron: "دورية", heartbeat: "دورية", critical_reading: "قراءة حرجة", simulator_event: "حدث محاكاة", manual: "يدوية" })[lastRun.trigger] || lastRun.trigger})` : "لم تعمل بعد"}</span>
           <span>· كل {s.periodMinutes} د، والحالات الحرجة فورًا</span>
         </div>
@@ -6298,8 +6342,8 @@ const DispatchSettingsCard = ({ loggedInUser }) => {
   const save = async () => {
     if (s.mode === "auto" && s.scope === "all" && !window.confirm("التنفيذ التلقائي على كل الحاويات يعني إسناد جولات حقيقية لسائقين دون اعتماد بشري لكل جولة. هل اجتازت الاختبارات وتريد المتابعة؟")) return;
     setBusy(true); setMsg("");
-    try { const { lastRunAt, lastRunId, lastTrigger, lastUrgentRunAt, lastUrgentRunId, updatedAt, updatedBy, updatedByName, ...clean } = s; void lastRunAt; void lastRunId; void lastTrigger; void lastUrgentRunAt; void lastUrgentRunId; void updatedAt; void updatedBy; void updatedByName; await saveDispatchSettings(clean, { uid: loggedInUser?.uid, name: loggedInUser?.name }); setDraft(null); setMsg("حُفظت إعدادات الإسناد الذاتي"); }
-    catch (e) { setMsg("تعذر الحفظ: " + (e?.message || e)); } finally { setBusy(false); }
+    try { const { lastRunAt, lastRunId, lastTrigger, lastUrgentRunAt, lastUrgentRunId, updatedAt, updatedBy, updatedByName, ...clean } = s; void lastRunAt; void lastRunId; void lastTrigger; void lastUrgentRunAt; void lastUrgentRunId; void updatedAt; void updatedBy; void updatedByName; await saveDispatchSettings(clean, { uid: loggedInUser?.uid, name: loggedInUser?.name }); setDraft(null); setMsg("حُفظت إعدادات الإسناد التلقائي"); }
+    catch (e) { setMsg("تعذر الحفظ: " + friendlyError(e)); } finally { setBusy(false); }
   };
   return (
     <Section title="🤖 الإسناد التشغيلي الذاتي" hint="يحلل المستشعرات والتنبؤات والبلاغات دوريًا على الخادم، ويضيف الحاويات لجولات قائمة أو ينشئ جولات مجمعة ويسندها للسائق الأنسب. نقل الموارد بين البلديات يبقى باعتماد الأمانة." actions={<DispatchModeBadge settings={settings} />}>
@@ -6316,7 +6360,7 @@ const DispatchSettingsCard = ({ loggedInUser }) => {
         </div>
       </Disclosure>
       {canEdit && <div style={{ display: "flex", gap: SP.sm, alignItems: "center", marginTop: SP.md }}><Btn variant="primary" disabled={busy || !draft} onClick={save}>{busy ? "جارٍ الحفظ…" : "حفظ"}</Btn>{draft && <Btn variant="ghost" onClick={() => setDraft(null)}>إلغاء</Btn>}{msg && <span style={{ fontSize: FS.meta, color: C.muted }}>{msg}</span>}</div>}
-      <div style={{ fontSize: FS.meta, color: C.dim, marginTop: SP.sm }}>التشغيل: فوري عند قراءة حرجة، ودوري من الخادم، ويدوي من «تشغيل دورة الآن». عند تفعيل الإسناد الذاتي تتوقف مزامنة الاقتراحات من المتصفح.</div>
+      <div style={{ fontSize: FS.meta, color: C.dim, marginTop: SP.sm }}>التشغيل: فوري عند قراءة حرجة، ودوري من الخادم، ويدوي من «تشغيل دورة الآن». عند تفعيل الإسناد التلقائي تتوقف مزامنة الاقتراحات من المتصفح.</div>
     </Section>
   );
 };
@@ -6392,7 +6436,7 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
       }
     } catch (e) {
       console.error("[generate-routes]", e);
-      setGenerateMsg("حدث خطأ أثناء توليد الجولات.");
+      setGenerateMsg("تعذر توليد الجولات: " + friendlyError(e));
     } finally {
       setGenerating(false);
     }
@@ -6413,12 +6457,12 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12.5, color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px" }}>
         <span>
           {dispatchSettings?.mode === "auto"
-            ? <><b style={{ color: C.text }}>الإسناد الذاتي مفعّل{dispatchSettings.scope === "all" ? "" : " (بيئة العرض)"}:</b> الجولات الاعتيادية تُجمّع وتُسند للسائق الأنسب تلقائيًا، وتصلك الاستثناءات فقط.</>
+            ? <><b style={{ color: C.text }}>الإسناد التلقائي مفعّل{dispatchSettings.scope === "all" ? "" : " (بيئة العرض)"}:</b> الجولات الاعتيادية تُجمّع وتُسند للسائق الأنسب تلقائيًا، وتصلك الاستثناءات فقط.</>
             : dispatchSettings?.mode === "observe"
-              ? <><b style={{ color: C.text }}>الإسناد الذاتي في وضع المراقبة:</b> يحسب ما كان سيفعله دون تنفيذ — الاعتماد والإسناد هنا يدويان.</>
+              ? <><b style={{ color: C.text }}>الإسناد التلقائي في وضع المراقبة:</b> يحسب ما كان سيفعله دون تنفيذ — الاعتماد والإسناد هنا يدويان.</>
               : <><b style={{ color: C.text }}>الإسناد يدوي:</b> الجولة المقترحة لا تصل للسائق إلا باعتماد موظف واختيار سائق ومركبة.</>}
         </span>
-        {onOpenDispatch && <Btn variant="ghost" onClick={onOpenDispatch}>الإسناد الذاتي ←</Btn>}
+        {onOpenDispatch && <Btn variant="ghost" onClick={onOpenDispatch}>الإسناد التلقائي ←</Btn>}
       </div>
 
       {draftBinId && (
@@ -6716,7 +6760,7 @@ const AmanahStrategicPanel = ({ neighborhoods = [], bins = [], profiles = [], ve
   const [msg, setMsg] = useState("");
   const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
   const isAmanah = can(loggedInUser?.role, "transfers.approve");
-  const run = (label, fn) => async () => { setBusy(label); setMsg(""); try { const r = await fn(); if (r) setMsg(r); } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); } };
+  const run = (label, fn) => async () => { setBusy(label); setMsg(""); try { const r = await fn(); if (r) setMsg(r); } catch (e) { setMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setBusy(""); } };
   const totals = city.pressures.reduce((a, p) => ({ critical: a.critical + p.critical, warning: a.warning + p.warning, ready: a.ready + p.readyDrivers, vehicles: a.vehicles + p.usableVehicles, active: a.active + p.activeRoutes, incidents: a.incidents + p.openIncidents }), { critical: 0, warning: 0, ready: 0, vehicles: 0, active: 0, incidents: 0 });
   const decisions = auditLog.filter((a) => /^(transfer_|support_|plan_applied|route_assigned)/.test(a.action)).slice(0, 12);
   const propose = (rec) => run(rec.resourceId, async () => {
@@ -6760,7 +6804,7 @@ const AmanahStrategicPanel = ({ neighborhoods = [], bins = [], profiles = [], ve
             ); })}</tbody>
           </table>
         </div>
-        <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>الضغط = الطلب (حرجة ×1 + متابعة/متوقعة ×0.5 + بلاغات ×0.5) ÷ الطاقة (الطواقم الجاهزة × {Math.round(CREW_BINS_PER_HOUR * 10) / 10} حاوية/ساعة × {city.pressures[0]?.remainingShiftHours || 4} ساعات متبقية) × 100 — إشرافي بلا الدخول إلى حساب مدير البلدية.</div>
+        <div style={{ fontSize: 10.5, color: C.dim, marginTop: 8 }}>الضغط = الطلب (حرجة ×1 + متابعة/متوقعة ×0.5 + بلاغات ×0.5) ÷ الطاقة (الطواقم الجاهزة × {Math.round(CREW_BINS_PER_HOUR * 10) / 10} حاوية/ساعة × {city.pressures[0]?.remainingShiftHours || 4} ساعات متبقية) × 100 — إشرافي بلا الدخول إلى حساب متخذ القرار بالبلدية.</div>
       </Card>
       {/* 6+7. التنبؤات والتوصيات الاستراتيجية */}
       <Card title="🤝 التوصيات الاستراتيجية — دعم البلديات ونقل الموارد" icon={<Target size={16} color={C.muted} />}>
@@ -6857,7 +6901,7 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
       setResult(r);
       await saveSimulationScenario({ municipalityId: mid, scenario: sc, verdict: r.verdict, recommendation: r.recommendation, baseline: r.baseline, result: r.result, delta: r.delta, notes: r.notes, explanation: r.explanation, assumptions: r.assumptions, demo: live.bins.some((b) => b.demo) }, actor);
       await writeAuditLog("decision_simulated", actor.uid, actor.name, { municipalityId: mid, type: sc.type, verdict: r.verdict });
-    } catch (e) { setMsg("❌ " + (e?.message || e)); } finally { setBusy(""); }
+    } catch (e) { setMsg("تعذر تنفيذ العملية: " + friendlyError(e)); } finally { setBusy(""); }
   };
   const field = (label, el) => <label style={{ fontSize: 11, color: C.muted, display: "flex", flexDirection: "column", gap: 4 }}>{label}{el}</label>;
   const sel = (value, onChange, options) => <select value={value} onChange={(e) => onChange(e.target.value)} style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>{options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>;
@@ -6900,7 +6944,7 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
       {section === "act" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Section title="الجولات المقترحة الآن" count={quickPlan.plan.routes.length} hint="خطة سريعة بالمسافات الجوية؛ الخطة الكاملة على الطرق الفعلية في «خطة الجمع الذكية»"
-            actions={<>{onNavigate && <Btn variant="primary" onClick={() => onNavigate("control", { tab: "plan" })}>فتح خطة الجمع الذكية</Btn>}{onNavigate && dispatchSettings?.mode === "auto" && <Btn onClick={() => onNavigate("control", { tab: "dispatch" })}>الإسناد الذاتي</Btn>}</>}>
+            actions={<>{onNavigate && <Btn variant="primary" onClick={() => onNavigate("control", { tab: "plan" })}>فتح خطة الجمع الذكية</Btn>}{onNavigate && dispatchSettings?.mode === "auto" && <Btn onClick={() => onNavigate("control", { tab: "dispatch" })}>الإسناد التلقائي</Btn>}</>}>
             <AttentionList max={5} empty="لا حاويات مؤهلة للجمع الآن في هذه البلدية" items={quickPlan.plan.routes.map((r) => ({ id: "qp_" + r.neighborhoodId, tone: r.driver ? "info" : "warning",
               title: `${r.routeName}: ${r.stops.length} حاوية · ${r.distanceKm} كم`, meta: r.driver ? `السائق المقترح: ${r.driver.driverName} (${r.driver.vehicleNumber})` : "لا سائق مؤهل — يحتاج إسنادًا يدويًا أو دعمًا",
               detail: explainRoute(r) }))} />
@@ -6909,12 +6953,12 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
           <Section title="توصيات قابلة للتنفيذ" count={quickPlan.additions.suggestions.length + myTransfers.length}>
             <AttentionList max={6} empty="لا توصيات إضافية الآن" items={[
               ...quickPlan.additions.suggestions.map((a) => ({ id: "add_" + a.binId, tone: "info", title: `أضف ${a.binName} إلى ${a.routeName}`, meta: `متوقع امتلاؤها قريبًا · ${a.km} كم من ${a.near}`,
-                actionLabel: dispatchSettings?.mode === "auto" ? "دع الإسناد الذاتي يضيفها" : "فتح الجولات", onAction: () => onNavigate && onNavigate("control", { tab: dispatchSettings?.mode === "auto" ? "dispatch" : "routes" }) })),
+                actionLabel: dispatchSettings?.mode === "auto" ? "دع الإسناد التلقائي يضيفها" : "فتح الجولات", onAction: () => onNavigate && onNavigate("control", { tab: dispatchSettings?.mode === "auto" ? "dispatch" : "routes" }) })),
               ...myTransfers.map((t, i) => ({ id: "tr_" + i, tone: "warning", title: `نقل ${t.resourceType === "crew" ? "طاقم" : t.resourceType === "vehicle" ? "مركبة" : "سائق"} ${t.resourceLabel}: ${t.fromName} ← ${t.toName}`,
                 meta: `ضغط المستقبِلة ${t.impact.receiverBefore} ← ${t.impact.receiverAfter} · المرسِلة ${t.impact.donorBefore} ← ${t.impact.donorAfter} · ~${t.travelMin ?? "?"} د`, detail: t.reason,
                 actionLabel: can(loggedInUser?.role, "transfers.propose") ? "القيادة الاستراتيجية" : "جرّب أثره في المحاكاة", onAction: () => can(loggedInUser?.role, "transfers.propose") ? onNavigate && onNavigate("exec") : setSection("impact") })),
             ]} />
-            <div style={{ fontSize: FS.meta, color: C.dim, marginTop: 8 }}>نقل الموارد بين البلديات يتطلب اعتماد الأمانة؛ مدير البلدية يطلب الدعم من «بلديتي ← مؤشرات الأداء».</div>
+            <div style={{ fontSize: FS.meta, color: C.dim, marginTop: 8 }}>نقل الموارد بين البلديات يتطلب اعتماد الأمانة؛ متخذ القرار بالبلدية يطلب الدعم من «بلديتي ← مؤشرات الأداء».</div>
           </Section>
         </div>
       )}
@@ -6923,7 +6967,7 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
       {section === "impact" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Card title="🧪 مركز محاكاة القرارات — ماذا لو؟" icon={<Gauge size={16} color={C.muted} />}>
-            {!can(loggedInUser?.role, "decisions.simulate") && <div style={{ fontSize: 12, color: C.warning, marginBottom: 8 }}>تشغيل السيناريوهات متاح لمتخذي القرار (الأمانة/مدير البلدية)؛ يمكنك الاطلاع على النتائج المحفوظة.</div>}
+            {!can(loggedInUser?.role, "decisions.simulate") && <div style={{ fontSize: 12, color: C.warning, marginBottom: 8 }}>تشغيل السيناريوهات متاح لمتخذي القرار (الأمانة/متخذ القرار بالبلدية)؛ يمكنك الاطلاع على النتائج المحفوظة.</div>}
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
               {field("السيناريو", sel(scenario.type, (v) => setScenario({ ...scenario, type: v }), Object.entries(SCENARIO_TYPES).map(([k, s]) => [k, s.label])))}
               {["vehicle_down"].includes(scenario.type) && field("المركبة", sel(scenario.vehicleId, (v) => setScenario({ ...scenario, vehicleId: v }), [["", "اختر…"], ...live.vehicles.map((v) => [v.id, `${v.vehicleNumber} (${VEHICLE_STATUS_LABELS[v.status] || v.status})`])]))}
@@ -7088,7 +7132,7 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
         <Tabs value={tab} onChange={setTab} tabs={[
           { key: "amanah", label: "القيادة الاستراتيجية" },
           { key: "today", label: "ملخص اليوم" },
-          ...(embedded ? [] : [{ key: "brain", label: "العقل التشغيلي" }]),
+          ...(embedded ? [] : [{ key: "brain", label: "العقل التشغيلي للمدينة" }]),
           ...EXEC_ILLUSTRATIVE_TABS.map(([key, label]) => ({ key, label: `${label} · توضيحي` })),
         ]} />
         {embedded && <div style={{ display: "flex", justifyContent: "flex-end" }}><Btn variant="ghost" onClick={() => window.__showAdminPanel && window.__showAdminPanel()}>إدارة المستخدمين</Btn></div>}
@@ -7662,7 +7706,7 @@ ${distStation ? `محطة الحي: ${distStation.name} — امتلاء ${distS
 
   const suggestions = isMgmtRole(role)
     ? ["أي حي يحتاج جمعًا الآن؟", "لخص التنبيهات النشطة", "ما وضع الأحياء الحرجة؟"]
-    : ["وش حالة طلباتي؟", "متى يجي الشفط لحينا؟", "كيف أرفع بلاغ؟"];
+    : ["وش حالة طلباتي؟", "متى تُجمع حاويات حينا؟", "كيف أرفع بلاغ؟"];
 
   return (
     <>
@@ -8532,7 +8576,7 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
               {[
                 { label: "طلب حاوية جديدة",    desc: "اطلب حاوية لمنزلك أو مبناك",          icon: <FileText size={32} color={C.accent} />, color: C.accent,   action: () => { setTab("request"); setReqDone(null); } },
                 { label: "إبلاغ عن مشكلة",     desc: "بلّغ عن حاوية تالفة أو ممتلئة",       icon: <AlertTriangle size={32} color={C.warning} />, color: C.warning,  action: () => { setTab("report"); setReportDone(null); } },
-                { label: "متابعة محطة الحي",    desc: "شاهد حالة محطة الشفط في حيك",         icon: <BarChart2 size={32} color={C.info} />, color: C.info,    action: () => setTab("station") },
+                { label: "متابعة محطة الحي",    desc: "شاهد الحالة العامة لحاويات حيك",         icon: <BarChart2 size={32} color={C.info} />, color: C.info,    action: () => setTab("station") },
                 { label: "عرض حاويات الحي",    desc: "تابع حالة الحاويات في محطة حيك",       icon: <Trash2 size={32} color={C.purple} />, color: C.purple, action: () => setTab("bins") },
               ].map((item, i) => (
                 <div key={i} onClick={item.action} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 14, padding: 18, cursor: "pointer", transition: "all 0.2s" }}
@@ -8753,13 +8797,13 @@ const CitizenPortal = ({ user, onLogout, stations, bins = [], neighborhoods = []
                   </div>
                 )}
                 <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.7, margin: "0 0 20px" }}>
-                  أبلغ عن أي مشكلة متعلقة بالحاويات أو محطة الشفط في حيك وسيتم التعامل معها بأسرع وقت.
+                  أبلغ عن أي مشكلة في حاويات حيك، وسيتابعها موظف العمليات.
                 </p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
                     <label style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "block" }}>نوع المشكلة *</label>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      {["حاوية ممتلئة", "حاوية تالفة", "رائحة كريهة", "حشرات", "تسرب سوائل", "عطل في المحطة", "أخرى"].map(t => (
+                      {["حاوية ممتلئة", "حاوية تالفة", "رائحة كريهة", "حشرات", "تسرب سوائل", "عطل في المستشعر", "أخرى"].map(t => (
                         <button key={t} onClick={() => setReportType(t)} style={{
                           padding: "8px 14px", borderRadius: 8, border: `1px solid ${reportType === t ? C.warning : C.border}`,
                           background: reportType === t ? C.warning + "20" : "transparent", color: reportType === t ? C.warning : C.muted,
@@ -9251,7 +9295,7 @@ function SmartWasteManagement() {
   const role = loggedInUser.role;
   const I = (key, label, icon) => ({ key, label, icon });
   const navGroups = role === "executive" ? [
-    { id: "amanah", label: "الأمانة", items: [I("exec", "القيادة الاستراتيجية", <Crown size={18} />), I("brain", "العقل التشغيلي", <Sparkles size={18} />), I("map", "الخريطة التشغيلية", <MapGlyph size={18} />), I("municipalities", "البلديات والنطاقات", <Landmark size={18} />), I("neighborhoods", "الأحياء", <Home size={18} />)] },
+    { id: "amanah", label: "الأمانة", items: [I("exec", "القيادة الاستراتيجية", <Crown size={18} />), I("brain", "العقل التشغيلي للمدينة", <Sparkles size={18} />), I("map", "الخريطة التشغيلية", <MapGlyph size={18} />), I("municipalities", "البلديات والنطاقات", <Landmark size={18} />), I("neighborhoods", "الأحياء", <Home size={18} />)] },
     { id: "ops", label: "التشغيل", items: [I("dashboard", "لوحة العمليات", <LayoutDashboard size={18} />), I("control", "الجولات والإسناد", <RouteIcon size={18} />), I("drivers", "الأسطول والسائقون", <Truck size={18} />), I("requests", "البلاغات والطلبات", <Inbox size={18} />), I("fire", "التنبيهات الحرارية", <Flame size={18} />), I("bins", "الحاويات الذكية", <Trash2 size={18} />)] },
     { id: "analysis", label: "التحليل", items: [I("reports", "التقارير", <ClipboardList size={18} />)] },
     { id: "admin", label: "الإدارة", items: [I("audit", "سجل العمليات", <FileText size={18} />), I("settings", "الإعدادات", <SettingsIcon size={18} />)] },
@@ -9260,7 +9304,7 @@ function SmartWasteManagement() {
     { id: "now", label: "الآن", items: [I("dashboard", "لوحة العمليات", <LayoutDashboard size={18} />), I("map", "الخريطة التشغيلية", <MapGlyph size={18} />)] },
     { id: "ops", label: "التشغيل", items: [I("control", "الجولات والإسناد", <RouteIcon size={18} />), I("drivers", "الأسطول والسائقون", <Truck size={18} />), I("requests", "البلاغات والطلبات", <Inbox size={18} />), I("fire", "التنبيهات الحرارية", <Flame size={18} />)] },
     { id: "assets", label: "الأصول", items: [I("bins", "الحاويات الذكية", <Trash2 size={18} />), I("municipalities", role === "manager" ? "بلديتي" : "البلدية والأحياء", <Landmark size={18} />)] },
-    { id: "analysis", label: "التحليل والقرار", items: [I("brain", "العقل التشغيلي", <Sparkles size={18} />), I("reports", "التقارير", <ClipboardList size={18} />)] },
+    { id: "analysis", label: "التحليل والقرار", items: [I("brain", "العقل التشغيلي للمدينة", <Sparkles size={18} />), I("reports", "التقارير", <ClipboardList size={18} />)] },
     { id: "admin", label: "الإدارة", items: [...(role === "manager" ? [I("audit", "سجل العمليات", <FileText size={18} />)] : []), I("settings", role === "manager" ? "الإعدادات" : "تفضيلاتي", <SettingsIcon size={18} />)] },
     ...(role === "manager" ? [{ id: "demo", label: "بيئة العرض", items: [I("simulation", "المحاكاة", <Gauge size={18} />), I("demo", "سيناريو العرض", <Sparkles size={18} />)] }] : []),
   ];
@@ -9510,7 +9554,7 @@ function SmartWasteManagement() {
           {resolvedPage === "settings"   && <SettingsPage bins={bins} loggedInUser={loggedInUser} autoSyncRoutes={autoSyncRoutes} onToggleAutoSync={toggleAutoSync} />}
           {resolvedPage === "audit"      && <AuditLogPage auditLog={auditLog} />}
           {resolvedPage === "control" && (() => { const t = tabOf("control", "routes"); return (
-            <HubPage value={t} onChange={(k) => setPageTabs({ control: k })} tabs={[{ key: "routes", label: "الجولات" }, { key: "dispatch", label: "الإسناد الذاتي", count: openEscalations, tone: "danger" }, { key: "plan", label: "خطة الجمع الذكية" }]}>
+            <HubPage value={t} onChange={(k) => setPageTabs({ control: k })} tabs={[{ key: "routes", label: "الجولات" }, { key: "dispatch", label: "الإسناد التلقائي", count: openEscalations, tone: "danger" }, { key: "plan", label: "خطة الجمع الذكية" }]}>
               {t === "routes" && <RouteManagementPage neighborhoods={neighborhoods} bins={bins} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} vehicles={vehicles} routes={routes} driverProfiles={driverProfiles} loadingVehicles={loadingVehicles} loadingRoutes={loadingRoutes} loggedInUser={loggedInUser} dispatchSettings={dispatchSettings} draftBinId={routeDraftBinId} onConsumeDraftBin={() => setRouteDraftBinId(null)} initialRouteId={routeInitialId} onConsumeInitialRoute={() => setRouteInitialId(null)} onShowOnMap={goToMapNeighborhood} onOpenDispatch={() => setPageTabs({ control: "dispatch" })} />}
               {t === "dispatch" && <DispatchCenter loggedInUser={loggedInUser} onOpenRoute={goToRoute} />}
               {t === "plan" && <SmartPlanPage neighborhoods={neighborhoods} bins={bins} profiles={driverProfiles} vehicles={vehicles} routes={routes} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onOpenRoute={goToRoute} />}
@@ -9606,7 +9650,7 @@ const AdminPanel = ({ onBack }) => {
   useEffect(() => { fetchUsers(); }, []);
 
   const updateUserRole = async (uid, newRole) => {
-    const roleArMap = { executive: "إدارة عليا", manager: "مدير بلدية", employee: "موظف", driver: "سائق ميداني", citizen: "مواطن" };
+    const roleArMap = { executive: "متخذ القرار بالأمانة", manager: "متخذ القرار بالبلدية", employee: "موظف العمليات", driver: "فرد ميداني (سائق)", citizen: "مواطن" };
     const roleAr = roleArMap[newRole] || "مواطن";
     await updateDoc(doc(db, "users", uid), { role: newRole, roleAr, updatedAt: new Date().toISOString() });
     setActionMsg("✅ تم تغيير الدور بنجاح");
@@ -9776,7 +9820,7 @@ const AdminPanel = ({ onBack }) => {
                             <option value="citizen">مواطن</option>
                             <option value="employee">موظف</option>
                             <option value="driver">سائق ميداني</option>
-                            <option value="manager">مدير بلدية</option>
+                            <option value="manager">متخذ القرار بالبلدية</option>
                             <option value="executive">إدارة عليا</option>
                           </select>
                           {(u.role === "manager" || u.role === "employee" || u.role === "driver") && (
@@ -9808,136 +9852,184 @@ const AdminPanel = ({ onBack }) => {
 // ============================================================
 // 🚀 ROOT APP — ENTRY POINT
 // ============================================================
-// ======================== PUBLIC LANDING PAGE (Phase 2 — government-style identity) ========================
-const PIPELINE_STEPS = [
-  ["📡", "المستشعرات", "قراءات الامتلاء والحرارة والبطارية لكل حاوية"],
-  ["🧮", "تحليل البيانات", "تنقية القراءات وكشف الشذوذ والمستشعرات المنقطعة"],
-  ["🔮", "التنبؤ", "معدل الامتلاء ووقت الوصول للمستوى الحرج مع درجة ثقة"],
-  ["🧭", "تخطيط الجولات", "تجميع الحاويات في جولات محسَّنة بقيود السعة والمناوبة"],
-  ["🚛", "توزيع الموارد", "ترشيح السائق والمركبة، ودعم البلديات المتعثرة"],
-  ["📍", "التنفيذ الميداني", "ملاحة تفاعلية وتأكيد تفريغ وبلاغات عوائق"],
-  ["📊", "قياس الأداء", "مقارنة عادلة بخط الأساس: مسافة، زمن، استجابة، تكلفة تقديرية"],
-];
-const PORTALS = [
-  ["🏛️", "بوابة متخذي القرار — الأمانة", "خريطة البلديات الست، الضغط التشغيلي، توزيع الموارد، مركز محاكاة القرارات والتقارير."],
-  ["🏢", "بوابة متخذي القرار — البلدية", "إشراف على أحياء البلدية وحاوياتها وفرقها، اعتماد الاستثناءات وطلب الدعم."],
-  ["🛠️", "بوابة موظفي العمليات", "مركز التشغيل اليومي: خطة الجمع الذكية، إسناد الجولات، متابعة التنفيذ والبلاغات."],
-  ["🚛", "بوابة الأفراد — البلدية", "السائقون والفرق الميدانية: المهام، الملاحة، تأكيد التفريغ والإبلاغ عن العوائق."],
-];
-const LandingPage = ({ onEnter }) => {
-  const [isNarrow, setIsNarrow] = useState(window.innerWidth < 760);
-  useEffect(() => { const fn = () => setIsNarrow(window.innerWidth < 760); window.addEventListener("resize", fn); return () => window.removeEventListener("resize", fn); }, []);
-  const sec = { maxWidth: 1180, margin: "0 auto", padding: isNarrow ? "28px 16px" : "48px 24px" };
-  const h2 = { fontSize: isNarrow ? 20 : 26, fontWeight: 900, color: C.brand, margin: "0 0 8px" };
-  const demo = DEFAULT_SIM_CONFIG;
+// ======================== PUBLIC LANDING PAGE ========================
+/**
+ * Lightweight preview of Buraidah (no map tiles, no network): the neighborhood boundaries the platform
+ * already uses (OpenStreetMap) + the demo simulator's deterministic bins and one example route.
+ * Always labelled as a demo — never presented as live operations.
+ */
+const BuraidahPreview = () => {
+  const data = useMemo(() => {
+    const feats = buraidahNeighborhoodsGeo.features;
+    const scen = generateScenario({}, { neighborhoods: feats.map((f) => ({ id: f.properties.baseName, name: f.properties.name })), featuresByKey: FEATURE_BY_KEY, keyFor: normalizeNeighborhoodName });
+    const rings = feats.map((f) => (f.geometry.type === "Polygon" ? [f.geometry.coordinates[0]] : f.geometry.coordinates.map((p) => p[0])));
+    const all = rings.flat(2);
+    const lngs = all.map((c) => c[0]), lats = all.map((c) => c[1]);
+    const minLng = Math.min(...lngs), maxLng = Math.max(...lngs), minLat = Math.min(...lats), maxLat = Math.max(...lats);
+    const k = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180);
+    const W = 600, H = 460, pad = 18;
+    const sx = (W - 2 * pad) / ((maxLng - minLng) * k), sy = (H - 2 * pad) / (maxLat - minLat), s = Math.min(sx, sy);
+    const ox = (W - (maxLng - minLng) * k * s) / 2, oy = (H - (maxLat - minLat) * s) / 2;
+    const P = (lng, lat) => [ox + (lng - minLng) * k * s, oy + (maxLat - lat) * s];
+    const paths = rings.map((rs) => rs.map((ring) => "M" + ring.map(([lng, lat]) => P(lng, lat).map((v) => v.toFixed(1)).join(",")).join("L") + "Z").join(" "));
+    const bins = scen.bins.filter((b) => b.lat != null).map((b) => ({ ...b, xy: P(b.lng, b.lat) }));
+    // Example route: the neighborhood with the most critical bins, nearest-neighbour order.
+    const byN = {}; for (const b of bins) if (b.fill >= 85 && b.connectivity === "online") (byN[b.neighborhoodId] ||= []).push(b);
+    const pick = Object.values(byN).sort((a, b) => b.length - a.length)[0] || [];
+    const order = []; const rest = [...pick];
+    let cur = rest.shift(); while (cur) { order.push(cur); rest.sort((a, b) => Math.hypot(a.xy[0] - cur.xy[0], a.xy[1] - cur.xy[1]) - Math.hypot(b.xy[0] - cur.xy[0], b.xy[1] - cur.xy[1])); cur = rest.shift(); }
+    return { W, H, paths, bins, route: order.slice(0, 7), neighborhoods: feats.length };
+  }, []);
+  const color = (b) => (b.connectivity !== "online" ? "#9aa5a0" : b.fill >= 85 ? C.danger : b.fill >= 60 ? C.warning : C.accent);
   return (
-    <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh" }}>
-      <link href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-      {/* Official-style top bar */}
-      <div style={{ background: C.brand, color: C.brandText, fontSize: 11.5, padding: "6px 24px", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-        <span>مشروع مستقل لإدارة النفايات البلدية — نطاق التطبيق: {BRAND.city}</span>
-        <span>بيئة عرض تجريبية: بيانات المستشعرات محاكاة ومصادر التقسيم البلدي موثقة</span>
+    <figure style={{ margin: 0, background: "#ffffff", border: `1px solid ${C.border}`, borderRadius: 16, padding: 12, boxShadow: "0 1px 2px #0b3d2e0d" }}>
+      <svg viewBox={`0 0 ${data.W} ${data.H}`} role="img" aria-label="معاينة توضيحية لأحياء بريدة والحاويات وجولة نموذجية" style={{ width: "100%", height: "auto", display: "block", background: "#f6faf7", borderRadius: 10 }}>
+        {data.paths.map((d, i) => <path key={i} d={d} fill="#e3efe8" stroke="#9cc3ad" strokeWidth="1.2" />)}
+        {data.route.length > 1 && <polyline points={data.route.map((b) => b.xy.join(",")).join(" ")} fill="none" stroke={C.brand} strokeWidth="2.4" strokeDasharray="6 4" strokeLinejoin="round" />}
+        {data.bins.map((b) => <circle key={b.simId} cx={b.xy[0]} cy={b.xy[1]} r={b.fill >= 85 ? 4.2 : 3.2} fill={color(b)} stroke="#fff" strokeWidth="1" />)}
+        {data.route[0] && <g transform={`translate(${data.route[0].xy[0] - 9},${data.route[0].xy[1] - 22})`}><rect width="18" height="14" rx="3" fill={C.brand} /><path d="M4 7h10M9 3v8" stroke="#fff" strokeWidth="1.6" /></g>}
+      </svg>
+      <figcaption style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, marginTop: 10, fontSize: 12, color: C.muted }}>
+        <span style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {[[C.accent, "طبيعية"], [C.warning, "تحتاج متابعة"], [C.danger, "حرجة"], ["#9aa5a0", "مستشعر غير متصل"]].map(([c, l]) => <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: c, display: "inline-block" }} />{l}</span>)}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 16, borderTop: `2px dashed ${C.brand}`, display: "inline-block" }} />جولة نموذجية</span>
+        </span>
+        <span style={{ color: C.dim }}>معاينة توضيحية من محاكي العرض ({data.bins.length} حاوية · {data.neighborhoods} حيًا) — حدود الأحياء من OpenStreetMap</span>
+      </figcaption>
+    </figure>
+  );
+};
+
+const LANDING_FEATURES = [
+  [<RadarIcon size={20} color={C.brand} strokeWidth={1.8} />, "التنبؤ الاستباقي", "يقدّر متى تبلغ كل حاوية المستوى الحرج من قراءات المستشعرات، مع درجة الثقة."],
+  [<Waypoints size={20} color={C.brand} strokeWidth={1.8} />, "تخطيط الجولات الذكية", "يجمع الحاويات التي تحتاج خدمة في جولات مرتبة تقلل المسافة وزمن التشغيل."],
+  [<UserCheck size={20} color={C.brand} strokeWidth={1.8} />, "الإسناد التلقائي للسائقين", "يسند الجولات الاعتيادية للسائق المؤهل حسب المناوبة والنطاق والمركبة وزمن الوصول."],
+  [<ArrowLeftRight size={20} color={C.brand} strokeWidth={1.8} />, "توزيع الموارد بين البلديات", "يقارن الضغط التشغيلي بين البلديات ويقترح نقل الموارد، والاعتماد للأمانة."],
+  [<FlaskConical size={20} color={C.brand} strokeWidth={1.8} />, "محاكاة القرارات", "يختبر أثر القرار على نسخة معزولة من البيانات قبل تنفيذه."],
+  [<ChartColumn size={20} color={C.brand} strokeWidth={1.8} />, "قياس الكفاءة التشغيلية", "يقيس المسافات والأزمنة والحاويات المخدومة مقارنة بخط أساس معلن."],
+];
+const LANDING_ENGINE = [
+  ["ماذا سيحدث؟", "التنبؤ بالمخاطر والاحتياجات التشغيلية", "الحاويات التي ستمتلئ قريبًا، والأحياء والبلديات المرشحة لضغط تشغيلي."],
+  ["ما أفضل إجراء؟", "تخطيط الجولات وتوزيع الموارد تلقائيًا", "جولات مسندة للسائقين، واستثناءات واضحة لموظف العمليات، وتوصيات نقل موارد."],
+  ["ما أثر القرار؟", "محاكاة النتائج ومقارنة البدائل", "مقارنة كل بديل بالوضع الحالي قبل التنفيذ، ثم قياس النتيجة الفعلية بعده."],
+];
+const LANDING_PORTALS = [
+  [<Landmark size={22} color={C.brand} strokeWidth={1.8} style={{ flexShrink: 0, marginTop: 2 }} />, "متخذو القرار بالأمانة", "متابعة البلديات ومقارنة الضغط التشغيلي واعتماد نقل الموارد."],
+  [<Building2 size={22} color={C.brand} strokeWidth={1.8} style={{ flexShrink: 0, marginTop: 2 }} />, "متخذو القرار بالبلدية", "متابعة أداء البلدية وطلب الدعم واختبار القرارات قبل تنفيذها."],
+  [<Users size={22} color={C.brand} strokeWidth={1.8} style={{ flexShrink: 0, marginTop: 2 }} />, "موظفو العمليات", "متابعة الجولات والإسناد التلقائي ومعالجة الحالات الاستثنائية."],
+  [<HardHat size={22} color={C.brand} strokeWidth={1.8} style={{ flexShrink: 0, marginTop: 2 }} />, "الأفراد الميدانيون", "استلام الجولات والملاحة وتأكيد التفريغ والإبلاغ عن المشكلات."],
+];
+
+const LandingPage = ({ onEnter }) => {
+  const [isNarrow, setIsNarrow] = useState(window.innerWidth < 860);
+  useEffect(() => { const fn = () => setIsNarrow(window.innerWidth < 860); window.addEventListener("resize", fn); return () => window.removeEventListener("resize", fn); }, []);
+  const BODY = "'IBM Plex Sans Arabic', " + ARABIC_FONT;
+  const wrap = { maxWidth: 1160, margin: "0 auto", padding: isNarrow ? "0 16px" : "0 32px" };
+  const sec = (bg) => ({ background: bg, padding: isNarrow ? "40px 0" : "72px 0" });
+  const eyebrow = { fontSize: 12.5, fontWeight: 700, color: C.brandSoft, letterSpacing: 0.2, marginBottom: 8 };
+  const h2 = { fontFamily: ARABIC_FONT, fontSize: isNarrow ? 22 : 28, fontWeight: 800, color: C.brand, margin: "0 0 10px", lineHeight: 1.4 };
+  const lead = { fontSize: isNarrow ? 14.5 : 15.5, color: C.muted, lineHeight: 1.9, margin: 0, maxWidth: 680 };
+  const primary = { display: "inline-flex", alignItems: "center", gap: 8, padding: "13px 24px", borderRadius: 10, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: BODY, textDecoration: "none" };
+  const secondary = { ...primary, background: "#fff", color: C.brand, border: `1px solid ${C.brand}55` };
+  return (
+    <div dir="rtl" lang="ar" style={{ fontFamily: BODY, background: "#ffffff", color: C.text, minHeight: "100vh" }}>
+      <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Noto+Kufi+Arabic:wght@600;700;800&display=swap" rel="stylesheet" />
+      <div style={{ background: C.brand, color: C.brandText, fontSize: 12 }}>
+        <div style={{ ...wrap, display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", padding: isNarrow ? "6px 16px" : "7px 32px" }}>
+          <span>مشروع مستقل لإدارة عمليات النفايات البلدية — ليس منصة حكومية رسمية</span>
+          {!isNarrow && <span>نطاق العرض: {BRAND.city} · بيانات المستشعرات في بيئة العرض محاكاة</span>}
+        </div>
       </div>
-      <header style={{ background: C.card, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 20 }}>
-        <div style={{ maxWidth: 1180, margin: "0 auto", padding: "10px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <AppLogo size={44} />
-            <div><div style={{ fontSize: isNarrow ? 14 : 17, fontWeight: 900, color: C.brand }}>{BRAND.ar}</div><div style={{ fontSize: 11, color: C.muted }}>{BRAND.en} · {BRAND.city}</div></div>
-          </div>
-          {!isNarrow && <nav style={{ display: "flex", gap: 18, fontSize: 13, color: C.muted }}>{[["#features", "المزايا"], ["#engine", "العقل التشغيلي"], ["#how", "آلية العمل"], ["#portals", "البوابات"], ["#demo", "بيانات العرض"]].map(([h, l]) => <a key={h} href={h} style={{ color: C.muted, textDecoration: "none" }}>{l}</a>)}</nav>}
-          <button onClick={onEnter} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: ARABIC_FONT, whiteSpace: "nowrap" }}>الدخول إلى المنصة</button>
+      <header style={{ background: "#ffffff", borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 20 }}>
+        <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minHeight: 68 }}>
+          <a href="#top" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
+            <AppLogo size={40} />
+            <span><span style={{ display: "block", fontFamily: ARABIC_FONT, fontSize: isNarrow ? 13.5 : 16, fontWeight: 800, color: C.brand }}>{BRAND.ar}</span><span style={{ display: "block", fontSize: 11.5, color: C.muted }}>{BRAND.en}</span></span>
+          </a>
+          {!isNarrow && <nav aria-label="أقسام الصفحة" style={{ display: "flex", gap: 24, fontSize: 14 }}>{[["#how", "آلية العمل"], ["#features", "المزايا"], ["#portals", "البوابات"]].map(([h, l]) => <a key={h} href={h} style={{ color: C.text, textDecoration: "none", fontWeight: 500 }}>{l}</a>)}</nav>}
+          <button onClick={onEnter} style={{ ...primary, padding: isNarrow ? "9px 14px" : "10px 18px", fontSize: 13.5 }}><LogIn size={16} />الدخول</button>
         </div>
       </header>
 
-      {/* Hero */}
-      <section style={{ background: `linear-gradient(160deg, ${C.brand} 0%, ${C.brandSoft} 60%, #1c7a46 100%)`, color: "#fff" }}>
-        <div style={{ ...sec, display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "1.2fr 1fr", gap: 28, alignItems: "center", paddingTop: isNarrow ? 36 : 64, paddingBottom: isNarrow ? 36 : 64 }}>
-          <div>
-            <div style={{ display: "inline-block", fontSize: 11.5, background: "#ffffff1f", border: "1px solid #ffffff40", borderRadius: 20, padding: "4px 12px", marginBottom: 14 }}>{BRAND.engine} · {BRAND.engineEn}</div>
-            <h1 style={{ fontSize: isNarrow ? 28 : 42, fontWeight: 900, lineHeight: 1.3, margin: "0 0 14px" }}>إدارة ذكية للنفايات... وقرارات أكثر كفاءة</h1>
-            <p style={{ fontSize: isNarrow ? 14 : 16, lineHeight: 1.9, color: "#e8f3ed", margin: "0 0 22px" }}>{BRAND.description}</p>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button onClick={onEnter} style={{ padding: "12px 22px", borderRadius: 10, border: "none", background: "#fff", color: C.brand, fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: ARABIC_FONT }}>الدخول إلى المنصة</button>
-              <a href="#how" style={{ padding: "12px 22px", borderRadius: 10, border: "1px solid #ffffff70", color: "#fff", fontWeight: 700, fontSize: 14, textDecoration: "none" }}>كيف يعمل النظام؟</a>
+      <main id="top">
+        {/* Hero */}
+        <section style={{ ...sec("linear-gradient(180deg, #f3f8f5 0%, #ffffff 100%)"), paddingTop: isNarrow ? 32 : 64 }}>
+          <div style={{ ...wrap, display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "1.05fr 1fr", gap: isNarrow ? 28 : 48, alignItems: "center" }}>
+            <div>
+              <div style={eyebrow}>{BRAND.engine}</div>
+              <h1 style={{ fontFamily: ARABIC_FONT, fontSize: isNarrow ? 28 : 40, fontWeight: 800, color: C.brand, lineHeight: 1.45, margin: "0 0 18px" }}>إدارة ذكية للنفايات... وقرارات أكثر كفاءة</h1>
+              <p style={{ ...lead, color: "#3a4a42", fontSize: isNarrow ? 15 : 16.5, lineHeight: 2 }}>
+                منصة ذكية لإدارة النفايات البلدية، تجمع بين <b style={{ color: C.brand }}>التنبؤ الاستباقي بامتلاء الحاويات</b>، و<b style={{ color: C.brand }}>التحسين الآلي لجولات الجمع</b>، و<b style={{ color: C.brand }}>التوزيع الذكي للموارد بين البلديات</b>، مع <b style={{ color: C.brand }}>محاكاة أثر القرارات قبل تنفيذها</b> وقياس نتائجها الفعلية.
+              </p>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 26 }}>
+                <button onClick={onEnter} style={primary}>الدخول إلى المنصة <ArrowLeft size={17} /></button>
+                <a href="#how" style={secondary}>استكشف آلية العمل</a>
+              </div>
             </div>
+            <BuraidahPreview />
           </div>
-          <div style={{ background: "#ffffff14", border: "1px solid #ffffff33", borderRadius: 16, padding: 18 }}>
-            <div style={{ fontSize: 12, color: "#d6ebe0", marginBottom: 10 }}>من المراقبة إلى القرار الاستباقي</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {[["ماذا سيحدث؟", "تنبؤات ومخاطر قادمة"], ["ما أفضل إجراء؟", "جولات مقترحة وتوزيع موارد"], ["ما أثر القرار؟", "محاكاة ومقارنة بخط الأساس"], ["ماذا تحقق؟", "مؤشرات أداء محسوبة"]].map(([t, d]) => (
-                <div key={t} style={{ background: "#0000002a", borderRadius: 10, padding: "10px 12px" }}><div style={{ fontSize: 13, fontWeight: 800 }}>{t}</div><div style={{ fontSize: 11, color: "#d6ebe0" }}>{d}</div></div>
+        </section>
+
+        {/* How it works = the city's operational brain */}
+        <section id="how" style={sec("#ffffff")}>
+          <div style={wrap}>
+            <div style={eyebrow}>آلية العمل</div>
+            <h2 style={h2}>{BRAND.engine}: ثلاثة أسئلة قبل كل قرار</h2>
+            <p style={lead}>تصل قراءات المستشعرات وبلاغات الميدان باستمرار، ويجيب المحرك عن ثلاثة أسئلة بالترتيب، ولكل إجابة أثر في التشغيل.</p>
+            <ol style={{ listStyle: "none", padding: 0, margin: "32px 0 0", display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "repeat(3, 1fr)", gap: isNarrow ? 20 : 0 }}>
+              {LANDING_ENGINE.map(([q, a, out], i) => (
+                <li key={q} style={{ position: "relative", padding: isNarrow ? "0 0 0 0" : i === 0 ? "0 0 0 28px" : i === 2 ? "0 28px 0 0" : "0 28px", borderInlineStart: !isNarrow && i > 0 ? `1px solid ${C.border}` : "none" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                    <span style={{ width: 32, height: 32, borderRadius: "50%", background: C.brand, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 14, flexShrink: 0 }}>{i + 1}</span>
+                    <span style={{ fontFamily: ARABIC_FONT, fontSize: 19, fontWeight: 800, color: C.brand }}>{q}</span>
+                  </div>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 6 }}>{a}</div>
+                  <div style={{ fontSize: 14, color: C.muted, lineHeight: 1.85 }}>{out}</div>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </section>
+
+        {/* Features — one list, no card grid */}
+        <section id="features" style={sec("#f6faf7")}>
+          <div style={wrap}>
+            <div style={eyebrow}>المزايا</div>
+            <h2 style={h2}>ما تقدمه المنصة</h2>
+            <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "repeat(3, 1fr)", columnGap: 40, rowGap: 28, marginTop: 28 }}>
+              {LANDING_FEATURES.map(([icon, t, d]) => (
+                <div key={t} style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+                  <span style={{ width: 40, height: 40, borderRadius: 10, background: "#ffffff", border: `1px solid ${C.border}`, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{icon}</span>
+                  <div><div style={{ fontSize: 15.5, fontWeight: 700, color: C.text, marginBottom: 4 }}>{t}</div><div style={{ fontSize: 14, color: C.muted, lineHeight: 1.85 }}>{d}</div></div>
+                </div>
               ))}
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Features */}
-      <section id="features" style={sec}>
-        <h2 style={h2}>مزايا المنصة</h2>
-        <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "repeat(3, 1fr)", gap: 12 }}>
-          {[["🔮 تنبؤ استباقي", "وقت الوصول للمستوى الحرج لكل حاوية بدرجة ثقة وسبب مكتوب — ولا تنبؤ من قراءة واحدة."], ["🧭 جولات محسَّنة", "ترتيب الزيارات على مصفوفة أزمنة الطرق الفعلية بقيود السعة والأولوية والمناوبة."], ["🤝 توزيع ذكي للموارد", "ضغط تشغيلي لكل بلدية ومقترحات دعم بين البلديات بأثر محسوب على الطرفين."], ["🧪 محاكاة القرارات", "تجربة تعطل مركبة أو غياب سائق أو إغلاق طريق على نسخة معزولة قبل التنفيذ."], ["📍 تنفيذ ميداني", "بوابة سائق بملاحة تفاعلية وتأكيد تفريغ لا يزوّر قراءات المستشعر."], ["🔐 عزل وصلاحيات خادمية", "كل بلدية ترى بياناتها فقط؛ السائق يرى مهامه فقط؛ القواعد مختبَرة."]].map(([t, d]) => (
-            <div key={t} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 16 }}><div style={{ fontSize: 15, fontWeight: 800, color: C.text, marginBottom: 6 }}>{t}</div><div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.8 }}>{d}</div></div>
-          ))}
-        </div>
-      </section>
-
-      {/* Engine */}
-      <section id="engine" style={{ background: C.card, borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
-        <div style={sec}>
-          <h2 style={h2}>{BRAND.engine}</h2>
-          <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{BRAND.engineEn} — الوظيفة المركزية التي تربط المراقبة بالتنبؤ والتخطيط والتنفيذ وقياس النتائج.</div>
-          <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "repeat(3, 1fr)", gap: 12 }}>
-            {[["1 · ماذا سيحدث؟", "محرك التنبؤ يحوّل القراءات إلى مخاطر قادمة: حاويات ستمتلئ خلال ساعات، أحياء تحت ضغط، مستشعرات صامتة."], ["2 · ما أفضل إجراء؟", "محرك التخطيط يقترح جولات وترتيب زيارات وسائقًا مرشحًا، ومحرك الموارد يقترح دعمًا بين البلديات — بأسباب حسابية."], ["3 · ما أثر القرار؟", "مركز المحاكاة يعيد تشغيل التخطيط على نسخة معزولة ويقارن بخط الأساس قبل الاعتماد، ثم يقاس الأثر الفعلي بعد التنفيذ."]].map(([t, d]) => (
-              <div key={t} style={{ background: C.bg, borderRadius: 14, padding: 16, borderTop: `4px solid ${C.accent}` }}><div style={{ fontSize: 15, fontWeight: 800, color: C.brand, marginBottom: 6 }}>{t}</div><div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.8 }}>{d}</div></div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* How it works */}
-      <section id="how" style={sec}>
-        <h2 style={h2}>آلية عمل النظام</h2>
-        <div style={{ display: "flex", flexDirection: isNarrow ? "column" : "row", gap: 0, alignItems: "stretch", overflowX: "auto" }}>
-          {PIPELINE_STEPS.map(([icon, t, d], i) => (
-            <div key={t} style={{ display: "flex", flexDirection: isNarrow ? "column" : "row", alignItems: "center", flex: 1, minWidth: 0 }}>
-              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, flex: 1, width: "100%", textAlign: "center" }}>
-                <div style={{ fontSize: 26 }}>{icon}</div><div style={{ fontSize: 13.5, fontWeight: 800, color: C.text, marginTop: 4 }}>{t}</div><div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, marginTop: 4 }}>{d}</div>
-              </div>
-              {i < PIPELINE_STEPS.length - 1 && <div style={{ color: C.accent, fontSize: 20, padding: isNarrow ? "4px 0" : "0 6px", fontWeight: 900 }}>{isNarrow ? "↓" : "←"}</div>}
+        {/* Portals */}
+        <section id="portals" style={sec("#ffffff")}>
+          <div style={wrap}>
+            <div style={eyebrow}>البوابات</div>
+            <h2 style={h2}>بوابة لكل دور</h2>
+            <p style={lead}>يرى كل مستخدم ما يحتاجه لدوره فقط، من القرار في الأمانة إلى التنفيذ في الميدان.</p>
+            <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "repeat(2, 1fr)", marginTop: 24, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+              {LANDING_PORTALS.map(([icon, t, d], i) => (
+                <div key={t} style={{ display: "flex", gap: 14, alignItems: "flex-start", padding: isNarrow ? 18 : 24, borderTop: (isNarrow ? i > 0 : i > 1) ? `1px solid ${C.border}` : "none", borderInlineStart: !isNarrow && i % 2 === 1 ? `1px solid ${C.border}` : "none" }}>
+                  {icon}
+                  <div><div style={{ fontSize: 15.5, fontWeight: 700, color: C.text, marginBottom: 4 }}>{t}</div><div style={{ fontSize: 14, color: C.muted, lineHeight: 1.85 }}>{d}</div></div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Portals */}
-      <section id="portals" style={{ background: C.card, borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
-        <div style={sec}>
-          <h2 style={h2}>البوابات الأربع</h2>
-          <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>تسلسل إشرافي وتشغيلي: أمانة منطقة القصيم ← البلديات الفرعية ← مدير البلدية ← موظفو العمليات ← السائقون والفرق الميدانية (ليس هيكلًا وظيفيًا رسميًا معتمدًا).</div>
-          <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "repeat(2, 1fr)", gap: 12 }}>
-            {PORTALS.map(([icon, t, d]) => (
-              <div key={t} style={{ background: C.bg, borderRadius: 14, padding: 16, display: "flex", gap: 12 }}><div style={{ fontSize: 28 }}>{icon}</div><div><div style={{ fontSize: 14.5, fontWeight: 800, color: C.text }}>{t}</div><div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.8 }}>{d}</div></div></div>
-            ))}
+            <div style={{ display: "flex", justifyContent: "center", marginTop: 36 }}><button onClick={onEnter} style={primary}>الدخول إلى المنصة <ArrowLeft size={17} /></button></div>
           </div>
-        </div>
-      </section>
+        </section>
+      </main>
 
-      {/* Demo indicators (source-labelled) */}
-      <section id="demo" style={sec}>
-        <h2 style={h2}>مؤشرات بيئة العرض</h2>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>المصدر: محاكي المستشعرات التجريبي (seed ثابت «{demo.seed}») — أرقام إعدادات عرض قابلة للتعديل، وليست بيانات رسمية. التقسيم البلدي: 6 بلديات فرعية من أمانة منطقة القصيم؛ حدود الأحياء من OpenStreetMap (13 حيًا).</div>
-        <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr 1fr" : "repeat(5, 1fr)", gap: 10 }}>
-          {[["6", "بلديات فرعية (رسمي)"], [String(demo.totalBins), "حاوية افتراضية"], [String(demo.totalBins - demo.offlineSensors - demo.faultSensors), "مستشعر متصل بالمحاكي"], [String(demo.offlineSensors + demo.faultSensors), "منقطع أو معطل (محاكاة)"], ["13 + 1", "حي بمضلع OSM + حي تقريبي"]].map(([v, l]) => (
-            <div key={l} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, textAlign: "center" }}><div style={{ fontSize: 24, fontWeight: 900, color: C.brand }}>{v}</div><div style={{ fontSize: 11.5, color: C.muted }}>{l}</div></div>
-          ))}
-        </div>
-      </section>
-
-      <footer style={{ background: C.brand, color: C.brandText, fontSize: 12, padding: "18px 24px" }}>
-        <div style={{ maxWidth: 1180, margin: "0 auto", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-          <span>{BRAND.ar} — هوية مستقلة للمشروع؛ لا يمثل نظامًا رسميًا معتمدًا لأي جهة حكومية.</span>
-          <button onClick={onEnter} style={{ background: "none", border: `1px solid ${C.brandText}80`, color: "#fff", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 12 }}>الدخول إلى المنصة</button>
+      <footer style={{ background: C.brand, color: C.brandText, fontSize: 12.5 }}>
+        <div style={{ ...wrap, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10, padding: isNarrow ? "20px 16px" : "22px 32px", lineHeight: 1.8 }}>
+          <span>{BRAND.ar} — هوية مستقلة للمشروع، ولا تمثل جهة حكومية.</span>
+          <span>حدود الأحياء من OpenStreetMap · التقسيم البلدي من مصادر منشورة · بيانات المستشعرات في بيئة العرض محاكاة.</span>
         </div>
       </footer>
     </div>
