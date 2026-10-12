@@ -16,7 +16,8 @@ import {
   doc, onSnapshot, query, where, orderBy,
   getDoc, getDocs, setDoc, writeBatch, arrayUnion, limit,
 } from "firebase/firestore";
-import { db } from "./firebase";
+import { db, auth } from "./firebase";
+import { defaultAssignmentFor } from "./municipalities";
 import { getStatus, getStatusColor, getBinStatus, THRESHOLDS } from "./config";
 
 // ══════════════════════════════════════════════════════════════════════
@@ -507,6 +508,7 @@ export const addRequest = (data) =>
     binType:   data.binType   || "مختلطة",
     notes:     data.notes     || "",
     stationId: data.stationId || "",
+    municipalityId: data.municipalityId || defaultAssignmentFor(data.district || "")?.municipalityId || null,
     status:    "قيد المراجعة",
   });
 
@@ -527,6 +529,7 @@ export const addCitizenReport = (data) =>
     type:        data.type        || "",
     description: data.description || "",
     location:    data.location    || "",
+    municipalityId: data.municipalityId || defaultAssignmentFor(data.district || "")?.municipalityId || null,
     status:      "قيد المعالجة",
     response:    "",
   });
@@ -799,13 +802,23 @@ export const recordCollectionEvent = async (binId, routeId, vehicleId, operatorI
 // ══════════════════════════════════════════════════════════════════════
 // 20. Audit log — §37
 // ══════════════════════════════════════════════════════════════════════
-export function useAuditLog(enabled = true) {
-  const { data, loading, error } = useCollection(enabled ? COLLECTIONS.AUDIT_LOG : null);
+/** Scoped accounts read their municipality's audit entries only (rules); the Amanah reads all. */
+export function useAuditLog(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.AUDIT_LOG, { enabled, municipalityId });
   return { auditLog: data, loading, error };
 }
 
+/**
+ * Audit identity. Rules require actorId == the signed-in uid and, for scoped accounts, the entry's
+ * municipalityId == the account's municipality. The shell sets the scope once the profile loads.
+ */
+const AUDIT_SCOPE = { municipalityId: null };
+export const setAuditScope = (municipalityId) => { AUDIT_SCOPE.municipalityId = municipalityId || null; };
+export const auditActorId = () => auth.currentUser?.uid || "";
+export const auditMunicipality = (fallback = null) => AUDIT_SCOPE.municipalityId || fallback || null;
+
 export const writeAuditLog = (action, actorId, actorName, details = {}) =>
-  addItem(COLLECTIONS.AUDIT_LOG, { action, actorId: actorId || "", actorName: actorName || "", details });
+  addItem(COLLECTIONS.AUDIT_LOG, { action, actorId: auditActorId(), actorName: actorName || "", municipalityId: auditMunicipality(details?.municipalityId), details });
 
 // ══════════════════════════════════════════════════════════════════════
 // 21. Alerts sync from Decision Engine candidates — §28/§29
@@ -814,12 +827,15 @@ export const writeAuditLog = (action, actorId, actorName, details = {}) =>
 //    every Phase 3 alert type (bin/neighborhood/route/vehicle), not just
 //    station fill-level.
 // ══════════════════════════════════════════════════════════════════════
-export const syncAlertsFromCandidates = async (candidates = []) => {
+export const syncAlertsFromCandidates = async (candidates = [], municipalityId = null) => {
   if (candidates.length === 0) return { created: 0 };
-
-  const openSnap = await getDocs(
-    query(collection(db, COLLECTIONS.ALERTS), where("resolved", "==", false))
-  );
+  // Scoped accounts may only list (and create) alerts of their municipality (rules).
+  const scoped = municipalityId ? candidates.filter((c) => c.municipalityId === municipalityId) : candidates.filter((c) => c.municipalityId);
+  if (scoped.length === 0) return { created: 0 };
+  candidates = scoped;
+  const openSnap = await getDocs(municipalityId
+    ? query(collection(db, COLLECTIONS.ALERTS), where("municipalityId", "==", municipalityId), where("resolved", "==", false))
+    : query(collection(db, COLLECTIONS.ALERTS), where("resolved", "==", false)));
   const openDedupKeys = new Set(openSnap.docs.map((d) => d.data().dedupKey).filter(Boolean));
 
   let created = 0;
@@ -827,7 +843,7 @@ export const syncAlertsFromCandidates = async (candidates = []) => {
     if (openDedupKeys.has(c.dedupKey)) continue;
     await addItem(COLLECTIONS.ALERTS, {
       type: c.type, severity: c.severity, sourceId: c.sourceId, sourceName: c.sourceName,
-      message: c.message, dedupKey: c.dedupKey, resolved: false,
+      message: c.message, dedupKey: c.dedupKey, resolved: false, municipalityId: c.municipalityId,
     });
     openDedupKeys.add(c.dedupKey); // guard against duplicate candidates within this same call
     created += 1;
@@ -845,13 +861,15 @@ export const syncAlertsFromCandidates = async (candidates = []) => {
 // ══════════════════════════════════════════════════════════════════════
 const HOUR_MS_FS = 60 * 60 * 1000;
 
+const binMunicipality = async (binId) => (await getDoc(doc(db, COLLECTIONS.BINS, binId))).data()?.municipalityId || null;
 export const demoSetReading = async (binId, fillLevelPercent, temperatureCelsius) => {
   const timestamp = ts();
+  const municipalityId = await binMunicipality(binId);
   const batch = writeBatch(db);
   const readingRef = doc(collection(db, COLLECTIONS.SIMULATED_READINGS));
   batch.set(readingRef, {
     bin_id: binId, device_id: "DEMO", fill_level_percent: Number(fillLevelPercent), temperature_celsius: Number(temperatureCelsius),
-    battery_level: null, signal: null, timestamp, receivedAt: timestamp, demo: true, source: "SIMULATED",
+    battery_level: null, signal: null, timestamp, receivedAt: timestamp, demo: true, source: "SIMULATED", municipalityId,
   });
   batch.update(doc(db, COLLECTIONS.BINS, binId), {
     lastFillLevelPercent: Number(fillLevelPercent), lastTemperatureCelsius: Number(temperatureCelsius), lastReadingAt: timestamp,
@@ -864,11 +882,12 @@ export const demoSetOffline = (binId) =>
 
 export const demoSetFault = async (binId) => {
   const timestamp = ts();
+  const municipalityId = await binMunicipality(binId);
   const batch = writeBatch(db);
   const readingRef = doc(collection(db, COLLECTIONS.SIMULATED_READINGS));
   batch.set(readingRef, {
     bin_id: binId, device_id: "DEMO", fill_level_percent: 240, temperature_celsius: 25,
-    battery_level: null, signal: null, timestamp, receivedAt: timestamp, demo: true, source: "demo",
+    battery_level: null, signal: null, timestamp, receivedAt: timestamp, demo: true, source: "demo", municipalityId,
   });
   batch.update(doc(db, COLLECTIONS.BINS, binId), { lastFillLevelPercent: 240, lastTemperatureCelsius: 25, lastReadingAt: timestamp });
   await batch.commit();
@@ -883,8 +902,9 @@ export const demoReset = (binId) => demoSetReading(binId, 20, 25);
 //    (/api/iot/readings) compares hashes. The demo seed's placeholder key is
 //    explicitly rejected by that route.
 // ══════════════════════════════════════════════════════════════════════
-export function useIotDevices() {
-  const { data, loading, error } = useCollection(COLLECTIONS.IOT_DEVICES, "label");
+/** Device registry: the Amanah lists all; a municipality manager only the devices of their municipality (rules). */
+export function useIotDevices(municipalityId = null, enabled = true) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.IOT_DEVICES, { enabled, municipalityId, sortField: "label" });
   return { devices: data, loading, error };
 }
 
@@ -971,7 +991,7 @@ export const updateDriverProfile = async (driverId, patch, before, actor, reason
       driverId, fields: changed, before: Object.fromEntries(changed.map((k) => [k, before?.[k] ?? null])), after: Object.fromEntries(changed.map((k) => [k, patch[k] ?? null])),
       actorId: actor?.uid || "", actorName: actor?.name || "", reason, createdAt: ts(),
     });
-    batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "driver_profile_updated", actorId: actor?.uid || "", actorName: actor?.name || "", details: { driverId, fields: changed, reason }, createdAt: ts() });
+    batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "driver_profile_updated", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { driverId, fields: changed, reason }, createdAt: ts() });
   }
   await batch.commit();
 };
@@ -983,7 +1003,7 @@ export const assignVehicleToDriver = async ({ driverId, driverName, vehicleId, v
   batch.set(ref, { driverId, driverName: driverName || "", vehicleId, vehicleNumber: vehicleNumber || "", start, end, active: true, assignedBy: actor?.uid || "", assignedByName: actor?.name || "", reason, createdAt: ts() });
   batch.set(doc(db, COLLECTIONS.DRIVER_PROFILES, driverId), { vehicleId, updatedAt: ts() }, { merge: true });
   if ((await getDoc(doc(db, COLLECTIONS.VEHICLES, vehicleId))).exists()) batch.update(doc(db, COLLECTIONS.VEHICLES, vehicleId), { driverId, driverName: driverName || null });
-  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "driver_vehicle_assigned", actorId: actor?.uid || "", actorName: actor?.name || "", details: { driverId, vehicleId, start, end, reason }, createdAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "driver_vehicle_assigned", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { driverId, vehicleId, start, end, reason }, createdAt: ts() });
   await batch.commit();
   return ref.id;
 };
@@ -993,7 +1013,7 @@ export const endVehicleAssignment = async (assignment, actor, reason = "") => {
   batch.set(doc(db, COLLECTIONS.DRIVER_PROFILES, assignment.driverId), { vehicleId: null, updatedAt: ts() }, { merge: true });
   // The vehicle may have been deleted since the assignment was made — closing the assignment must still succeed.
   if ((await getDoc(doc(db, COLLECTIONS.VEHICLES, assignment.vehicleId))).exists()) batch.update(doc(db, COLLECTIONS.VEHICLES, assignment.vehicleId), { driverId: null, driverName: null });
-  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "driver_vehicle_unassigned", actorId: actor?.uid || "", actorName: actor?.name || "", details: { driverId: assignment.driverId, vehicleId: assignment.vehicleId, reason }, createdAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "driver_vehicle_unassigned", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { driverId: assignment.driverId, vehicleId: assignment.vehicleId, reason }, createdAt: ts() });
   await batch.commit();
 };
 
@@ -1081,9 +1101,10 @@ export const persistDriverLocation = async (uid, loc, routeId = null) => {
 
 /** Vehicle status changes are kept as history (who/when/why). */
 export const setVehicleStatusWithHistory = async (vehicleId, from, to, actor, reason = "", currentRouteId = null) => {
+  const vehicleMunicipality = (await getDoc(doc(db, COLLECTIONS.VEHICLES, vehicleId))).data()?.municipalityId || null;
   const batch = writeBatch(db);
   batch.update(doc(db, COLLECTIONS.VEHICLES, vehicleId), { status: to, currentRouteId, lastActiveAt: ts() });
-  batch.set(doc(collection(db, COLLECTIONS.VEHICLE_STATUS_HISTORY)), { vehicleId, from, to, actorId: actor?.uid || "", actorName: actor?.name || "", reason, createdAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.VEHICLE_STATUS_HISTORY)), { vehicleId, municipalityId: vehicleMunicipality, from, to, actorId: actor?.uid || "", actorName: actor?.name || "", reason, createdAt: ts() });
   await batch.commit();
 };
 
@@ -1146,7 +1167,7 @@ export async function seedMunicipalitiesAndBackfill({ municipalities, defaultAss
   const iSnap = await getDocs(collection(db, COLLECTIONS.ROUTE_INCIDENTS));
   const midByRoute = Object.fromEntries(rSnap.docs.map((d) => [d.id, midByNeighborhoodId[d.data().neighborhoodIds?.[0]] || null]));
   for (const d of iSnap.docs) { const mid = midByRoute[d.data().routeId] || null; if (d.data().municipalityId !== mid) { await add((b) => b.update(d.ref, { municipalityId: mid })); result.incidents += 1; } }
-  await add((b) => b.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "municipalities_seeded", actorId: actor?.uid || "", actorName: actor?.name || "", details: { ...result, unassignedNeighborhoods: result.unassignedNeighborhoods.length }, createdAt: ts() }));
+  await add((b) => b.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "municipalities_seeded", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { ...result, unassignedNeighborhoods: result.unassignedNeighborhoods.length }, createdAt: ts() }));
   await flush();
   return result;
 }
@@ -1165,20 +1186,15 @@ export async function setNeighborhoodMunicipality(neighborhoodId, municipalityId
   bins.docs.forEach((d) => batch.update(d.ref, { municipalityId }));
   const routes = await getDocs(query(collection(db, COLLECTIONS.COLLECTION_ROUTES), where("neighborhoodIds", "array-contains", neighborhoodId)));
   routes.docs.forEach((d) => batch.update(d.ref, { municipalityId }));
-  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "neighborhood_municipality_changed", actorId: actor?.uid || "", actorName: actor?.name || "", details: { neighborhoodId, from: before.municipalityId || null, to: municipalityId, reason }, createdAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "neighborhood_municipality_changed", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { neighborhoodId, from: before.municipalityId || null, to: municipalityId, reason }, createdAt: ts() });
   await batch.commit();
 }
 
 /** Admin sets a user's municipality (and optionally role) — mirrored onto the driver profile when one exists. */
-export async function setUserMunicipality(uid, municipalityId, actor, role = null) {
-  const batch = writeBatch(db);
-  const patch = { municipalityId: municipalityId || null, updatedAt: ts() };
-  if (role) patch.role = role;
-  batch.update(doc(db, COLLECTIONS.USERS, uid), patch);
-  const prof = await getDoc(doc(db, COLLECTIONS.DRIVER_PROFILES, uid));
-  if (prof.exists()) batch.update(prof.ref, { municipalityId: municipalityId || null, updatedAt: ts() });
-  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "user_municipality_set", actorId: actor?.uid || "", actorName: actor?.name || "", details: { uid, municipalityId, role }, createdAt: ts() });
-  await batch.commit();
+/** Sets a user's municipality (and optionally role) through the trusted server route. */
+export async function setUserMunicipality(uid, municipalityId, _actor, role = null) { // the server records the verified caller
+  await adminUserAction({ action: "setMunicipality", uid, municipalityId: municipalityId || null });
+  if (role) await adminUserAction({ action: "setRole", uid, role });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1219,8 +1235,8 @@ export function useOptimizationRuns(enabled = true, municipalityId = null) {
   const { data, loading, error } = useScopedCollection(COLLECTIONS.OPTIMIZATION_RUNS, { enabled, municipalityId });
   return { runs: data, loading, error };
 }
-export function useSimulationScenarios(enabled = true) {
-  const { data, loading, error } = useScopedCollection(COLLECTIONS.SIMULATION_SCENARIOS, { enabled });
+export function useSimulationScenarios(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.SIMULATION_SCENARIOS, { enabled, municipalityId });
   return { scenarios: data, loading, error };
 }
 
@@ -1249,7 +1265,7 @@ export const decideResourceTransfer = async (transfer, actor, decision, note = "
   const batch = writeBatch(db);
   const ref = doc(db, COLLECTIONS.RESOURCE_TRANSFERS, transfer.id);
   batch.update(ref, { status: decision, decidedBy: actor?.uid || "", decidedByName: actor?.name || "", decidedAt: ts(), decisionNote: note, updatedAt: ts() });
-  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: decision === "approved" ? "transfer_approved" : "transfer_rejected", actorId: actor?.uid || "", actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId, from: transfer.fromMunicipalityId, to: transfer.toMunicipalityId, note }, createdAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: decision === "approved" ? "transfer_approved" : "transfer_rejected", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId, from: transfer.fromMunicipalityId, to: transfer.toMunicipalityId, note }, createdAt: ts() });
   await batch.commit();
 };
 /** Resource documents touched by a transfer: vehicle, driver profile (+ its user doc), or both for a crew. */
@@ -1258,7 +1274,7 @@ const transferTargets = (transfer) => {
   const vehicleId = transfer.resourceType === "vehicle" ? transfer.resourceId : transfer.vehicleId;
   const driverId = transfer.resourceType === "driver" ? transfer.resourceId : transfer.driverId;
   if (transfer.resourceType !== "driver" && vehicleId) t.push({ col: COLLECTIONS.VEHICLES, id: vehicleId });
-  if (transfer.resourceType !== "vehicle" && driverId) { t.push({ col: COLLECTIONS.DRIVER_PROFILES, id: driverId }); t.push({ col: COLLECTIONS.USERS, id: driverId, optional: true }); }
+  if (transfer.resourceType !== "vehicle" && driverId) t.push({ col: COLLECTIONS.DRIVER_PROFILES, id: driverId }); // the users/{uid} doc is re-homed by the server (/api/admin/users)
   return t;
 };
 /** Executes an APPROVED transfer: the vehicle / driver / crew is temporarily re-homed (homeMunicipalityId kept for the return). */
@@ -1274,8 +1290,10 @@ export const executeResourceTransfer = async (transfer, actor) => {
     batch.update(snap.ref, { municipalityId: transfer.toMunicipalityId, homeMunicipalityId: d.homeMunicipalityId || d.municipalityId || transfer.fromMunicipalityId, transferId: transfer.id, transferUntil: transfer.until || null, updatedAt: ts() });
   }
   batch.update(doc(db, COLLECTIONS.RESOURCE_TRANSFERS, transfer.id), { status: "executed", executedBy: actor?.uid || "", executedAt: ts(), updatedAt: ts() });
-  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "transfer_executed", actorId: actor?.uid || "", actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId, from: transfer.fromMunicipalityId, to: transfer.toMunicipalityId }, createdAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "transfer_executed", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId, from: transfer.fromMunicipalityId, to: transfer.toMunicipalityId }, createdAt: ts() });
   await batch.commit();
+  // Driver / crew: the server re-homes the user account (sensitive field), verified against this executed transfer.
+  if (transfer.resourceType !== "vehicle") await adminUserAction({ action: "applyTransfer", transferId: transfer.id });
 };
 /** Returns an EXECUTED transfer's resource(s) to the home municipality. */
 export const returnResourceTransfer = async (transfer, actor) => {
@@ -1287,8 +1305,9 @@ export const returnResourceTransfer = async (transfer, actor) => {
     batch.update(snap.ref, { municipalityId: snap.data().homeMunicipalityId || transfer.fromMunicipalityId, transferId: null, transferUntil: null, updatedAt: ts() });
   }
   batch.update(doc(db, COLLECTIONS.RESOURCE_TRANSFERS, transfer.id), { status: "returned", returnedBy: actor?.uid || "", returnedAt: ts(), updatedAt: ts() });
-  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "transfer_returned", actorId: actor?.uid || "", actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId }, createdAt: ts() });
+  batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "transfer_returned", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { transferId: transfer.id, resourceType: transfer.resourceType, resourceId: transfer.resourceId }, createdAt: ts() });
   await batch.commit();
+  if (transfer.resourceType !== "vehicle") await adminUserAction({ action: "revertTransfer", transferId: transfer.id });
 };
 
 /** Planner / simulation records (immutable history of what the engines computed and why). */
@@ -1356,6 +1375,21 @@ export async function requestDispatchCycle({ municipalityId = null, trigger = "m
   const token = await auth.currentUser?.getIdToken();
   if (!token) throw new Error("غير مسجل الدخول");
   const res = await fetch("/api/dispatch/run", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ municipalityId, trigger }) });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+  return out;
+}
+
+
+// ══════════════════════════════════════════════════════════════════════
+// 29. Trusted server path for SENSITIVE user changes (role / status / municipality / transfer re-homing).
+//     Firestore rules deny these fields to every client; /api/admin/users verifies the caller is an active
+//     Amanah decision maker and writes them with firebase-admin plus a server-side audit entry.
+// ══════════════════════════════════════════════════════════════════════
+export async function adminUserAction(payload) {
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) throw new Error("غير مسجل الدخول");
+  const res = await fetch("/api/admin/users", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) });
   const out = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
   return out;

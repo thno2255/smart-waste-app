@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 
 /**
- * Dev-only: serve the server-side dispatch function (/api/dispatch/run) from the Vite dev server so the
+ * Dev-only: serve the server functions (/api/dispatch/run, /api/admin/users) from the Vite dev server so the
  * whole flow can be exercised locally. Only active in emulator mode (VITE_USE_EMULATOR=1), where the
  * Admin SDK talks to the local emulators — the dev server never touches production data.
  */
@@ -17,17 +17,19 @@ function devServerFunctions() {
       process.env.FIRESTORE_EMULATOR_HOST ||= '127.0.0.1:8080'
       process.env.FIREBASE_AUTH_EMULATOR_HOST ||= '127.0.0.1:9099'
       process.env.GCLOUD_PROJECT ||= 'hdhdhsus-84995'
-      server.middlewares.use('/api/dispatch/run', async (req, res) => {
+      const mount = (route, file) => server.middlewares.use(route, async (req, res) => {
         const chunks = []
         for await (const c of req) chunks.push(c)
         const raw = Buffer.concat(chunks).toString('utf8')
         req.body = raw ? (() => { try { return JSON.parse(raw) } catch { return {} } })() : {}
         const shim = { status(code) { res.statusCode = code; return shim }, json(obj) { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(obj)) }, setHeader: (k, v) => res.setHeader(k, v) }
         try {
-          const mod = await import(pathToFileURL(resolve('api/dispatch/run.js')).href)
+          const mod = await import(pathToFileURL(resolve(file)).href)
           await mod.default(req, shim)
         } catch (e) { res.statusCode = 500; res.end(JSON.stringify({ error: String(e?.message || e) })) }
       })
+      mount('/api/dispatch/run', 'api/dispatch/run.js')
+      mount('/api/admin/users', 'api/admin/users.js')
     },
   }
 }

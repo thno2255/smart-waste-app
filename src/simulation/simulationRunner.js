@@ -17,7 +17,7 @@
  */
 import { collection, doc, getDoc, getDocs, query, where, writeBatch, onSnapshot, setDoc } from "firebase/firestore";
 import { db } from "../firebase";
-import { COLLECTIONS } from "../firestoreService";
+import { COLLECTIONS , auditActorId, auditMunicipality } from "../firestoreService";
 import { generateScenario, advance, applyEvent, pickBinFor, readingFor, binDocFrom, summarize, SIM_EVENTS } from "./simulationEngine";
 import { removePreviousDemoData, seedFleetHistory } from "../seedFirestore";
 import { normalizeNeighborhoodName } from "../config";
@@ -29,7 +29,7 @@ const ts = () => new Date().toISOString();
 
 const readingRow = (b, at, extra = {}) => {
   const r = readingFor(b, at);
-  return { ...r, bin_id: r.binId, device_id: r.sensorId, fill_level_percent: r.fillPercentage, temperature_celsius: r.temperature, battery_level: r.batteryLevel, receivedAt: at, demo: true, simulated: true, ...extra };
+  return { ...r, municipalityId: b.municipalityId || null, bin_id: r.binId, device_id: r.sensorId, fill_level_percent: r.fillPercentage, temperature_celsius: r.temperature, battery_level: r.batteryLevel, receivedAt: at, demo: true, simulated: true, ...extra };
 };
 
 async function commitInChunks(ops) {
@@ -60,7 +60,7 @@ export async function installSimulation(cfg, { neighborhoods, featuresByKey, act
     b.id = ref.id;
     binIndex.push({ id: ref.id, simId: b.simId });
     ops.push((batch) => batch.set(ref, { ...binDocFrom(b, now), createdAt: now, _demoSeedVersion: "sim-" + scenario.config.seed }));
-    ops.push((batch) => batch.set(doc(db, COLLECTIONS.IOT_DEVICES, b.sensorId), { deviceId: b.sensorId, binId: ref.id, label: b.sensorId, deviceKey: "demo-key-not-for-production", deviceKeyHash: null, disabled: b.connectivity === "offline", simulated: true, demo: true, lastSeenAt: b.lastReadingAt, createdAt: now }));
+    ops.push((batch) => batch.set(doc(db, COLLECTIONS.IOT_DEVICES, b.sensorId), { deviceId: b.sensorId, binId: ref.id, municipalityId: b.municipalityId || null, label: b.sensorId, deviceKey: "demo-key-not-for-production", deviceKeyHash: null, disabled: b.connectivity === "offline", simulated: true, demo: true, lastSeenAt: b.lastReadingAt, createdAt: now }));
     // 3-point history (−120, −60, −0 min) with the bin's own rate so the prediction engine has a slope from the first second.
     if (b.connectivity === "online") {
       for (const minutesAgo of [120, 60, 0]) {
@@ -77,7 +77,7 @@ export async function installSimulation(cfg, { neighborhoods, featuresByKey, act
     config: scenario.config, status: "stopped", speed: 1, clock: now, tick: 0, binIndex, events: [], summary: scenario.summary,
     installedAt: now, installedBy: actor?.uid || "", leader: null, lastTickAt: null, lastEventSyncAt: now, warnings: scenario.warnings,
   }));
-  ops.push((batch) => batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "simulation_installed", actorId: actor?.uid || "", actorName: actor?.name || "", details: { seed: scenario.config.seed, bins: scenario.bins.length, cleaned: cleanup.deleted }, createdAt: now }));
+  ops.push((batch) => batch.set(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "simulation_installed", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { seed: scenario.config.seed, bins: scenario.bins.length, cleaned: cleanup.deleted }, createdAt: now }));
   await commitInChunks(ops);
   let history = { routes: 0 };
   if (withHistory && vehicleIds.length) history = await seedFleetHistory(seededForHistory, neighborhoods.map((n) => ({ id: n.id, name: n.name })), vehicleIds);
@@ -167,7 +167,7 @@ export async function fireSimulationEvent(type, target = {}, actor) {
   const at = st.status === "running" ? st.clock : ts();
   const next = applyEvent({ ...st, clock: at }, { type, binId: bin.simId, at });
   await persistState(next, { changedOnly: new Set([bin.id]), reason: type });
-  await setDoc(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "simulation_event", actorId: actor?.uid || "", actorName: actor?.name || "", details: { type, binId: bin.id, binName: bin.name }, createdAt: ts() });
+  await setDoc(doc(collection(db, COLLECTIONS.AUDIT_LOG)), { action: "simulation_event", actorId: auditActorId(), municipalityId: auditMunicipality(), actorName: actor?.name || "", details: { type, binId: bin.id, binName: bin.name }, createdAt: ts() });
   return { bin, entry: next.lastEvent };
 }
 

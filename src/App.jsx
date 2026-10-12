@@ -132,6 +132,9 @@ import {
   setVehicleStatusWithHistory,
   withdrawOpenSupportRequests,
   useDispatchSettings,
+  setAuditScope,
+  adminUserAction,
+  useScopedCollection,
   useDispatchDecisions,
   useDispatchRuns,
   useDriverNotifications,
@@ -4209,7 +4212,10 @@ const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly
 };
 
 // ======================== REQUESTS & REPORTS MANAGEMENT ========================
-const RequestsManagementPage = () => {
+const RequestsManagementPage = ({ loggedInUser }) => {
+  // Staff see the requests and reports of their municipality only (rules); the Amanah sees all.
+  const reqScope = scopeFor(loggedInUser);
+  const reqMid = reqScope.all ? null : reqScope.municipalityId || "__none__";
   // All requests & reports loaded directly via onSnapshot (no userId filter needed here)
   const [requests, setRequests] = useState([]);
   const [reports,  setReports]  = useState([]);
@@ -4220,22 +4226,22 @@ const RequestsManagementPage = () => {
   const [responseText, setResponseText] = useState({}); // { [id]: string }
 
   useEffect(() => {
-    const q = query(collection(db, COLLECTIONS.REQUESTS), orderBy("createdAt", "desc"));
+    const q = reqMid ? query(collection(db, COLLECTIONS.REQUESTS), where("municipalityId", "==", reqMid)) : query(collection(db, COLLECTIONS.REQUESTS), orderBy("createdAt", "desc"));
     const unsub = onSnapshot(q, (snap) => {
       setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       setLoadingReqs(false);
     }, (e) => { console.error(e); setLoadingReqs(false); });
     return () => unsub();
-  }, []);
+  }, [reqMid]);
 
   useEffect(() => {
-    const q = query(collection(db, COLLECTIONS.CITIZEN_REPORTS), orderBy("createdAt", "desc"));
+    const q = reqMid ? query(collection(db, COLLECTIONS.CITIZEN_REPORTS), where("municipalityId", "==", reqMid)) : query(collection(db, COLLECTIONS.CITIZEN_REPORTS), orderBy("createdAt", "desc"));
     const unsub = onSnapshot(q, (snap) => {
       setReports(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       setLoadingReps(false);
     }, (e) => { console.error(e); setLoadingReps(false); });
     return () => unsub();
-  }, []);
+  }, [reqMid]);
 
   const pendingReqs = requests.filter(r => r.status === "قيد المراجعة").length;
   const pendingReps = reports.filter(r => r.status === "قيد المعالجة").length;
@@ -4584,7 +4590,8 @@ const SettingsPage = ({ bins = [], loggedInUser, autoSyncRoutes = true, onToggle
   useEffect(() => () => { if (simTimer.current) clearInterval(simTimer.current); }, []);
 
   // ── IoT device registry (keys shown once, only hashes stored) ──
-  const { devices: iotDevices } = useIotDevices();
+  const iotScope = scopeFor(loggedInUser);
+  const { devices: iotDevices } = useIotDevices(iotScope.all ? null : iotScope.municipalityId || "__none__", loggedInUser?.role === "executive" || loggedInUser?.role === "manager");
   const [revealedKey, setRevealedKey] = useState(null); // { deviceId, key }
   const [deviceBusy, setDeviceBusy] = useState("");
   const [demoFill, setDemoFill] = useState(50);
@@ -5708,7 +5715,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
   const isAmanah = can(loggedInUser?.role, "transfers.approve");
   useEffect(() => onSnapshot(DEMO_SESSION_REF(), (snap) => setSession(snap.exists() ? snap.data() : null), () => setSession(null)), []);
   const { runs } = useOptimizationRuns(true, scopeFor(loggedInUser).all ? null : scopeFor(loggedInUser).municipalityId);
-  const { scenarios } = useSimulationScenarios(true);
+  const { scenarios } = useSimulationScenarios(true, scopeFor(loggedInUser).all ? null : scopeFor(loggedInUser).municipalityId || "__none__");
   const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings });
   const evaluation = useMemo(() => evaluateDemo(session, { bins, routes, profiles, readings: recentReadings, runs, scenarios, supportRequests, transfers, audit: auditLog }), [session, bins, routes, profiles, recentReadings, runs, scenarios, supportRequests, transfers, auditLog]);
   const { index, doneByKey, newlyPassed } = useMemo(() => nextStepIndex(session, evaluation), [session, evaluation]);
@@ -6024,7 +6031,9 @@ const inputSt = { width: "100%", padding: "9px 12px", borderRadius: 8, border: `
 const smallBtn = (color, filled = false) => ({ padding: "6px 12px", borderRadius: 8, border: filled ? "none" : `1px solid ${color}`, background: filled ? color : color + "15", color: filled ? "#07231A" : color, fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: ARABIC_FONT });
 
 const DriversPage = ({ profiles = [], assignments = [], vehicles = [], loggedInUser }) => {
-  const { data: driverUsers } = useCollectionWhere(COLLECTIONS.USERS, "role", "driver");
+  const usersScope = scopeFor(loggedInUser);
+  const { data: scopedUsers } = useScopedCollection(COLLECTIONS.USERS, { municipalityId: usersScope.all ? null : usersScope.municipalityId || "__none__" });
+  const driverUsers = useMemo(() => (scopedUsers || []).filter((u) => u.role === "driver"), [scopedUsers]);
   const [selectedId, setSelectedId] = useState(null);
   const [form, setForm] = useState(null);
   const [errors, setErrors] = useState([]);
@@ -6865,7 +6874,7 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
-  const { scenarios } = useSimulationScenarios(true);
+  const { scenarios } = useSimulationScenarios(true, scopeFor(loggedInUser).all ? null : scopeFor(loggedInUser).municipalityId || "__none__");
   const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
   const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings });
   const live = useMemo(() => city.live[mid] || { bins: [], profiles: [], vehicles: [], routes: [], incidents: [] }, [city.live, mid]);
@@ -9083,7 +9092,9 @@ function SmartWasteManagement() {
   const { vehicles, loading: loadingVehicles } = useVehicles({ municipalityId: scopeMid });
   const { routes, loading: loadingRoutes } = useCollectionRoutes(!isDriverAccount, scopeMid);
   const { events: collectionEvents } = useCollectionEvents({ municipalityId: scopeMid });
-  const { auditLog } = useAuditLog(!isDriverAccount);
+  // Audit entries are written with the real actor and, for scoped accounts, their municipality (rules).
+  useEffect(() => { setAuditScope(scope.all ? null : scope.municipalityId); }, [scope.all, scope.municipalityId]);
+  const { auditLog } = useAuditLog(isStaffAccount, scopeMid);
   const { profiles: driverProfiles } = useDriverProfiles(isStaffAccount, scopeMid);
   const { incidents: routeIncidents } = useRouteIncidents(isStaffAccount, scopeMid);
   const { assignments: vehicleAssignments } = useDriverVehicleAssignments(isStaffAccount, scopeMid);
@@ -9091,7 +9102,8 @@ function SmartWasteManagement() {
   const { transfers: resourceTransfers } = useResourceTransfers(isStaffAccount && (scope.all || userData?.role === "manager" || userData?.role === "employee"), scope.all ? null : scopeMid);
   const { municipalities: municipalityDocs } = useMunicipalities(); // eslint-disable-line no-unused-vars -- used by the municipalities page (Phase 2)
   const municipalityIdFor = useCallback((nid) => municipalityForNeighborhood(neighborhoods.find((n) => n.id === nid)), [neighborhoods]);
-  const { data: _citizenReportsCol } = useCollection(COLLECTIONS.CITIZEN_REPORTS);
+  // Citizen reports are visible to back-office staff of the municipality (rules); drivers do not read them.
+  const { data: _citizenReportsCol } = useScopedCollection(COLLECTIONS.CITIZEN_REPORTS, { enabled: isStaffAccount, municipalityId: scopeMid });
   const citizenReports = useMemo(() => _citizenReportsCol || [], [_citizenReportsCol]);
 
   // Auto-sync of SUGGESTED routes (never approvals/dispatch): when the bins'
@@ -9157,7 +9169,8 @@ function SmartWasteManagement() {
   // dedup يمنع تكرارها عند كل تحديث. استبدلت القائمة السابقة المشتقة من
   // stations فقط للعرض في الواجهة (generateAlerts تبقى معرّفة لتوافق الأماكن
   // الأخرى التي ما زالت تقرأ stations، لكن لوحة التحكم لم تعد تستهلكها).
-  const { data: realAlerts } = useCollectionWhere(COLLECTIONS.ALERTS, "resolved", false);
+  const { data: scopedAlerts } = useScopedCollection(COLLECTIONS.ALERTS, { enabled: isStaffAccount, municipalityId: scopeMid });
+  const realAlerts = useMemo(() => (scopedAlerts || []).filter((a) => a.resolved === false), [scopedAlerts]);
   const alerts = useMemo(() => (realAlerts || []).map((a) => ({
     id: a.id,
     type: ALERT_TYPE_LABELS[a.type] || a.type,
@@ -9187,7 +9200,7 @@ function SmartWasteManagement() {
       syncingRef.current = true;
       try {
         const result = await applyRouteReconciliation(plan, { municipalityIdFor });
-        await writeAuditLog("routes_auto_synced", "system", "النظام (مزامنة تلقائية)", { ...result, triggeredBy: userData.fullName || "" });
+        await writeAuditLog("routes_auto_synced", userData.uid, `${userData.fullName || ""} (مزامنة تلقائية من المتصفح)`, { ...result, triggeredBy: userData.fullName || "" });
       } catch (e) { console.error("[routes-auto-sync]", e); }
       finally { syncingRef.current = false; }
     }, 6000);
@@ -9210,8 +9223,10 @@ function SmartWasteManagement() {
       neighborhood: n,
       priority: getNeighborhoodPriority(scored.filter((x) => x.bin.neighborhoodId === n.id), ctx.forNeighborhoodName(n.name)),
     }));
-    const candidates = generateAlertCandidates(scored, scoredNeighborhoods);
-    syncAlertsFromCandidates(candidates).catch((e) => console.error("[alerts-sync]", e));
+    // Every alert carries the municipality of its source bin/neighborhood (rules scope alerts by municipality).
+    const munOf = (id) => bins.find((b) => b.id === id)?.municipalityId || municipalityForNeighborhood(neighborhoods.find((n) => n.id === id)) || null;
+    const candidates = generateAlertCandidates(scored, scoredNeighborhoods).map((c) => ({ ...c, municipalityId: munOf(c.sourceId) }));
+    syncAlertsFromCandidates(candidates, userData.role === "executive" ? null : userData.municipalityId || null).catch((e) => console.error("[alerts-sync]", e));
   }, [bins, neighborhoods, fireSensors, citizenReports, userData]);
 
   // Browser notifications for the operations staff: new critical alerts + new suggested routes.
@@ -9543,7 +9558,7 @@ function SmartWasteManagement() {
           {resolvedPage === "municipalities" && <MunicipalitiesPage key={municipalityInitialId || "all"} initialMunicipalityId={municipalityInitialId} neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} supportRequests={supportRequests} loggedInUser={loggedInUser} onOpenRoute={(id) => { setRouteInitialId(id); setPage("control"); }} onViewBins={(nid) => { setBinsNeighborhoodFilter(nid); setPage("bins"); }} onAddToRoute={(b) => { setRouteDraftBinId(b.id); setPage("control"); }} />}
           {resolvedPage === "neighborhoods" && <NeighborhoodsPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods} onViewBins={goToBins} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
           {resolvedPage === "bins"        && <BinsPage neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} loading={loadingBins} initialNeighborhoodId={binsNeighborhoodFilter} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} />}
-          {resolvedPage === "requests"   && <RequestsManagementPage />}
+          {resolvedPage === "requests"   && <RequestsManagementPage loggedInUser={loggedInUser} />}
           {resolvedPage === "fire"       && <FireAlertPage stations={stations} fireSensors={fireSensors} fireTempHistory={fireTempHistory} fireWeekly={fireWeeklyData} />}
           {resolvedPage === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} bins={bins} neighborhoods={neighborhoods} routes={routes} collectionEvents={collectionEvents} vehicles={vehicles} auditLog={auditLog} fireSensors={fireSensors} citizenReports={citizenReports} />}
           {resolvedPage === "demo"       && <DemoScenarioPage neighborhoods={neighborhoods} bins={bins} routes={routes} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} supportRequests={supportRequests} transfers={resourceTransfers} auditLog={auditLog} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onNavigate={(pg, extra) => { if (extra?.municipalityId) setMunicipalityInitialId(extra.municipalityId); setPage(pg); }} />}
@@ -9652,29 +9667,30 @@ const AdminPanel = ({ onBack }) => {
   const updateUserRole = async (uid, newRole) => {
     const roleArMap = { executive: "متخذ القرار بالأمانة", manager: "متخذ القرار بالبلدية", employee: "موظف العمليات", driver: "فرد ميداني (سائق)", citizen: "مواطن" };
     const roleAr = roleArMap[newRole] || "مواطن";
-    await updateDoc(doc(db, "users", uid), { role: newRole, roleAr, updatedAt: new Date().toISOString() });
-    setActionMsg("✅ تم تغيير الدور بنجاح");
+    void roleAr;
+    try { await adminUserAction({ action: "setRole", uid, role: newRole }); setActionMsg("✅ تم تغيير الدور بنجاح"); }
+    catch (e) { setActionMsg("تعذر تغيير الدور: " + friendlyError(e)); }
     setTimeout(() => setActionMsg(""), 3000);
     fetchUsers();
   };
 
   const updateUserStatus = async (uid, newStatus) => {
-    await updateDoc(doc(db, "users", uid), { status: newStatus, updatedAt: new Date().toISOString() });
-    setActionMsg(newStatus === "active" ? "✅ تم تفعيل الحساب" : "⛔ تم تعطيل الحساب");
+    try { await adminUserAction({ action: "setStatus", uid, status: newStatus }); setActionMsg(newStatus === "active" ? "✅ تم تفعيل الحساب" : "⛔ تم تعطيل الحساب"); }
+    catch (e) { setActionMsg("تعذر تغيير الحالة: " + friendlyError(e)); }
     setTimeout(() => setActionMsg(""), 3000);
     fetchUsers();
   };
 
   const approveUser = async (uid) => {
-    await updateDoc(doc(db, "users", uid), { status: "active", updatedAt: new Date().toISOString() });
-    setActionMsg("✅ تم قبول المستخدم");
+    try { await adminUserAction({ action: "setStatus", uid, status: "active" }); setActionMsg("✅ تم قبول المستخدم"); }
+    catch (e) { setActionMsg("تعذر قبول المستخدم: " + friendlyError(e)); }
     setTimeout(() => setActionMsg(""), 3000);
     fetchUsers();
   };
 
   const rejectUser = async (uid) => {
-    await updateDoc(doc(db, "users", uid), { status: "rejected", updatedAt: new Date().toISOString() });
-    setActionMsg("❌ تم رفض المستخدم");
+    try { await adminUserAction({ action: "setStatus", uid, status: "rejected" }); setActionMsg("❌ تم رفض المستخدم"); }
+    catch (e) { setActionMsg("تعذر رفض المستخدم: " + friendlyError(e)); }
     setTimeout(() => setActionMsg(""), 3000);
     fetchUsers();
   };
@@ -9824,7 +9840,7 @@ const AdminPanel = ({ onBack }) => {
                             <option value="executive">إدارة عليا</option>
                           </select>
                           {(u.role === "manager" || u.role === "employee" || u.role === "driver") && (
-                            <select value={u.municipalityId || ""} onChange={async (e) => { await setUserMunicipality(u.id, e.target.value || null, { uid: "admin" }); setActionMsg("✅ تم تحديث البلدية"); setTimeout(() => setActionMsg(""), 3000); fetchUsers(); }} title="البلدية الفرعية (نطاق البيانات)" style={{ padding:"4px 8px", borderRadius:6, border:`1px solid ${u.municipalityId ? C.border : C.warning}`, background:C.bg, color:C.text, fontSize:10, fontFamily:F, cursor:"pointer" }}>
+                            <select value={u.municipalityId || ""} onChange={async (e) => { try { await setUserMunicipality(u.id, e.target.value || null); } catch (err) { setActionMsg("تعذر تعديل البلدية: " + friendlyError(err)); return; } setActionMsg("✅ تم تحديث البلدية"); setTimeout(() => setActionMsg(""), 3000); fetchUsers(); }} title="البلدية الفرعية (نطاق البيانات)" style={{ padding:"4px 8px", borderRadius:6, border:`1px solid ${u.municipalityId ? C.border : C.warning}`, background:C.bg, color:C.text, fontSize:10, fontFamily:F, cursor:"pointer" }}>
                               <option value="">بلا بلدية (غير منطاق)</option>
                               {MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.shortAr}</option>)}
                             </select>

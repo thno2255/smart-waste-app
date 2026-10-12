@@ -23,12 +23,13 @@ async function test(name, fn) {
 env = await initializeTestEnvironment({ projectId: PROJECT, firestore: { rules: readFileSync("firestore.rules", "utf8"), host: "127.0.0.1", port: Number(process.env.FIRESTORE_EMULATOR_PORT || 8080) } });
 await env.clearFirestore();
 
-// Seed users + fixtures with rules bypassed.
+// Seed users + fixtures with rules bypassed. Fixtures follow the current data model: every operational
+// document and every scoped staff account carries a municipalityId (fail-closed rules, docs/security).
 await env.withSecurityRulesDisabled(async (c) => {
   const db = c.firestore();
-  await setDoc(doc(db, "users/emp1"), { uid: "emp1", role: "employee", status: "active" });
-  await setDoc(doc(db, "users/drv1"), { uid: "drv1", role: "driver", status: "active" });
-  await setDoc(doc(db, "users/drv2"), { uid: "drv2", role: "driver", status: "active" });
+  await setDoc(doc(db, "users/emp1"), { uid: "emp1", role: "employee", status: "active", municipalityId: "east" });
+  await setDoc(doc(db, "users/drv1"), { uid: "drv1", role: "driver", status: "active", municipalityId: "east" });
+  await setDoc(doc(db, "users/drv2"), { uid: "drv2", role: "driver", status: "active", municipalityId: "east" });
   await setDoc(doc(db, "users/cit1"), { uid: "cit1", role: "citizen", status: "active" });
   await setDoc(doc(db, "users/pend"), { uid: "pend", role: "driver", status: "pending" });
   // Multi-municipality scoping fixtures
@@ -42,11 +43,11 @@ await env.withSecurityRulesDisabled(async (c) => {
   await setDoc(doc(db, "collection_routes/RN"), { routeName: "RN", status: "suggested", municipalityId: "north", binIds: ["bN"] });
   await setDoc(doc(db, "vehicles/VE"), { vehicleNumber: "VE", municipalityId: "east", status: "available" });
   await setDoc(doc(db, "neighborhoods/NE"), { name: "حي الشروق", municipalityId: "east" });
-  await setDoc(doc(db, "driver_profiles/drv1"), { uid: "drv1", shiftStatus: "off_shift", vehicleId: "V1", neighborhoodKeys: ["الخليج"] });
-  await setDoc(doc(db, "collection_routes/R1"), { routeName: "R1", status: "approved", driverId: "drv1", vehicleId: "V1", binIds: ["b1"], collectedBinIds: [] });
-  await setDoc(doc(db, "collection_routes/R2"), { routeName: "R2", status: "approved", driverId: "drv2", vehicleId: "V2", binIds: ["b2"], collectedBinIds: [] });
-  await setDoc(doc(db, "collection_routes/R3"), { routeName: "R3", status: "suggested", binIds: ["b3"] });
-  await setDoc(doc(db, "bins/b1"), { name: "b1", lastFillLevelPercent: 90 });
+  await setDoc(doc(db, "driver_profiles/drv1"), { uid: "drv1", shiftStatus: "off_shift", vehicleId: "V1", neighborhoodKeys: ["الخليج"], municipalityId: "east" });
+  await setDoc(doc(db, "collection_routes/R1"), { routeName: "R1", status: "approved", driverId: "drv1", vehicleId: "V1", binIds: ["b1"], collectedBinIds: [], municipalityId: "east" });
+  await setDoc(doc(db, "collection_routes/R2"), { routeName: "R2", status: "approved", driverId: "drv2", vehicleId: "V2", binIds: ["b2"], collectedBinIds: [], municipalityId: "east" });
+  await setDoc(doc(db, "collection_routes/R3"), { routeName: "R3", status: "suggested", binIds: ["b3"], municipalityId: "east" });
+  await setDoc(doc(db, "bins/b1"), { name: "b1", lastFillLevelPercent: 90, municipalityId: "east" });
 });
 
 console.log("\nFirestore rules —", "firestore.rules");
@@ -74,7 +75,7 @@ await test("driver advances only execution fields of their own route; cannot app
 await test("employee approves/assigns routes and manages driver profiles; driver may only flip own shift/location fields", async () => {
   const emp = ctx("emp1", "employee");
   await assertSucceeds(updateDoc(doc(emp, "collection_routes/R3"), { status: "approved", driverId: "drv1", vehicleId: "V1" }));
-  await assertSucceeds(setDoc(doc(emp, "driver_profiles/drv2"), { uid: "drv2", shiftStatus: "off_shift" }));
+  await assertSucceeds(setDoc(doc(emp, "driver_profiles/drv2"), { uid: "drv2", shiftStatus: "off_shift", municipalityId: "east" }));
   const drv = ctx("drv1", "driver");
   await assertSucceeds(updateDoc(doc(drv, "driver_profiles/drv1"), { shiftStatus: "on_shift", locationSharing: true, updatedAt: "now" }));
   await assertSucceeds(updateDoc(doc(drv, "driver_profiles/drv1"), { lastLocation: { lat: 1, lng: 2, at: "now" }, updatedAt: "now" }));
@@ -102,7 +103,7 @@ await test("sensor readings are never client-writable (even for employees)", asy
 
 await test("incidents: driver opens own, reads own only; employee reviews; nobody deletes", async () => {
   const drv = ctx("drv1", "driver");
-  await assertSucceeds(setDoc(doc(drv, "route_incidents/I1"), { routeId: "R1", driverId: "drv1", type: "obstacle", status: "open" }));
+  await assertSucceeds(setDoc(doc(drv, "route_incidents/I1"), { routeId: "R1", driverId: "drv1", type: "obstacle", status: "open", municipalityId: "east" }));
   await assertFails(setDoc(doc(drv, "route_incidents/I2"), { routeId: "R2", driverId: "drv2", type: "obstacle", status: "open" }));
   await assertFails(updateDoc(doc(drv, "route_incidents/I1"), { status: "resolved" }));
   await assertSucceeds(updateDoc(doc(ctx("emp1", "employee"), "route_incidents/I1"), { status: "reviewed", reviewedBy: "emp1" }));
@@ -111,7 +112,7 @@ await test("incidents: driver opens own, reads own only; employee reviews; nobod
 
 await test("locations: driver appends own pings; employee reads; drivers cannot read others; no edits", async () => {
   const drv = ctx("drv1", "driver");
-  await assertSucceeds(setDoc(doc(drv, "driver_locations/L1"), { driverId: "drv1", lat: 1, lng: 2, at: "now" }));
+  await assertSucceeds(setDoc(doc(drv, "driver_locations/L1"), { driverId: "drv1", lat: 1, lng: 2, at: "now", municipalityId: "east" }));
   await assertFails(setDoc(doc(drv, "driver_locations/L2"), { driverId: "drv2", lat: 1, lng: 2, at: "now" }));
   await assertFails(updateDoc(doc(drv, "driver_locations/L1"), { lat: 9 }));
   await assertSucceeds(getDoc(doc(ctx("emp1", "employee"), "driver_locations/L1")));
@@ -127,13 +128,13 @@ await test("citizens and pending accounts have no access to operations", async (
 
 await test("vehicle assignments: employees write, history never deleted, drivers read only", async () => {
   const emp = ctx("emp1", "employee");
-  await assertSucceeds(setDoc(doc(emp, "driver_vehicle_assignments/A1"), { driverId: "drv1", vehicleId: "V1", start: "now", active: true }));
+  await assertSucceeds(setDoc(doc(emp, "driver_vehicle_assignments/A1"), { driverId: "drv1", vehicleId: "V1", start: "now", active: true, municipalityId: "east" }));
   await assertFails(setDoc(doc(ctx("drv1", "driver"), "driver_vehicle_assignments/A2"), { driverId: "drv1", vehicleId: "V2", start: "now", active: true }));
   await assertSucceeds(getDoc(doc(ctx("drv1", "driver"), "driver_vehicle_assignments/A1")));
 });
 
 await test("driver may flip only the status of their own vehicle; cannot touch another vehicle or other fields", async () => {
-  await env.withSecurityRulesDisabled(async (c) => { await setDoc(doc(c.firestore(), "vehicles/V1"), { vehicleNumber: "V1", status: "available", driverId: "drv1" }); });
+  await env.withSecurityRulesDisabled(async (c) => { await setDoc(doc(c.firestore(), "vehicles/V1"), { vehicleNumber: "V1", status: "available", driverId: "drv1", municipalityId: "east" }); });
   const drv = ctx("drv1", "driver");
   await assertSucceeds(updateDoc(doc(drv, "vehicles/V1"), { status: "on_route", currentRouteId: "R1", lastActiveAt: "now", updatedAt: "now" }));
   await assertFails(updateDoc(doc(drv, "vehicles/V1"), { capacityLiters: 1 }));
@@ -175,7 +176,7 @@ await test("municipalities + neighborhood↔municipality assignment are platform
   await assertFails(updateDoc(doc(ctx("mgrE", "manager"), "neighborhoods/NE"), { municipalityId: "north" }));
   await assertSucceeds(updateDoc(doc(ctx("mgrE", "manager"), "neighborhoods/NE"), { note: "ok" }));
   await assertSucceeds(updateDoc(doc(ctx("admin1", "executive"), "neighborhoods/NE"), { municipalityId: "north", municipalityAssignment: { source: "admin_override" } }));
-  await assertSucceeds(setDoc(doc(ctx("mgrE", "manager"), "simulated_readings/s1"), { bin_id: "bE", fill_level_percent: 70, source: "SIMULATED" }));
+  await assertSucceeds(setDoc(doc(ctx("mgrE", "manager"), "simulated_readings/s1"), { bin_id: "bE", fill_level_percent: 70, source: "SIMULATED", municipalityId: "east" }));
   await assertFails(setDoc(doc(ctx("mgrE", "manager"), "sensor_readings/s1"), { bin_id: "bE", fill_level_percent: 70 }));
   await assertFails(setDoc(doc(ctx("admin1", "executive"), "sensor_readings/s2"), { bin_id: "bE", fill_level_percent: 70 }));
 });
