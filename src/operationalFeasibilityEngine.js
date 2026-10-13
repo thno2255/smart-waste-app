@@ -578,6 +578,7 @@ export function deficitCause(proofs = [], blocked = [], missing = []) {
 const dedupeMissing = (list) => { const seen = new Set(); return list.filter((m) => { const k = `${m.code}|${m.crewId || ""}|${m.binId || ""}`; if (seen.has(k)) return false; seen.add(k); return true; }); };
 
 /** What blocked each unserved bin: the violations of its best (rejected) insertion. */
+export function explainUnserved(model, plan, unserved) { return blockingViolations(model, plan, unserved, {}); }
 function blockingViolations(model, plan, unserved, { optimisticData }) {
   const out = [];
   for (const binId of unserved.slice(0, 30)) {
