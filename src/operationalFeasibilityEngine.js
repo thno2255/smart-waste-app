@@ -240,6 +240,7 @@ export function evaluateCrewTimeline(crew, segments, model, { optimisticData = f
   let t = crew.availableAtMin || 0;
   let pos = crew.origin;
   if (!pos) { m("ORIGIN_UNKNOWN"); if (!optimisticData) return out; pos = model.depot || null; }
+  let firstLegFree = !pos; // optimistic only: no start point known → the first leg is not counted (a lower bound)
   let load = crew.startLoadL || 0;
   const cap = crew.capacityL;
   if (cap == null && newStops > 0 && !P.allowUnknownCapacity) m("CAPACITY_UNKNOWN");
@@ -255,7 +256,7 @@ export function evaluateCrewTimeline(crew, segments, model, { optimisticData = f
       const isNew = !seg.routeId || seg.added?.includes(binId);
       if (isNew && !crew.coverageAll && b.neighborhoodKey && !crew.coverage.includes(b.neighborhoodKey)) v("COVERAGE", { binId, neighborhoodKey: b.neighborhoodKey });
       if (cap != null && load + b.wasteL > cap) {
-        if (dump) {
+        if (dump && pos) {
           const toDump = travel(pos, dump);
           t += toDump.min + P.unloadMin; out.driveMin += toDump.min; out.km += toDump.km || 0; out.dumpTrips += 1; load = 0; pos = dump;
           if (b.wasteL > cap) v("VEHICLE_CAPACITY", { binId, value: b.wasteL, limit: cap });
@@ -264,7 +265,8 @@ export function evaluateCrewTimeline(crew, segments, model, { optimisticData = f
           if (!missing.some((x) => x.code === "DUMP_SITE_UNKNOWN" && x.crewId === crew.id)) missing.push({ code: "DUMP_SITE_UNKNOWN", crewId: crew.id, informational: true });
         }
       }
-      const leg = travel(pos, b);
+      const leg = firstLegFree ? { min: 0, km: 0 } : travel(pos, b);
+      firstLegFree = false;
       t += leg.min; out.driveMin += leg.min; out.km += leg.km || 0;
       times[binId] = Math.round(t);
       t += P.minutesPerStop; load += b.wasteL; pos = b;
@@ -573,6 +575,8 @@ export function deficitCause(proofs = [], blocked = [], missing = []) {
   return "TIME";
 }
 
+const dedupeMissing = (list) => { const seen = new Set(); return list.filter((m) => { const k = `${m.code}|${m.crewId || ""}|${m.binId || ""}`; if (seen.has(k)) return false; seen.add(k); return true; }); };
+
 /** What blocked each unserved bin: the violations of its best (rejected) insertion. */
 function blockingViolations(model, plan, unserved, { optimisticData }) {
   const out = [];
@@ -602,21 +606,25 @@ export function evaluateFeasibility(state, opts = {}) {
     const solved = solvePlan(model, opts.plan || null, { freedoms: opts.freedoms, timeLimitMs: opts.timeLimitMs, clock: opts.clock, extraCostUnits: opts.extraCostUnits || 0, weights: opts.weights });
     const e = solved.evaluation;
     const constraintsEvaluated = Object.entries(CONSTRAINTS).map(([code, c]) => ({ code, hard: !!c.hard, requirement: !!c.requirement, text: c.text }));
-    let status, proofs = [];
+    let status, proofs = [], dataGaps = [];
     if (e.valid && e.slaMet) status = FEASIBILITY_STATUS.FEASIBLE;
     else {
       proofs = proveInfeasibility(model);
       if (proofs.length) status = FEASIBILITY_STATUS.PROVEN_INFEASIBLE;
       else {
         // Would the plan be valid if the unknown data were favourable? Then the data, not the operation, is the problem.
-        const optimistic = e.missing.length ? solvePlan(model, opts.plan || null, { freedoms: opts.freedoms, optimisticData: true, timeLimitMs: opts.timeLimitMs, clock: opts.clock }) : null;
-        if (optimistic && optimistic.evaluation.valid && optimistic.evaluation.slaMet) status = FEASIBILITY_STATUS.INSUFFICIENT_DATA;
+        const optimistic = solvePlan(model, opts.plan || null, { freedoms: opts.freedoms, optimisticData: true, timeLimitMs: opts.timeLimitMs, clock: opts.clock });
+        if (optimistic.evaluation.valid && optimistic.evaluation.slaMet) {
+          status = FEASIBILITY_STATUS.INSUFFICIENT_DATA;
+          // Report exactly which data the optimistic plan relies on (strict re-evaluation of that plan).
+          dataGaps = evaluatePlan(model, optimistic.plan).missing;
+        }
         else if (solved.solver.timedOut) status = FEASIBILITY_STATUS.TIME_LIMIT;
         else status = FEASIBILITY_STATUS.NO_SOLUTION_FOUND;
       }
     }
     const blocked = status === FEASIBILITY_STATUS.FEASIBLE ? [] : blockingViolations(model, solved.plan, e.unserved, {});
-    const cause = status === FEASIBILITY_STATUS.FEASIBLE ? "NONE" : status === FEASIBILITY_STATUS.INSUFFICIENT_DATA ? "DATA" : deficitCause(proofs, blocked, e.missing);
+    const cause = status === FEASIBILITY_STATUS.FEASIBLE ? "NONE" : status === FEASIBILITY_STATUS.INSUFFICIENT_DATA ? "DATA" : deficitCause(proofs, blocked, [...e.missing, ...dataGaps]);
     const blockedCodes = [...new Set(blocked.map((x) => x.code))].sort((a, b) => CAUSE_ORDER.indexOf(a) - CAUSE_ORDER.indexOf(b));
     const affectedRoutes = [...new Set(Object.values(solved.plan.crews).flatMap((segs) => segs.filter((s) => s.routeId && (s.added?.length)).map((s) => s.routeId)))];
     const affectedResources = Object.entries(solved.plan.crews).filter(([, segs]) => segs.some((s) => !s.routeId && s.binIds.length)).map(([cid]) => cid);
@@ -630,7 +638,7 @@ export function evaluateFeasibility(state, opts = {}) {
       engineVersion: FEASIBILITY_ENGINE_VERSION, feasibilityStatus: status, feasible: status === FEASIBILITY_STATUS.FEASIBLE, evaluatedAt, municipalityId: model.municipalityId,
       constraintsEvaluated, violatedConstraints: [...e.hardViolations, ...blocked.filter((b) => !e.hardViolations.some((h) => h.code === b.code && h.crewId === b.crewId))].slice(0, 40),
       blockingConstraintCodes: blockedCodes, proofs, cause, causeText: DEFICIT_CAUSE_TEXT[cause],
-      missingData: e.missing, unservedBins: e.unserved, lateBins: e.late, affectedRoutes, affectedResources,
+      missingData: dedupeMissing([...e.missing, ...dataGaps]), unservedBins: e.unserved, lateBins: e.late, affectedRoutes, affectedResources,
       estimatedCompletionTime: e.completionMin != null ? new Date(new Date(evaluatedAt).getTime() + e.completionMin * 60000).toISOString() : null, completionMin: e.completionMin,
       confidenceOrQualityFlags: quality, travel: travelStats,
       solverStatus: { status: solved.solver.timedOut ? "TIME_LIMIT" : solved.solver.completed ? "COMPLETED" : "ITERATION_LIMIT", ...solved.solver, algorithm: "priority insertion + relocate / 2-opt local search", version: FEASIBILITY_ENGINE_VERSION },
