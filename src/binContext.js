@@ -4,9 +4,44 @@
  * thermal alert for the bin's neighborhood + open citizen reports pointing at the
  * bin (or, for reports without a bin id, at its neighborhood). Pure.
  */
-import { normalizeNeighborhoodName } from "./config.js";
+import { normalizeNeighborhoodName, getSensorConnectivity, THRESHOLDS } from "./config.js";
 
-/** Thermal-alert lookup for a neighborhood name from the fire_sensors feed. */
+/** Risk label for a measured in-bin temperature — the same vocabulary the thermal feed always used. */
+export const thermalRiskLevel = (tempC) => {
+  if (tempC == null || Number.isNaN(Number(tempC))) return "غير معروف";
+  const t = Number(tempC);
+  if (t >= THRESHOLDS.tempDangerC) return "خطر عالي";
+  if (t >= THRESHOLDS.tempCriticalC) return "خطر متوسط";
+  if (t >= THRESHOLDS.tempHighC) return "تحذير";
+  return "آمن";
+};
+
+/**
+ * Per-neighborhood thermal feed derived from the bins' OWN temperature probes
+ * (replaces the seeded fire_sensors collection). Only bins whose sensor is
+ * currently online count: a stale or out-of-range temperature must never
+ * raise or clear an alert. Shape matches what makeThermalAlertFor expects.
+ */
+export const thermalFeedFromBins = (bins = [], neighborhoods = [], now = Date.now()) => {
+  const nameById = Object.fromEntries(neighborhoods.map((n) => [n.id, n.name]));
+  const byName = new Map();
+  for (const b of bins) {
+    const name = nameById[b.neighborhoodId];
+    if (!name || b.lastTemperatureCelsius == null) continue;
+    if (getSensorConnectivity(b, null, now) !== "online") continue;
+    const t = Number(b.lastTemperatureCelsius);
+    if (Number.isNaN(t)) continue;
+    const key = normalizeNeighborhoodName(name);
+    const e = byName.get(key) || { district: name, maxTemp: -Infinity, binsWithTemp: 0, hotBinIds: [] };
+    e.binsWithTemp += 1;
+    if (t > e.maxTemp) e.maxTemp = t;
+    if (t >= THRESHOLDS.tempHighC) e.hotBinIds.push(b.id);
+    byName.set(key, e);
+  }
+  return [...byName.values()].map((e) => ({ ...e, riskLevel: thermalRiskLevel(e.maxTemp) }));
+};
+
+/** Thermal-alert lookup for a neighborhood name from a thermal feed (see thermalFeedFromBins). */
 export const makeThermalAlertFor = (fireSensors = []) => (name) =>
   fireSensors.some((s) => normalizeNeighborhoodName(s.district) === normalizeNeighborhoodName(name) && (s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط"));
 
