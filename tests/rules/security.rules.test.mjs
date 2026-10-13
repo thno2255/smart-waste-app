@@ -199,7 +199,10 @@ const CASES = [
   ["SEC-13", "drvE", "عميل", "rate_limits", "حذف", "تصفير حد الطلبات من العميل", "deny", (f) => deleteDoc(doc(f, "rate_limits/k"))],
   ["ALLOW", "drvE2", "عميل", "collection_routes", "تحديث", "السائق ينهي جولته الجارية (الحالة فقط)", "allow", (f) => updateDoc(doc(f, "collection_routes/RE2"), { status: "completed", completedAt: "t" })],
   ["ALLOW", "opsE", "عميل", "bins", "تحديث", "المحاكي يحدّث وقت جمع حاوية محاكاة", "allow", (f) => updateDoc(doc(f, "bins/bE"), { lastCollectionAt: "t" })],
-  ["ALLOW", "amanah", "عميل", "resource_transfers", "تحديث", "الأمانة تعتمد نقلًا مقترحًا", "allow", (f) => updateDoc(doc(f, "resource_transfers/T0"), { status: "approved", decidedBy: "amanah", decidedAt: "t" })],
+  ["SEC-16", "amanah", "عميل", "resource_transfers", "تحديث", "اعتماد نقل من العميل دون حجز الموارد (الاعتماد خادمي)", "deny", (f) => updateDoc(doc(f, "resource_transfers/T0"), { status: "approved", decidedBy: "amanah", decidedAt: "t" })],
+  ["ALLOW", "amanah", "عميل", "resource_transfers", "تحديث", "الأمانة ترفض نقلًا مقترحًا", "allow", (f) => updateDoc(doc(f, "resource_transfers/T0"), { status: "rejected", decidedBy: "amanah", decidedAt: "t" })],
+  ["SEC-16", "amanah", "عميل", "resource_reservations", "إنشاء", "إنشاء حجز مورد من العميل", "deny", (f) => setDoc(doc(f, "resource_reservations/X"), { resourceId: "VE", status: "active" })],
+  ["SEC-16", "amanah", "عميل", "resource_locks", "قراءة", "قراءة أقفال الموارد", "deny", (f) => getDoc(doc(f, "resource_locks/VE"))],
   // ── SEC-14 operational targets / impact factors are decision inputs: Amanah only, typed and bounded ──
   ["SEC-14", "opsE", "عميل", "dispatch_settings", "تحديث", "موظف العمليات يغيّر الأهداف التشغيلية", "deny", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "observe", scope: "demo_only", targets: { criticalCollectionMin: 30 } })],
   ["SEC-14", "amanah", "عميل", "dispatch_settings", "تحديث", "هدف خارج المدى (0 دقيقة)", "deny", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "observe", scope: "demo_only", targets: { criticalCollectionMin: 0 } })],

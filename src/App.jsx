@@ -206,6 +206,8 @@ import { DEMO_STEPS, DEFAULT_DEMO_MUNICIPALITY, evaluateDemo, nextStepIndex } fr
 import { can, validateDriverProfile, findVehicleAssignmentConflicts, findRouteAssignmentConflicts, activeAssignmentFor, vehicleHolderAt, coverageMatrix, driverCodeFor, locationFreshness, SHIFT_STATUS_LABELS, AVAILABILITY_LABELS } from "./fleetEngine";
 import { getBinMapState, computeNeighborhoodMapStats, binMatchesFilter, neighborhoodMatchesFilter, polygonStyle, markerStyle, MAP_STATE_COLORS, MAP_STATE_LABELS, binNeedsCollection } from "./mapVisual";
 import { computeFleetPerformance, IMPACT_FACTOR_SOURCES, DEFAULT_IMPACT_FACTORS } from "./impact";
+import { deltaText, DISTANCE_BASIS_TEXT, SAVING_KIND_TEXT } from "./savings";
+import { EXECUTION_STATE_TEXT } from "./executionOutcome";
 import { seedAllCollections, migrateStationsToBinsAndNeighborhoods, seedCityDemoData } from "./seedFirestore";
 import { exportAllDataToExcel } from "./exportAllDataToExcel";
 
@@ -5802,7 +5804,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
   useEffect(() => onSnapshot(DEMO_SESSION_REF(), (snap) => setSession(snap.exists() ? snap.data() : null), () => setSession(null)), []);
   const { runs } = useOptimizationRuns(true, scopeFor(loggedInUser).all ? null : scopeFor(loggedInUser).municipalityId);
   const { scenarios } = useSimulationScenarios(true, scopeFor(loggedInUser).all ? null : scopeFor(loggedInUser).municipalityId || "__none__");
-  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings });
+  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings, transfers });
   const evaluation = useMemo(() => evaluateDemo(session, { bins, routes, profiles, readings: recentReadings, runs, scenarios, supportRequests, transfers, audit: auditLog }), [session, bins, routes, profiles, recentReadings, runs, scenarios, supportRequests, transfers, auditLog]);
   const { index, doneByKey, newlyPassed } = useMemo(() => nextStepIndex(session, evaluation), [session, evaluation]);
   // Persist newly passed observe-steps so completion survives later data changes and page refreshes.
@@ -5830,7 +5832,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
       const plan = buildCollectionPlan({ municipalityId: mid, neighborhoods: munNeighborhoods, bins: munBins, profiles: profiles.filter((p) => p.municipalityId === mid), vehicles: vehicles.filter((v) => v.municipalityId === mid), routes: routes.filter((r) => r.municipalityId === mid), readingsByBin, contextFor: ctx.forBin, depot });
       const id = await saveOptimizationRun({ municipalityId: mid, summary: plan.summary, routes: plan.routes.map((r) => ({ neighborhoodId: r.neighborhoodId, routeName: r.routeName, stops: r.stops.length, deferred: r.deferredStops.length, distanceKm: r.distanceKm, durationMin: r.durationMin, matrixSource: r.matrixSource, driver: r.driver ? { driverId: r.driver.driverId, driverName: r.driver.driverName } : null })), constraints: plan.constraints, assumptions: plan.assumptions, applied: false, demoScenario: true, demo: munBins.some((b) => b.demo) }, actor);
       await patch({ planRunId: id });
-      return `خُطّطت ${plan.summary.routes} جولة لـ ${plan.summary.needCollection} حاوية · ${plan.summary.unassignedRoutes} بلا سائق · ${plan.summary.reductionPct != null ? `خفض مسافة ${plan.summary.reductionPct}% مقابل خط الأساس` : "لا مقارنة بخط الأساس"} (مسافات جوية — للطرق الفعلية: صفحة خطة الجمع الذكية)`;
+      return `خُطّطت ${plan.summary.routes} جولة لـ ${plan.summary.needCollection} حاوية · ${plan.summary.unassignedRoutes} بلا سائق · ${plan.summary.reductionPct != null ? (plan.summary.kmSaved >= 0 ? `خفض مسافة ${plan.summary.reductionPct}% مقابل خط الأساس` : `زيادة مسافة ${Math.abs(plan.summary.reductionPct)}% عن خط الأساس`) : "لا مقارنة بخط الأساس"} (مسافات جوية — للطرق الفعلية: صفحة خطة الجمع الذكية)`;
     }),
     shortage: run("shortage", async () => {
       const munVehicles = vehicles.filter((v) => v.municipalityId === mid);
@@ -6063,7 +6065,7 @@ const SmartPlanPage = ({ neighborhoods = [], bins = [], profiles = [], vehicles 
             ))}
           </div>
           {plan.summary.reductionPct != null ? (
-            <div style={{ fontSize: 12, color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>مقارنة عادلة بخط الأساس (جولة لكل حي من نفس المستودع تزور كل حاوياته، مسافات جوية للطرفين): {plan.summary.baselineKm} كم ← {plan.summary.totalKm} كم (توفير {plan.summary.kmSaved} كم ≈ {plan.summary.reductionPct}% · وقود تقديري {plan.summary.fuelSavedL} لتر بافتراض {plan.assumptions.truckFuelLitersPerKm} لتر/كم).</div>
+            <div style={{ fontSize: 12, color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>مقارنة عادلة بخط الأساس (جولة لكل حي من نفس المستودع تزور كل حاوياته، مسافات جوية للطرفين): {plan.summary.baselineKm} كم ← {plan.summary.planComparableKm} كم ({deltaText(plan.summary.kmSaved, "كم")} ≈ {Math.abs(plan.summary.reductionPct)}% · فرق وقود تقديري: {deltaText(plan.summary.fuelSavedL, "لتر")} بافتراض {plan.assumptions.truckFuelLitersPerKm} لتر/كم).</div>
           ) : <div style={{ fontSize: 12, color: C.dim }}>لا تُعرض نسبة توفير: البيانات غير كافية للمقارنة.</div>}
           {plan.constraints.length > 0 && <ul style={{ margin: 0, paddingInlineStart: 18, fontSize: 12, color: C.warning, lineHeight: 1.9 }}>{plan.constraints.map((c, i) => <li key={i}>{c}</li>)}</ul>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -6505,10 +6507,10 @@ const DecisionDetails = ({ decision }) => {
           {exp.impact ? <>
             <Fact label="مسافة الجولة المحسّنة" value={numText(exp.impact.routeKm, "كم")} />
             <Fact label="المسار المرجعي لنفس الحاويات" value={numText(exp.impact.referenceKm, "كم")} />
-            <Fact label="المسافة الموفرة" value={numText(exp.impact.kmSaved, "كم")} />
-            <Fact label="الوقود المقدّر توفيره" value={numText(exp.impact.fuelL, "لتر")} />
-            <Fact label="الانبعاثات المقدّر تجنبها" value={numText(exp.impact.co2Kg, "كجم CO₂")} />
-            <div style={{ color: C.dim, marginTop: 6 }}>المرجع: نفس الحاويات من نفس نقطة الانطلاق بترتيب الأكثر إلحاحًا أولًا، بقياس جوي موحد للطرفين.</div>
+            <Fact label="الفرق عن المسار المرجعي" value={deltaText(exp.impact.kmSaved, "كم")} />
+            <Fact label="فرق الوقود المقدّر" value={deltaText(exp.impact.fuelL, "لتر")} />
+            <Fact label="فرق الانبعاثات المقدّر" value={deltaText(exp.impact.co2Kg, "كجم CO₂")} />
+            <div style={{ color: C.dim, marginTop: 6 }}>{DISTANCE_BASIS_TEXT.expected_haversine}. المرجع: نفس الحاويات من نفس نقطة الانطلاق بترتيب الأكثر إلحاحًا أولًا، بقياس جوي موحد للطرفين. القيمة «زيادة» تعني أن المسار المختار أطول من المرجع.</div>
           </> : <div>{NA_TEXT} — لا إحداثيات كافية أو نقطة انطلاق للحساب.</div>}
         </PanelSection>
       )}
@@ -6729,16 +6731,16 @@ const PerformanceImpactPanel = ({ municipalityId = null, compact = false, onOpen
   const why = (v, reason) => (v == null ? reason : undefined);
   const noRoutes = "لا جولات مكتملة بإحداثيات في الفترة";
   const realisedTiles = [
-    { label: "المسافة الموفرة", value: r.kmSaved, unit: "كم", hint: why(r.kmSaved, noRoutes) ?? `${numText(r.distanceKm)} بدل ${numText(r.referenceKm)} كم` },
-    { label: "الوقود المقدّر توفيره", value: r.fuelL, unit: "لتر", hint: why(r.fuelL, F.fuelLitersPerKm == null ? "معامل الاستهلاك غير مضبوط" : noRoutes) },
-    { label: "الانبعاثات المقدّر تجنبها", value: r.co2Kg, unit: "كجم CO₂", hint: why(r.co2Kg, F.co2KgPerLiter == null || F.fuelLitersPerKm == null ? "معامل غير مضبوط" : noRoutes) },
-    { label: "زمن التشغيل الموفر", value: r.minutesSaved == null ? null : r.minutesSaved >= 60 ? r.hoursSaved : r.minutesSaved, unit: r.minutesSaved >= 60 ? "ساعة" : "د", hint: why(r.minutesSaved, noRoutes) ?? "المسافة الموفرة ÷ متوسط السرعة" },
+    { label: "فرق المسافة عن المرجع", value: r.kmSaved == null ? null : deltaText(r.kmSaved, "كم"), unit: "", tone: r.kmSaved != null && r.kmSaved < 0 ? "warning" : "neutral", hint: why(r.kmSaved, noRoutes) ?? `${numText(r.distanceKm)} بدل ${numText(r.referenceKm)} كم · ${SAVING_KIND_TEXT.realised_estimate}` },
+    { label: "فرق الوقود المقدّر", value: r.fuelL == null ? null : deltaText(r.fuelL, "لتر"), unit: "", hint: why(r.fuelL, F.fuelLitersPerKm == null ? "معامل الاستهلاك غير مضبوط" : noRoutes) },
+    { label: "فرق الانبعاثات المقدّر", value: r.co2Kg == null ? null : deltaText(r.co2Kg, "كجم CO₂"), unit: "", hint: why(r.co2Kg, F.co2KgPerLiter == null || F.fuelLitersPerKm == null ? "معامل غير مضبوط" : noRoutes) },
+    { label: "فرق زمن التشغيل المقدّر", value: r.minutesSaved == null ? null : deltaText(r.minutesSaved, "د", { tolerance: 1 }), unit: "", hint: why(r.minutesSaved, noRoutes) ?? "فرق المسافة ÷ متوسط السرعة" },
     { label: "الالتزام بزمن الجمع", value: r.onTimePct, unit: "%", hint: r.onTimePct == null ? "لا حاويات حرجة مجموعة في الفترة" : `الهدف ${T.onTimePct}% · متأخرة ${r.lateCritical}`, tone: r.onTimePct == null ? "neutral" : r.onTimePct >= T.onTimePct ? "ok" : "warning" },
     { label: "استغلال المركبات", value: r.utilizationPct, unit: "%", hint: r.utilizationPct == null ? "لا جولات مكتملة بسعة مسجلة" : `الهدف ${T.vehicleUtilizationPct}% · حمولة مقدّرة من الامتلاء`, tone: r.utilizationPct == null ? "neutral" : r.utilizationPct >= T.vehicleUtilizationPct ? "ok" : "warning" },
     { label: "متوسط زمن الاستجابة", value: r.avgResponseMin, unit: "د", hint: why(r.avgResponseMin, "لا عمليات جمع في الفترة") ?? "من القرار إلى تأكيد الجمع" },
     { label: "الحاويات التي جُمعت", value: r.binsCollected, unit: "" },
     { label: "الجولات المكتملة", value: r.routesCompleted, unit: "" },
-    { label: "القرارات الآلية الناجحة", value: r.autoDecisionsExecuted ? `${r.autoDecisionsSucceeded} من ${r.autoDecisionsExecuted}` : null, unit: "", hint: why(r.autoDecisionsExecuted || null, "لا قرارات آلية منفذة في الفترة") ?? "نُفذت وجُمعت حاوياتها" },
+    { label: "القرارات الآلية المكتملة", value: r.autoDecisionsExecuted ? `${r.autoDecisionsSucceeded} من ${r.autoDecisionsExecuted}` : null, unit: "", hint: why(r.autoDecisionsExecuted || null, "لا قرارات آلية منفذة في الفترة") ?? `اكتملت كل حاوياتها · ${EXECUTION_STATE_TEXT.COMPLETED_ON_TIME}: ${r.autoDecisionsOnTime} · ${EXECUTION_STATE_TEXT.PARTIAL}: ${r.autoDecisionsByState?.PARTIAL ?? 0} · ${EXECUTION_STATE_TEXT.DELAYED}: ${r.autoDecisionsByState?.DELAYED ?? 0} · ${EXECUTION_STATE_TEXT.FAILED}: ${r.autoDecisionsByState?.FAILED ?? 0}` },
   ];
   const tile = (t) => <KpiTile key={t.label} label={t.label} value={t.value ?? <span style={{ fontSize: 14, fontWeight: 600, color: C.dim }}>{NA_TEXT}</span>} unit={t.value == null ? "" : t.unit} tone={t.tone || "neutral"} hint={t.hint} />;
   const periodSel = (
@@ -6760,14 +6762,15 @@ const PerformanceImpactPanel = ({ municipalityId = null, compact = false, onOpen
       </Section>
       <Section title="المتوقع" hint="من الجولات المعتمدة والجارية — قبل التنفيذ">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: SP.sm }}>
-          {[{ label: "جولات قيد التنفيذ أو الانتظار", value: e.routesPlanned, unit: "" }, { label: "المسافة المتوقع توفيرها", value: e.kmSaved, unit: "كم", hint: why(e.kmSaved, "لا جولات مخططة بإحداثيات") },
-            { label: "الوقود المتوقع توفيره", value: e.fuelL, unit: "لتر" }, { label: "الانبعاثات المتوقع تجنبها", value: e.co2Kg, unit: "كجم CO₂" },
+          {[{ label: "جولات قيد التنفيذ أو الانتظار", value: e.routesPlanned, unit: "" }, { label: "فرق المسافة المتوقع", value: e.kmSaved == null ? null : deltaText(e.kmSaved, "كم"), unit: "", tone: e.kmSaved != null && e.kmSaved < 0 ? "warning" : "neutral", hint: why(e.kmSaved, "لا جولات مخططة بإحداثيات") ?? SAVING_KIND_TEXT.expected },
+            { label: "فرق الوقود المتوقع", value: e.fuelL == null ? null : deltaText(e.fuelL, "لتر"), unit: "" }, { label: "فرق الانبعاثات المتوقع", value: e.co2Kg == null ? null : deltaText(e.co2Kg, "كجم CO₂"), unit: "" },
             { label: "متوسط زمن الجمع المتوقع", value: e.avgExpectedCollectionMin, unit: "د", hint: why(e.avgExpectedCollectionMin, "لا جولات بزمن متوقع مسجل") ?? `الهدف للحرجة ${T.criticalCollectionMin} د` }].map(tile)}
         </div>
       </Section>
       <Disclosure summary="طريقة الحساب ومصادر المعاملات">
         <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
           <div>{imp.basis}.</div>
+          <div>المتحقق: {DISTANCE_BASIS_TEXT.realised_haversine}. المتوقع: {DISTANCE_BASIS_TEXT.expected_haversine}. {imp.realised.financial?.text}.</div>
           <div>الوقود = المسافة الموفرة × {F.fuelLitersPerKm ?? NA_TEXT} لتر/كم — {IMPACT_FACTOR_SOURCES.fuelLitersPerKm}.</div>
           <div>الانبعاثات = الوقود × {F.co2KgPerLiter ?? NA_TEXT} كجم CO₂/لتر — {IMPACT_FACTOR_SOURCES.co2KgPerLiter}.</div>
           <div>ساعات التشغيل = المسافة الموفرة ÷ {F.avgUrbanSpeedKmh ?? NA_TEXT} كم/س — {IMPACT_FACTOR_SOURCES.avgUrbanSpeedKmh}.</div>
@@ -7275,7 +7278,7 @@ const PRESSURE_LABEL = { critical: ["حرج", C.danger], high: ["مرتفع", C.
 const TRANSFER_STATUS = { proposed: ["مقترح", C.warning], approved: ["معتمد", C.info], executed: ["منفَّذ", C.accent], returned: ["أُعيد", C.dim], rejected: ["مرفوض", C.danger] };
 
 /** Pure-ish helper shared by the Amanah panel and the municipality dashboard: live subsets + pressure per municipality. */
-const useCityPressure = ({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings }) => useMemo(() => {
+const useCityPressure = ({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings, transfers = [] }) => useMemo(() => {
   const groups = groupNeighborhoodsByName(neighborhoods, bins);
   const zones = operationalZones(FEATURE_BY_KEY, groups, neighborhoods);
   const centroids = Object.fromEntries(Object.values(zones).map((z) => [z.municipalityId, { lat: z.hull.reduce((a, p) => a + p[0], 0) / z.hull.length, lng: z.hull.reduce((a, p) => a + p[1], 0) / z.hull.length }]));
@@ -7288,14 +7291,17 @@ const useCityPressure = ({ neighborhoods, bins, profiles, vehicles, routes, inci
     routes: routes.filter((r) => r.municipalityId === m.id), incidents: incidents.filter((i) => i.municipalityId === m.id), predictedSoonIds,
   }]));
   const pressures = MUNICIPALITIES.map((m) => municipalityPressure(m, live[m.id]));
-  const transfersRec = recommendTransfers(pressures, { centroids });
+  // Approved / executed loans hold their resources for their window — never offered again in an overlapping one.
+  const existingReservations = transfers.filter((t) => ["approved", "executed"].includes(t.status)).flatMap((t) => [...new Set([t.driverId, t.vehicleId, t.resourceId].filter(Boolean))]
+    .map((resourceId) => ({ resourceId, startAt: t.window?.startAt || t.decidedAt || t.createdAt, endAt: t.window?.endAt || t.until || null, status: "active", id: t.id })));
+  const transfersRec = recommendTransfers(pressures, { centroids, existingReservations });
   return { pressures, comparison: compareMunicipalities(pressures), transfersRec, centroids, live, predictedSoon: predictedSoonIds.size };
-}, [neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings]);
+}, [neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings, transfers]);
 
 /** Transfer record built from an interMunicipalEngine recommendation (used by the Amanah panel and the demo scenario). */
-const transferFromRecommendation = (rec) => ({ resourceType: rec.resourceType, resourceId: rec.resourceType === "driver" ? rec.driverId : rec.vehicleId, resourceLabel: rec.resourceLabel, driverId: rec.driverId, driverName: rec.driverName, vehicleId: rec.vehicleId, vehicleNumber: rec.vehicleNumber, fromMunicipalityId: rec.fromMunicipalityId, toMunicipalityId: rec.toMunicipalityId, impact: rec.impact, travelMin: rec.travelMin, travelKm: rec.travelKm, travelSource: rec.travelSource, benefit: rec.benefit, cost: rec.cost, net: rec.net, reason: rec.reason, until: new Date(Date.now() + 8 * 3600000).toISOString() });
+const transferFromRecommendation = (rec) => ({ resourceType: rec.resourceType, resourceId: rec.resourceType === "driver" ? rec.driverId : rec.vehicleId, resourceLabel: rec.resourceLabel, driverId: rec.driverId, driverName: rec.driverName, vehicleId: rec.vehicleId, vehicleNumber: rec.vehicleNumber, fromMunicipalityId: rec.fromMunicipalityId, toMunicipalityId: rec.toMunicipalityId, impact: rec.impact, travelMin: rec.travelMin, travelKm: rec.travelKm, travelSource: rec.travelSource, benefit: rec.benefit, cost: rec.cost, net: rec.net, reason: rec.reason, window: rec.window || null, resourceIds: rec.resourceIds || [], until: rec.window?.endAt || new Date(Date.now() + 8 * 3600000).toISOString() });
 const AmanahStrategicPanel = ({ neighborhoods = [], bins = [], profiles = [], vehicles = [], routes = [], incidents = [], recentReadings = [], fireSensors = [], citizenReports = [], supportRequests = [], transfers = [], auditLog = [], loggedInUser, onOpenMunicipality }) => {
-  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings });
+  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings, transfers });
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
   const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };

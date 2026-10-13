@@ -9,6 +9,8 @@
  * ─────────────────────────────────────────────────────────────────────
  */
 import { haversineDistanceKm, orderStopsFrom, getRouteEligibility } from "./decisionEngine.js";
+import { compareDistance, fuelOf as signedFuel, co2Of as signedCo2, DISTANCE_BASIS, SAVING_KIND, FINANCIAL_NOT_AVAILABLE } from "./savings.js";
+import { summarizeExecutions } from "./executionOutcome.js";
 
 export const ASSUMPTIONS = {
   truckFuelLitersPerKm: 0.35,   // typical 6–8 ton rear-loader in urban stop-and-go traffic
@@ -70,8 +72,10 @@ export function computeImpactMetrics(groups = [], scoredBins = [], routes = [], 
     }
   }
 
-  const kmSaved = Math.max(0, baselineKm - dataDrivenKm);
-  const stopsAvoided = Math.max(0, baselineStops - dataDrivenStops);
+  // Signed: a data-driven plan longer than the fixed schedule shows as an increase, never as 0.
+  const kmSaved = baselineKm - dataDrivenKm;
+  const stopsAvoided = baselineStops - dataDrivenStops;
+  const distance = compareDistance(baselineKm, dataDrivenKm, { basis: DISTANCE_BASIS.EXPECTED_HAVERSINE, kind: SAVING_KIND.EXPECTED });
   const fuelSavedL = kmSaved * ASSUMPTIONS.truckFuelLitersPerKm;
   const co2SavedKg = fuelSavedL * ASSUMPTIONS.co2KgPerLiterDiesel;
   const minutesSaved = (kmSaved / ASSUMPTIONS.avgUrbanSpeedKmh) * 60 + stopsAvoided * ASSUMPTIONS.minutesPerStop;
@@ -91,6 +95,7 @@ export function computeImpactMetrics(groups = [], scoredBins = [], routes = [], 
     baselineStops, dataDrivenStops, stopsAvoided, neighborhoodsSkipped,
     fuelSavedL: round1(fuelSavedL), co2SavedKg: round1(co2SavedKg), minutesSaved: Math.round(minutesSaved),
     reductionPct: baselineKm > 0 ? Math.round((kmSaved / baselineKm) * 100) : 0,
+    distanceOutcome: distance.outcome, distanceBasis: distance.basis,
     overflowsPrevented,
     assumptions: ASSUMPTIONS,
   };
@@ -184,8 +189,8 @@ export function computeOperationalImpact({ routes = [], events = [], decisions =
   const vehicleById = new Map(vehicles.map((v) => [v.id, v]));
   const depotOf = (r) => { const v = vehicleById.get(r.vehicleId); return v?.depotLat != null ? { lat: v.depotLat, lng: v.depotLng } : null; };
   const eventsByRoute = groupBy(events.filter((e) => inWindow(e.confirmedAt || e.collectedAt)), (e) => e.routeId);
-  const fuelOf = (km) => (km == null || factors.fuelLitersPerKm == null ? null : round1(km * factors.fuelLitersPerKm));
-  const co2Of = (fuel) => (fuel == null || factors.co2KgPerLiter == null ? null : round1(fuel * factors.co2KgPerLiter));
+  const fuelOf = (km) => signedFuel(km, factors.fuelLitersPerKm);
+  const co2Of = (fuel) => signedCo2(fuel, factors.co2KgPerLiter);
   const hoursOf = (km) => (km == null || !factors.avgUrbanSpeedKmh ? null : round1(km / factors.avgUrbanSpeedKmh));
   const minutesOf = (km) => (km == null || !factors.avgUrbanSpeedKmh ? null : Math.round((km / factors.avgUrbanSpeedKmh) * 60));
   const target = targets.criticalCollectionMin ?? null;
@@ -212,11 +217,13 @@ export function computeOperationalImpact({ routes = [], events = [], decisions =
     const cap = Number(vehicleById.get(r.vehicleId)?.capacityLiters) || null;
     if (cap && evs.length) { loadL += evs.reduce((a, e) => a + 1100 * Math.min(100, Number(e.fillBefore) || 0) / 100, 0); capL += cap; utilRoutes += 1; }
   }
-  const kmSaved = measuredRoutes ? round1(Math.max(0, refKm - actualKm)) : null;
+  // Signed and labelled: realised order, but distance still straight-line (no GPS / odometer) — an estimate.
+  const realisedDistance = measuredRoutes ? compareDistance(refKm, actualKm, { basis: DISTANCE_BASIS.REALISED_HAVERSINE, kind: SAVING_KIND.REALISED_ESTIMATE }) : compareDistance(null, null, { basis: DISTANCE_BASIS.REALISED_HAVERSINE, kind: SAVING_KIND.REALISED_ESTIMATE });
+  const kmSaved = realisedDistance.deltaKm;
   const late = target != null ? critical.filter((m) => m > target).length : null;
   const autoExecuted = decisions.filter((d) => d.status === "executed" && ["create_assign", "insert", "reassign"].includes(d.type) && inWindow(d.executedAt || d.updatedAt));
-  const collectedIds = new Set(events.filter((e) => inWindow(e.confirmedAt || e.collectedAt)).map((e) => `${e.routeId}|${e.binId}`));
-  const autoSucceeded = autoExecuted.filter((d) => d.routeId && (d.binIds || []).some((b) => collectedIds.has(`${d.routeId}|${b}`)));
+  // A decision succeeds only when EVERY bin it covers was collected on ITS route (not after the first one).
+  const executions = summarizeExecutions(autoExecuted, { routes, events, now: to, criticalCollectionMin: target });
   const realised = {
     routesCompleted: completed.length,
     binsCollected: Object.values(eventsByRoute).reduce((a, l) => a + l.length, 0),
@@ -227,7 +234,8 @@ export function computeOperationalImpact({ routes = [], events = [], decisions =
     lateCritical: critical.length ? late : null,
     avgResponseMin: responses.length ? Math.round(avg(responses)) : null,
     utilizationPct: utilRoutes ? Math.round((loadL / capL) * 100) : null,
-    autoDecisionsExecuted: autoExecuted.length, autoDecisionsSucceeded: autoSucceeded.length,
+    autoDecisionsExecuted: autoExecuted.length, autoDecisionsSucceeded: executions.completed, autoDecisionsOnTime: executions.onTime, autoDecisionsByState: executions.byState,
+    distance: realisedDistance, financial: FINANCIAL_NOT_AVAILABLE,
   };
 
   // ── expected (planned, not yet done) ──
@@ -239,12 +247,14 @@ export function computeOperationalImpact({ routes = [], events = [], decisions =
     else { const depot = depotOf(r); const st = (r.orderedStops || []).filter((s) => s.lat != null); if (depot && st.length >= 2) { eKm += pathKm(depot, st); eRef += pathKm(depot, referenceOrder(st)); eMeasured += 1; } }
     if (r.expectedCollectionMin != null) eCompletion.push(r.expectedCollectionMin);
   }
-  const eSaved = eMeasured ? round1(Math.max(0, eRef - eKm)) : null;
+  const expectedDistance = eMeasured ? compareDistance(eRef, eKm, { basis: DISTANCE_BASIS.EXPECTED_HAVERSINE, kind: SAVING_KIND.EXPECTED }) : compareDistance(null, null, { basis: DISTANCE_BASIS.EXPECTED_HAVERSINE, kind: SAVING_KIND.EXPECTED });
+  const eSaved = expectedDistance.deltaKm;
   const expected = {
     routesPlanned: active.length, binsPlanned: active.reduce((a, r) => a + (r.binIds?.length || 0), 0), measuredRoutes: eMeasured,
     kmSaved: eSaved, fuelL: fuelOf(eSaved), co2Kg: co2Of(fuelOf(eSaved)), hoursSaved: hoursOf(eSaved), minutesSaved: minutesOf(eSaved),
     avgExpectedCollectionMin: eCompletion.length ? Math.round(avg(eCompletion)) : null,
+    distance: expectedDistance,
   };
   return { window: { from: from != null ? new Date(from).toISOString() : null, to: new Date(to).toISOString() }, realised, expected, targets, factors,
-    basis: "المسافة الموفرة = المسار المرجعي (الأكثر إلحاحًا أولًا) − مسار التنفيذ، لنفس الحاويات ونفس المستودع، بقياس جوي موحد" };
+    basis: "فرق المسافة = المسار المرجعي (الأكثر إلحاحًا أولًا) − مسار التنفيذ، لنفس الحاويات ونفس المستودع، بقياس جوي موحد. القيمة السالبة زيادة في المسافة وتُعرض كذلك" };
 }

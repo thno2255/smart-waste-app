@@ -12,6 +12,7 @@
 import { haversineDistanceKm } from "./decisionEngine.js";
 import { REASON_TEXT } from "./assignmentEngine.js";
 import { computeOperationalImpact } from "./impact.js";
+import { compareDistance, fuelOf, co2Of, DISTANCE_BASIS, SAVING_KIND } from "./savings.js";
 
 export const EXPLANATION_VERSION = 1;
 
@@ -84,10 +85,12 @@ export function expectedRouteImpact(start, orderedStops, factors = {}) {
   if (!start || orderedStops.filter((s) => s.lat != null).length < 2) return null;
   const routeKm = pathKm(start, orderedStops);
   const referenceKm = pathKm(start, referenceOrder(orderedStops));
-  const kmSaved = round1(Math.max(0, referenceKm - routeKm));
-  const fuelL = factors.fuelLitersPerKm != null ? round1(kmSaved * factors.fuelLitersPerKm) : null;
-  const co2Kg = fuelL != null && factors.co2KgPerLiter != null ? round1(fuelL * factors.co2KgPerLiter) : null;
-  return { basis: "expected", metric: "haversine", routeKm, referenceKm, kmSaved, fuelL, co2Kg };
+  // Signed: a route longer than its reference is reported as an increase (outcome INCREASE), never as 0 saved.
+  const cmp = compareDistance(referenceKm, routeKm, { basis: DISTANCE_BASIS.EXPECTED_HAVERSINE, kind: SAVING_KIND.EXPECTED });
+  const kmSaved = cmp.deltaKm;
+  const fuelL = fuelOf(kmSaved, factors.fuelLitersPerKm);
+  const co2Kg = co2Of(fuelL, factors.co2KgPerLiter);
+  return { basis: "expected", metric: "haversine", distanceBasis: cmp.basis, routeKm, referenceKm, kmSaved, outcome: cmp.outcome, fuelL, co2Kg };
 }
 
 const fillSource = (bins) => {

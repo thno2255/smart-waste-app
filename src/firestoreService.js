@@ -1269,6 +1269,8 @@ export const withdrawOpenSupportRequests = async (actor, note = "") => {
 export const proposeResourceTransfer = (data, actor) =>
   addItem(COLLECTIONS.RESOURCE_TRANSFERS, { ...data, status: "proposed", proposedBy: actor?.uid || "", proposedByName: actor?.name || "" });
 export const decideResourceTransfer = async (transfer, actor, decision, note = "") => {
+  // Approval reserves the lent resources for the loan window — server-side, atomically (no double booking).
+  if (decision === "approved") return adminTransferAction("approve", transfer.id, note);
   const batch = writeBatch(db);
   const ref = doc(db, COLLECTIONS.RESOURCE_TRANSFERS, transfer.id);
   batch.update(ref, { status: decision, decidedBy: actor?.uid || "", decidedByName: actor?.name || "", decidedAt: ts(), decisionNote: note, updatedAt: ts() });
@@ -1277,10 +1279,10 @@ export const decideResourceTransfer = async (transfer, actor, decision, note = "
 };
 /** Executes / returns an APPROVED transfer on the SERVER (/api/admin/transfers): vehicle, driver profile, driver
  * account and transfer status change in ONE Firestore transaction — all or nothing. */
-export async function adminTransferAction(action, transferId) {
+export async function adminTransferAction(action, transferId, note = undefined) {
   const token = await auth.currentUser?.getIdToken();
   if (!token) throw new Error("غير مسجل الدخول");
-  const res = await fetch("/api/admin/transfers", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ action, transferId }) });
+  const res = await fetch("/api/admin/transfers", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(note ? { action, transferId, note } : { action, transferId }) });
   const out = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
   return out;

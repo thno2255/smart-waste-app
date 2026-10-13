@@ -93,7 +93,7 @@ export function buildCollectionPlan(input) {
   const baseline = baselineForBins(bins, start, neighborhoods);
   // Same basis on both sides: the plan's visiting order measured with Haversine too (OSRM road km would not be comparable).
   const planComparableKm = planRoutes.reduce((a, r) => a + haversineTourKm(start, r.stops), 0);
-  const kmSaved = Math.max(0, Math.round((baseline.km - planComparableKm) * 10) / 10);
+  const kmSaved = Math.round((baseline.km - planComparableKm) * 10) / 10; // signed: negative = the plan is longer than the baseline
   const comparable = baseline.binsWithCoords > 0 && planRoutes.length > 0;
 
   // 5. Honest summary.

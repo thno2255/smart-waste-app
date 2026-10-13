@@ -199,11 +199,13 @@ await test("support requests: manager files one for OWN municipality only (statu
   await assertFails(deleteDoc(doc(ctx("admin1", "executive"), "support_requests/S1")));
 });
 
-await test("resource transfers: only the Amanah proposes/approves (execution is server-only); both sides read (constrained list), third municipality denied", async () => {
+await test("resource transfers: only the Amanah proposes / rejects (approval and execution are server-only); both sides read (constrained list), third municipality denied", async () => {
   const admin = ctx("admin1", "executive");
   const t = { resourceType: "crew", vehicleId: "VE", driverId: "drv1", fromMunicipalityId: "east", toMunicipalityId: "north", status: "proposed" };
   await assertSucceeds(setDoc(doc(admin, "resource_transfers/T1"), t));
-  await assertSucceeds(updateDoc(doc(admin, "resource_transfers/T1"), { status: "approved", decidedBy: "admin1" }));
+  await assertFails(updateDoc(doc(admin, "resource_transfers/T1"), { status: "approved", decidedBy: "admin1" }));  // approval reserves resources: server-only
+  await assertSucceeds(setDoc(doc(admin, "resource_transfers/T1r"), t));
+  await assertSucceeds(updateDoc(doc(admin, "resource_transfers/T1r"), { status: "rejected", decidedBy: "admin1" }));
   await assertFails(updateDoc(doc(admin, "resource_transfers/T1"), { status: "executed" }));  // execution: /api/admin/transfers only
   await assertFails(setDoc(doc(ctx("mgrE", "manager"), "resource_transfers/T2"), { ...t, fromMunicipalityId: "north", toMunicipalityId: "east" }));  // a manager cannot pull resources
   await assertFails(updateDoc(doc(ctx("mgrE", "manager"), "resource_transfers/T1"), { status: "executed" }));

@@ -122,10 +122,18 @@ service cloud.firestore {
     match /resource_transfers/{id} {
       allow read: if isAdmin() || ((isManager() || isOps()) && (resource.data.fromMunicipalityId == myMun() || resource.data.toMunicipalityId == myMun()));
       allow create: if isAdmin() && request.resource.data.status == "proposed";
-      allow update: if isAdmin() && resource.data.status == "proposed" && request.resource.data.status in ["approved", "rejected"]
+      // APPROVAL reserves the lent resources for the loan window and is server-only (/api/admin/transfers, one transaction
+      // with a per-resource lock). The client may only reject a proposal.
+      allow update: if isAdmin() && resource.data.status == "proposed" && request.resource.data.status == "rejected"
                     && changed().hasOnly(["status", "decidedBy", "decidedByName", "decidedAt", "decisionNote", "updatedAt"]);
       allow delete: if false;
     }
+    // Time-window reservations of drivers / vehicles (loans and approved operational adjustments) — server-written only.
+    match /resource_reservations/{id} {
+      allow read: if isAdmin() || ((isManager() || isOps()) && myMun() in resource.data.get("municipalityIds", []));
+      allow write: if false;
+    }
+    match /resource_locks/{id} { allow read, write: if false; }
     match /optimization_runs/{id}    { allow read: if isEmployee() && inMun(resource.data); allow create: if isEmployee() && inMun(request.resource.data); allow update, delete: if isAdmin() && resource.data.get("demo", false) == true; }
     match /simulation_scenarios/{id} { allow read: if isEmployee() && inMun(resource.data); allow create: if (isAdmin() || isManager()) && inMun(request.resource.data); allow update, delete: if isAdmin(); }
     match /decision_recommendations/{id} { allow read: if isEmployee() && inMun(resource.data); allow create, update: if isEmployee() && inMun(request.resource.data); allow delete: if false; }
