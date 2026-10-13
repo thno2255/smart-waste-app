@@ -582,8 +582,11 @@ const dedupeMissing = (list) => { const seen = new Set(); return list.filter((m)
 export function explainUnserved(model, plan, unserved) { return blockingViolations(model, plan, unserved, {}); }
 function blockingViolations(model, plan, unserved, { optimisticData }) {
   const out = [];
+  // Name what blocked the crews that COULD work; only when none could, report why each was unusable.
+  const usable = model.crews.filter((c) => c.blockers.length === 0 && (c.newWork.allowed || c.newWorkOverride));
+  const crews = usable.length ? usable : model.crews;
   for (const binId of unserved.slice(0, 30)) {
-    for (const crew of model.crews) {
+    for (const crew of crews) {
       const segs = (plan.crews[crew.id] || []).map((s) => ({ ...s, binIds: [...s.binIds], added: [...(s.added || [])] }));
       let seg = segs.find((s) => !s.routeId);
       if (!seg) { seg = { routeId: null, binIds: [], added: [] }; segs.push(seg); }

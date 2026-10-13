@@ -1290,6 +1290,24 @@ export async function adminTransferAction(action, transferId, note = undefined) 
 export const executeResourceTransfer = (transfer) => adminTransferAction("execute", transfer.id);
 export const returnResourceTransfer = (transfer) => adminTransferAction("return", transfer.id);
 
+/**
+ * Minimum operational adjustment (server-only writes). Analyses of one municipality, newest first; the actions
+ * (analyze / approve / reject) go through /api/ops/adjustment, which recomputes and re-verifies everything.
+ */
+COLLECTIONS.ADJUSTMENT_ANALYSES = "adjustment_analyses";
+export function useAdjustmentAnalyses(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.ADJUSTMENT_ANALYSES, { enabled: enabled && !!municipalityId, municipalityId });
+  return { analyses: data, loading, error };
+}
+export async function adjustmentAction(body) {
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) throw new Error("غير مسجل الدخول");
+  const res = await fetch("/api/ops/adjustment", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) { const e = new Error(out.error || `HTTP ${res.status}`); e.code = out.code || null; e.status = res.status; throw e; }
+  return out;
+}
+
 /** Planner / simulation records (immutable history of what the engines computed and why). */
 export const saveOptimizationRun = (data, actor) => addItem(COLLECTIONS.OPTIMIZATION_RUNS, { ...data, createdBy: actor?.uid || "", createdByName: actor?.name || "" });
 export const saveSimulationScenario = (data, actor) => addItem(COLLECTIONS.SIMULATION_SCENARIOS, { ...data, createdBy: actor?.uid || "", createdByName: actor?.name || "" });

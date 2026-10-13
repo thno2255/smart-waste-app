@@ -42,7 +42,8 @@ export function buildAdjustmentOperations(alt, state, { now = Date.now(), analys
   let n = 0;
   for (const nr of alt.diff.newRoutes) {
     const crew = alt.crews?.[nr.crewId] || {};
-    if (nr.simulated || nr.crewId === "virtual-crew") { ops.push({ op: "EXTERNAL_REQUEST", kind: "EXTRA_CREW", binIds: nr.binIds, note: "طاقم إضافي — يتطلب توفير موارد خارج النظام؛ لا تُنشأ جولة لطاقم غير موجود" }); continue; }
+    // Only the VIRTUAL extra crew is an external request; demo-labelled (simulated) drivers are real records of the scene.
+    if (nr.virtual || nr.crewId === "virtual-crew") { ops.push({ op: "EXTERNAL_REQUEST", kind: "EXTRA_CREW", binIds: nr.binIds, note: "طاقم إضافي — يتطلب توفير موارد خارج النظام؛ لا تُنشأ جولة لطاقم غير موجود" }); continue; }
     if (loanCrews.has(nr.crewId)) continue; // handled by RESERVE_LOAN
     const nbs = [...new Set(nr.binIds.map((id) => binById.get(id)?.neighborhoodId).filter(Boolean))];
     const stops = nr.binIds.map((id, i) => ({ ...stopOf(id), order: i + 1 }));

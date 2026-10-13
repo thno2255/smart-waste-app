@@ -139,6 +139,8 @@ import {
   adminUserAction,
   useScopedCollection,
   useDispatchDecisions,
+  useAdjustmentAnalyses,
+  adjustmentAction,
   useDispatchRuns,
   useDriverNotifications,
   markDriverNotificationRead,
@@ -208,6 +210,9 @@ import { getBinMapState, computeNeighborhoodMapStats, binMatchesFilter, neighbor
 import { computeFleetPerformance, IMPACT_FACTOR_SOURCES, DEFAULT_IMPACT_FACTORS } from "./impact";
 import { deltaText, DISTANCE_BASIS_TEXT, SAVING_KIND_TEXT } from "./savings";
 import { EXECUTION_STATE_TEXT } from "./executionOutcome";
+import { ROLE_RANK, AUTHORITY_TEXT, VERDICT_TEXT, COST_COMPONENT_TEXT, binsText } from "./minimumOperationalAdjustmentEngine";
+import { FEASIBILITY_STATUS_TEXT, PROOF_TEXT } from "./operationalFeasibilityEngine";
+import { ADJUSTMENT_STATUS_TEXT } from "./adjustmentOutcome";
 import { seedAllCollections, migrateStationsToBinsAndNeighborhoods, seedCityDemoData } from "./seedFirestore";
 import { exportAllDataToExcel } from "./exportAllDataToExcel";
 
@@ -1948,6 +1953,8 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
         </div>
       </div>
 
+      {can(loggedInUser?.role, "routes.assign") && <OperationalAdjustmentCard municipalityId={mid} loggedInUser={loggedInUser} bins={bins.filter((b) => b.municipalityId === mid)} />}
+
       {tab === "map" && <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={profiles} municipalityFilter={mid} height={560} onViewBins={onViewBins} onAddToRoute={onAddToRoute} onOpenRoute={onOpenRoute} />}
 
       {tab === "neighborhoods" && (
@@ -2281,6 +2288,8 @@ const DashboardPage = ({ alerts = [], neighborhoods = [], bins = [], fireSensors
       <Section title="يحتاج انتباهك الآن" count={attention.length}>
         <AttentionList items={attention} max={6} />
       </Section>
+
+      <OperationalAdjustmentCard loggedInUser={loggedInUser} bins={bins} decisions={decisions} />
 
       <KpiRow>
         <KpiTile label="حاويات حرجة الآن" value={criticalBins.length} tone={criticalBins.length ? "danger" : "ok"} onClick={() => go("bins")} />
@@ -6378,7 +6387,7 @@ const SOURCE_TEXT = {
 };
 
 /** Detail drawer — opens from the left (RTL start of content stays visible). */
-const SidePanel = ({ open, onClose, title, subtitle, children }) => {
+const SidePanel = ({ open, onClose, title, subtitle, children, width = 540 }) => {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -6389,7 +6398,7 @@ const SidePanel = ({ open, onClose, title, subtitle, children }) => {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.28)", zIndex: 1300, display: "flex", justifyContent: "flex-end" }}>
       <aside role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()} dir="rtl"
-        style={{ width: "min(540px, 100vw)", height: "100%", background: C.bg, borderInlineStart: `1px solid ${C.border}`, overflowY: "auto", fontFamily: ARABIC_FONT, boxShadow: "0 0 28px rgba(15,23,42,0.12)" }}>
+        style={{ width: `min(${width}px, 100vw)`, height: "100%", background: C.bg, borderInlineStart: `1px solid ${C.border}`, overflowY: "auto", fontFamily: ARABIC_FONT, boxShadow: "0 0 28px rgba(15,23,42,0.12)" }}>
         <div style={{ position: "sticky", top: 0, zIndex: 1, background: C.card, borderBottom: `1px solid ${C.border}`, padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: SP.md }}>
           <div>
             <div style={{ fontSize: FS.section, fontWeight: 800, color: C.text }}>{title}</div>
@@ -7270,6 +7279,242 @@ const SessionTimeout = ({ onLogout, timeoutMin = 30, countdownSec = 10 }) => {
         </div>
       </div>
     </div>
+  );
+};
+
+// ======================== MINIMUM OPERATIONAL ADJUSTMENT (command centre) ========================
+// The engine (src/minimumOperationalAdjustmentEngine.js) runs on the server; this UI only reads the stored analysis
+// and sends ids. Most important first; every detail is one click away.
+const ADJ_TONE = { PROPOSED: "warning", SIMULATED: "neutral", APPROVED: "info", EXECUTED: "ok", REJECTED: "neutral", FAILED: "danger", STALE: "neutral" };
+const ADJ_WHY_TEXT = {
+  LOWEST_COST_VALID_IN_SCOPE: "أقل تكلفة بين البدائل الصالحة التي جرى تقييمها",
+  NO_EXTRA_OR_BORROWED_RESOURCE: "لا تتطلب موارد إضافية أو إعارة من بلدية أخرى",
+  RESPECTS_HARD_CONSTRAINTS: "تحترم كل القيود الصارمة: السعة، المناوبة، الصلاحيات، التغطية",
+  MEETS_SERVICE_LEVEL: "تحقق مستوى الخدمة لكل الحاويات المستحقة",
+  DONOR_VERIFIED: "تحققنا من قدرة البلدية المعيرة على الوفاء بالتزاماتها طوال الإعارة",
+};
+const ADJ_OUTCOME_TEXT = { NOT_STARTED: "لم يبدأ التنفيذ", IN_PROGRESS: "قيد التنفيذ", PARTIAL_FINAL: "انتهى جزئيًا", EXECUTED: "نُفذ بالكامل", FAILED: "تعذر التنفيذ", AWAITING_EXTERNAL: "بانتظار إجراء خارجي (إعارة أو موارد)", NO_TRACKED_WORK: "لا عمل ميداني للمتابعة" };
+const OPTIMALITY_TEXT = { BEST_IN_SEARCH_SCOPE: "أفضل بديل صالح ضمن نطاق البحث (قُيّمت كل التركيبات المسموحة)", BEST_FOUND_BEFORE_TIME_LIMIT: "أفضل بديل صالح وُجد قبل انتهاء مهلة البحث — قد يوجد أفضل منه", NONE: "لا بديل صالح ضمن النطاق" };
+const CREW_COLORS = ["#1f5fbf", "#2f9e5f", "#6d4bd6", "#c77700", "#0f766e", "#9d174d"];
+const isFreshAnalysis = (a, now = currentTimeMs()) => !!a && ["PROPOSED", "SIMULATED"].includes(a.status) && new Date(a.expiresAt).getTime() > now;
+const moneyText = (m) => (m?.value != null ? `${Number(m.value).toLocaleString("ar-SA")} ${m.currency || ""}${m.kind === "simulation" ? " (معامل تجريبي)" : ""}` : (m?.text || "التكلفة المالية غير متاحة"));
+const altTitle = (alt) => (alt?.interventions || []).map((i) => i.title).join(" + ") || "—";
+
+/** Fit the map to the points once they are known. */
+function FitPoints({ points }) {
+  const map = useMap();
+  const key = points.map((p) => p.join(",")).join("|");
+  useEffect(() => { if (points.length) map.fitBounds(points, { padding: [24, 24], maxZoom: 15 }); }, [key, map]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
+/** Before / after on the map: committed + base plan (dashed grey), the adjusted plan (one colour per crew), the bins that change, the lent crew's approach. */
+const AdjustmentMap = ({ analysis, alt, bins = [] }) => {
+  const binById = useMemo(() => new Map(bins.map((b) => [b.id, b])), [bins]);
+  const pt = (id) => { const b = binById.get(id); return b?.lat != null ? [b.lat, b.lng] : null; };
+  const lines = (plan) => Object.entries(plan?.crews || {}).map(([cid, segs]) => ({ cid, pts: segs.flatMap((sg) => sg.binIds.map(pt)).filter(Boolean) })).filter((l) => l.pts.length > 1);
+  const before = lines(analysis.base?.plan);
+  const after = lines(alt?.plan);
+  const changed = new Set([...(alt?.diff?.routeChanges || []).flatMap((r) => [...r.added, ...r.removed]), ...(alt?.diff?.newRoutes || []).flatMap((r) => r.binIds)]);
+  const unservedBefore = new Set(analysis.base?.unservedBins || []);
+  const planned = new Set(Object.values(alt?.plan?.crews || {}).flatMap((segs) => segs.flatMap((sg) => sg.binIds)));
+  const loans = (alt?.interventions || []).filter((i) => i.code === "LOAN" && i.details?.origin).map((i) => {
+    const first = (alt.diff.newRoutes.find((r) => r.crewId === i.details.driverId)?.binIds || []).map(pt).find(Boolean);
+    return first ? { from: [i.details.origin.lat, i.details.origin.lng], to: first, label: i.details.fromName } : null;
+  }).filter(Boolean);
+  const all = [...before.flatMap((l) => l.pts), ...after.flatMap((l) => l.pts), ...[...unservedBefore].map(pt).filter(Boolean), ...loans.flatMap((l) => [l.from, l.to])];
+  const crewIdx = Object.keys(alt?.plan?.crews || {});
+  if (!all.length) return <div style={{ fontSize: FS.meta, color: C.dim }}>لا إحداثيات كافية لعرض الخطة على الخريطة.</div>;
+  return (
+    <div>
+      <div style={{ height: 300, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
+        <MapContainer center={all[0]} zoom={13} style={{ height: "100%", width: "100%" }} scrollWheelZoom={false}>
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
+          <FitPoints points={all} />
+          {before.map((l) => <Polyline key={"b" + l.cid} positions={l.pts} pathOptions={{ color: C.dim, weight: 3, opacity: 0.55, dashArray: "6 6" }} />)}
+          {after.map((l) => <Polyline key={"a" + l.cid} positions={l.pts} pathOptions={{ color: CREW_COLORS[crewIdx.indexOf(l.cid) % CREW_COLORS.length], weight: 4, opacity: 0.85 }} />)}
+          {loans.map((l, i) => <Polyline key={"l" + i} positions={[l.from, l.to]} pathOptions={{ color: C.purple, weight: 3, dashArray: "2 8" }} />)}
+          {[...new Set([...planned, ...unservedBefore])].map((id) => { const p = pt(id); if (!p) return null; const ch = changed.has(id), miss = unservedBefore.has(id) && !planned.has(id);
+            return <CircleMarker key={id} center={p} radius={ch ? 7 : 5} pathOptions={{ color: miss ? C.danger : ch ? C.warning : C.accent, weight: ch ? 3 : 2, fillColor: miss ? "#fff" : ch ? C.warning : C.accent, fillOpacity: miss ? 0.2 : 0.75 }} />; })}
+        </MapContainer>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: SP.md, fontSize: FS.meta, color: C.muted, marginTop: 6 }}>
+        <span><span style={{ display: "inline-block", width: 18, borderTop: `3px dashed ${C.dim}`, verticalAlign: "middle" }} /> الخطة قبل التعديل</span>
+        <span><span style={{ display: "inline-block", width: 18, borderTop: `4px solid ${CREW_COLORS[0]}`, verticalAlign: "middle" }} /> الخطة بعد التعديل (لون لكل طاقم)</span>
+        <span><Dot color={C.warning} /> حاوية تغيّر إسنادها</span>
+        <span><Dot color={C.danger} hollow /> حاوية بلا خدمة قبل التعديل</span>
+        {loans.length > 0 && <span><span style={{ display: "inline-block", width: 18, borderTop: `3px dotted ${C.purple}`, verticalAlign: "middle" }} /> اقتراب الطاقم المعار</span>}
+      </div>
+      <div style={{ fontSize: FS.meta, color: C.dim, marginTop: 4 }}>الخطوط مستقيمة بين التوقفات بترتيب الخطة — تمثيل للترتيب وليست مسار قيادة.</div>
+    </div>
+  );
+};
+
+/** The seven sections, progressive: summary open, the rest on demand. */
+const AdjustmentPanel = ({ analysis: a, onClose, loggedInUser, bins = [] }) => {
+  const [selId, setSelId] = useState(a.approvedAlternativeId || a.recommendedId || a.alternatives?.find((x) => x.success)?.id || a.alternatives?.[0]?.id || null);
+  const [busy, setBusy] = useState(""); const [msg, setMsg] = useState("");
+  const alts = a.alternatives || [];
+  const sel = alts.find((x) => x.id === selId) || null;
+  const rec = alts.find((x) => x.id === a.recommendedId) || null;
+  const role = loggedInUser?.role;
+  const canApprove = sel?.success && (ROLE_RANK[role] || 0) >= (ROLE_RANK[sel.authority] || 99) && isFreshAnalysis(a);
+  const act = (body, ok) => async () => { setBusy(body.action); setMsg(""); try { const r = await adjustmentAction(body); setMsg(ok(r)); } catch (e) { setMsg(`${e.code === "STALE" ? "تغيرت الظروف — " : ""}${e.message}`); } finally { setBusy(""); } };
+  const binName = (id) => bins.find((b) => b.id === id)?.name || id;
+  const d = a.deficit || {};
+  const comparable = [...alts].sort((x, y) => Number(y.success) - Number(x.success) || x.costUnits - y.costUnits).slice(0, 8);
+  return (
+    <SidePanel open onClose={onClose} width={760} title="تحليل البدائل التشغيلية" subtitle={`${municipalityById(a.municipalityId)?.shortAr || a.municipalityId} · ${clockText(a.createdAt)} · ${ADJUSTMENT_STATUS_TEXT[a.status] || a.status}`}>
+      {msg && <div role="status" style={{ fontSize: FS.body, color: C.text, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>{msg}</div>}
+      <PanelSection title="1. ملخص المشكلة" defaultOpen>
+        <div style={{ color: C.text, fontSize: FS.body, lineHeight: 1.9, marginBottom: 8 }}>{a.summary}</div>
+        <Fact label="حالة الخطة الحالية" value={FEASIBILITY_STATUS_TEXT[a.base?.feasibilityStatus] || a.base?.feasibilityStatus} />
+        <Fact label="حاويات بلا خدمة بالخطة الحالية" value={numText(d.unserved)} />
+        <Fact label="حاويات تتجاوز الزمن المستهدف" value={numText(d.late)} />
+        {a.ifNotAdopted && <Fact label="إن لم تُعتمد التوصية" value={`${binsText(a.ifNotAdopted.unservedBins)} بلا خدمة${a.ifNotAdopted.criticalUnserved ? `، منها ${a.ifNotAdopted.criticalUnserved} حرجة` : ""}${a.ifNotAdopted.overflowRiskText ? ` · ${a.ifNotAdopted.overflowRiskText}` : ""}`} />}
+        {a.simulatedEnvironment && <div style={{ color: C.dim, marginTop: 6 }}>بيانات محاكاة — لا تمثل نتائج ميدانية.</div>}
+      </PanelSection>
+      <PanelSection title="2. سبب العجز والقيود" hint={d.causeText}>
+        {(d.blockingConstraints || []).map((c) => <Check key={c.code} ok={false}>{c.text}{c.hard ? " — قيد صارم" : ""}</Check>)}
+        {(d.proofs || []).length > 0 && <div style={{ marginTop: 6 }}><div style={{ color: C.text, fontWeight: 600 }}>ما يثبت التعذر ضمن النموذج</div>{d.proofs.map((p, i) => <div key={i}>• {PROOF_TEXT[p.code] || p.code}{p.value != null ? ` (${numText(p.value)} من ${numText(p.limit)})` : p.earliestMin != null ? ` (أبكر وصول ${minText(p.earliestMin)} والهدف ${minText(p.deadlineMin)})` : ""}</div>)}</div>}
+        {(d.missing || []).length > 0 && <div style={{ marginTop: 6 }}><div style={{ color: C.text, fontWeight: 600 }}>بيانات ناقصة</div>{d.missing.map((m) => <div key={m.code}>• {m.text}</div>)}</div>}
+        {(a.dataQuality || []).length > 0 && <div style={{ marginTop: 6, color: C.dim }}>{a.dataQuality.map((q) => q.text).join(" · ")}</div>}
+      </PanelSection>
+      <PanelSection title="3. التعديلات الممكنة" hint={`${alts.filter((x) => x.success).length} صالحة من ${alts.length}`} defaultOpen>
+        <div role="radiogroup" aria-label="البدائل" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {alts.slice(0, 12).map((x) => (
+            <label key={x.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "8px 10px", borderRadius: 8, border: `1px solid ${x.id === selId ? C.brand : C.border}`, background: x.id === selId ? C.brand + "0d" : C.bg, cursor: "pointer" }}>
+              <input type="radio" name="adj-alt" checked={x.id === selId} onChange={() => setSelId(x.id)} style={{ marginTop: 3 }} />
+              <span style={{ flex: 1 }}>
+                <span style={{ color: C.text, fontWeight: 700 }}>{altTitle(x)}</span>{" "}
+                <Badge tone={x.verdict === "CHOSEN" ? "ok" : x.success ? "info" : "neutral"}>{VERDICT_TEXT[x.verdict] || x.verdict}</Badge>
+                <div style={{ fontSize: FS.meta, color: C.muted }}>الاعتماد: {AUTHORITY_TEXT[x.authority]}{x.rejectReason ? ` · ${x.rejectReason}` : ""}</div>
+              </span>
+            </label>
+          ))}
+        </div>
+        {(a.rejectedCandidates || []).length > 0 && <Disclosure summary={`تعديلات لم تُدرس (${a.rejectedCandidates.length})`}>{a.rejectedCandidates.map((r, i) => <div key={i} style={{ fontSize: FS.meta }}>• {r.subject !== "—" ? `${r.subject}: ` : ""}{r.reason}</div>)}</Disclosure>}
+      </PanelSection>
+      <PanelSection title="4. مقارنة التكلفة والزمن والخدمة" hint="التكلفة التشغيلية بالدقائق المكافئة">
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr style={{ color: C.muted, textAlign: "right" }}>{["البديل", "يحقق الخدمة", "بلا خدمة / متأخرة", "التكلفة التشغيلية", "التكلفة المالية", "الإنجاز المتوقع", "تغيير الخطة"].map((h) => <th key={h} style={{ padding: "6px 4px", borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{h}</th>)}</tr></thead>
+            <tbody>{comparable.map((x) => (
+              <tr key={x.id} style={{ color: C.text, background: x.id === selId ? C.brand + "0d" : "transparent" }}>
+                <td style={{ padding: "6px 4px" }}>{altTitle(x)}</td>
+                <td style={{ padding: "6px 4px", color: x.success ? C.accent : C.danger }}>{x.success ? "نعم" : "لا"}</td>
+                <td style={{ padding: "6px 4px" }}>{x.unserved.length} / {x.late.length}</td>
+                <td style={{ padding: "6px 4px" }}>{numText(x.costUnits)}</td>
+                <td style={{ padding: "6px 4px", color: x.money?.value == null ? C.dim : C.text }}>{moneyText(x.money)}</td>
+                <td style={{ padding: "6px 4px", whiteSpace: "nowrap" }}>{x.completionMin != null ? `${Number(x.completionMin).toLocaleString("ar-SA")} د` : NA_TEXT}</td>
+                <td style={{ padding: "6px 4px" }}>{numText(x.changeUnits)}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>
+        {sel && <Disclosure summary="تفاصيل تكلفة البديل المحدد">{sel.costBreakdown.map((c, i) => <Fact key={i} label={COST_COMPONENT_TEXT[c.code] || c.code} value={`${numText(Math.round(c.units))}${c.minutes != null ? ` (${minText(c.minutes)})` : c.count != null ? ` (${c.count})` : ""}`} />)}
+          <div style={{ color: C.dim, marginTop: 6 }}>الدقيقة المكافئة: أوزان تشغيلية معلنة وقابلة للضبط (القيادة 1، الإضافي {a.costModel?.weights?.overtimeMinute}، نقل حاوية {a.costModel?.weights?.movedBin}، الإعارة {a.costModel?.weights?.loanFixed}، الطاقم الإضافي {a.costModel?.weights?.extraCrew}) — ليست مبالغ مالية. المسافة {numText(sel.km, "كم")} تقدير هندسي متوقع.</div></Disclosure>}
+      </PanelSection>
+      <PanelSection title="5. أثر التعديل على بقية الجولات" hint={sel ? `${sel.diff.routeChanges.length} جولة قائمة · ${sel.diff.newRoutes.length} جولة جديدة` : ""}>
+        {sel && <AdjustmentMap analysis={a} alt={sel} bins={bins} />}
+        {sel?.diff.routeChanges.map((r) => <div key={r.routeId} style={{ marginTop: 6 }}>• <b style={{ color: C.text }}>{r.routeName}</b> ({r.driverName}): {[r.reordered && "إعادة ترتيب", r.added.length && `+${r.added.length} حاوية`, r.removed.length && `−${r.removed.length} حاوية تنتقل`, r.maxDelayMin > 0 && `تأخير حتى ${minText(r.maxDelayMin)} لتوقف قائم`].filter(Boolean).join(" · ") || "دون تغيير جوهري"}</div>)}
+        {sel?.diff.newRoutes.map((r, i) => <div key={i} style={{ marginTop: 4 }}>• جولة جديدة لـ<b style={{ color: C.text }}>{r.driverName}</b>{r.loan ? ` (معار من ${r.loan.from})` : ""}{r.virtual ? " (طاقم إضافي — محاكاة)" : ""}: {r.binIds.slice(0, 5).map(binName).join("، ")}{r.binIds.length > 5 ? "…" : ""}</div>)}
+        {sel?.donorChecks?.map((x) => <Check key={x.municipalityId} ok={x.ok}>البلدية المعيرة {x.name}: {x.ok ? `تبقى قادرة على التزاماتها (${x.after.unserved} بلا خدمة)` : x.reason}</Check>)}
+      </PanelSection>
+      <PanelSection title="6. سبب اختيار التوصية" hint={OPTIMALITY_TEXT[a.search?.optimality] ? "" : ""}>
+        {rec ? (a.explanation?.chosen?.why || []).map((w) => <Check key={w} ok>{ADJ_WHY_TEXT[w] || w}</Check>) : <div>لا توصية صالحة ضمن النطاق.</div>}
+        <div style={{ marginTop: 6 }}>{OPTIMALITY_TEXT[a.search?.optimality] || ""}</div>
+        <div style={{ color: C.dim, marginTop: 4 }}>نطاق البحث: {a.search?.setsEvaluated} من {a.search?.setsTotal} تركيبة (حتى {a.search?.maxCombination} تدخلات) · {numText(a.search?.elapsedMs, "مللي ثانية")} · إصدار المحرك {a.engineVersion} · سياسة {a.policyVersion}. الأسباب مستخرجة من أرقام المحرك نفسه، لا من نموذج لغوي.</div>
+      </PanelSection>
+      <PanelSection title="7. الاعتماد والتنفيذ" hint={ADJUSTMENT_STATUS_TEXT[a.status]} defaultOpen={["APPROVED", "EXECUTED", "FAILED"].includes(a.status)}>
+        {["PROPOSED", "SIMULATED"].includes(a.status) && sel && <>
+          <Fact label="البديل المحدد" value={altTitle(sel)} />
+          <Fact label="صلاحية الاعتماد المطلوبة" value={AUTHORITY_TEXT[sel.authority]} />
+          <Fact label="صالح حتى" value={clockText(a.expiresAt)} />
+          {sel.requiresExternalAction && <div style={{ color: C.warning, marginTop: 6 }}>يتضمن طاقمًا إضافيًا: يُسجَّل كطلب موارد ولا تُنشأ جولة لطاقم غير موجود.</div>}
+          {!isFreshAnalysis(a) && <div style={{ color: C.warning, marginTop: 6 }}>انتهت صلاحية التحليل — أعد التحليل قبل الاعتماد.</div>}
+          {sel.success && (ROLE_RANK[role] || 0) < (ROLE_RANK[sel.authority] || 99) && <div style={{ color: C.muted, marginTop: 6 }}>اعتماد هذا البديل من صلاحية {AUTHORITY_TEXT[sel.authority]}.</div>}
+          <div style={{ display: "flex", gap: SP.sm, marginTop: SP.md, flexWrap: "wrap" }}>
+            <Btn variant="primary" disabled={!canApprove || !!busy} onClick={() => { if (window.confirm(`اعتماد «${altTitle(sel)}»؟ يعيد الخادم التحقق من كل القيود قبل تحديث الخطة.`)) act({ action: "approve", analysisId: a.id, alternativeId: sel.id }, () => "اعتُمد التعديل وحُدّثت الخطة بعد إعادة التحقق — التنفيذ يُتابع من بيانات الجمع")(); }}>{busy === "approve" ? "جارٍ الاعتماد…" : "اعتماد البديل"}</Btn>
+            <Btn disabled={!!busy} onClick={() => { const note = window.prompt("سبب الرفض:", ""); if (note !== null) act({ action: "reject", analysisId: a.id, note }, () => "رُفضت التوصية")(); }}>رفض</Btn>
+          </div>
+        </>}
+        {a.status === "STALE" && <div>{a.staleReason || "تغيرت الظروف منذ التحليل"} — أعد التحليل.</div>}
+        {a.status === "REJECTED" && <div>رُفضت بواسطة {a.rejectedByName || "—"}: {a.rejectNote || "—"}</div>}
+        {["APPROVED", "EXECUTED", "FAILED"].includes(a.status) && <>
+          <Fact label="اعتمده" value={`${a.approvedByName || "—"} · ${clockText(a.approvedAt)}`} />
+          <Fact label="البديل المعتمد" value={altTitle(alts.find((x) => x.id === a.approvedAlternativeId))} />
+          <Fact label="جولات أُنشئت / عُدّلت" value={`${a.applied?.createdRoutes?.length || 0} / ${a.applied?.modifiedRoutes?.length || 0}`} />
+          <Fact label="حالة التنفيذ" value={ADJ_OUTCOME_TEXT[a.outcome?.state] || "لم يُقس بعد"} />
+          {a.outcome && <Fact label="الحاويات المجموعة" value={`${a.outcome.binsCollected} من ${a.outcome.binsPlanned}`} />}
+          <Fact label="الإنجاز المتوقع" value={a.expected?.completionAt ? clockText(a.expected.completionAt) : NA_TEXT} />
+          <Fact label="الوفر الفعلي" value={a.outcome?.realised?.savingText || "الوفر الفعلي غير متاح"} />
+          <div style={{ color: C.dim, marginTop: 6 }}>الاعتماد لا يعني التنفيذ: تُحسب الحالة من تأكيدات الجمع الخادمية فقط.</div>
+        </>}
+      </PanelSection>
+    </SidePanel>
+  );
+};
+
+/**
+ * Command-centre card. Shown when the latest analysis found a real deficit (or an approved adjustment is being
+ * followed); otherwise a quiet line with the action to check. `autoAnalyze`: run one analysis on arrival when the
+ * dispatch engine has open capacity escalations and there is no fresh analysis.
+ */
+const OperationalAdjustmentCard = ({ municipalityId: fixedMid = null, loggedInUser, bins = [], decisions = [] }) => {
+  const scope = scopeFor(loggedInUser);
+  const [pickMid, setPickMid] = useState(fixedMid || scope.municipalityId || null);
+  const mid = fixedMid || scope.municipalityId || pickMid;
+  const { analyses } = useAdjustmentAnalyses(!!mid, mid);
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(""); const [openId, setOpenId] = useState(null);
+  const now = currentTimeMs();
+  const latest = analyses[0] || null;
+  const followed = analyses.find((x) => x.status === "APPROVED") || null;
+  const gapEscalations = decisions.filter((d2) => d2.type === "escalate" && d2.status === "open" && ["capacity", "no_driver", "no_vehicle", "too_far", "out_of_scope", "target_gap"].includes(d2.kind) && (!mid || d2.municipalityId === mid));
+  const run = useCallback(async () => {
+    if (!mid) return;
+    setBusy(true); setMsg("");
+    try { const r = await adjustmentAction({ action: "analyze", municipalityId: mid }); if (r.analysisStatus === "NO_DEFICIT") setMsg("الخطة التشغيلية الحالية تحقق مستوى الخدمة — لا حاجة لتعديل."); }
+    catch (e) { setMsg(`تعذر التحليل: ${e.message}`); } finally { setBusy(false); }
+  }, [mid]);
+  const autoRan = useRef(false);
+  const needsAuto = gapEscalations.length > 0 && !(latest && (isFreshAnalysis(latest, now) || latest.status === "APPROVED"));
+  useEffect(() => { if (needsAuto && !autoRan.current && mid) { autoRan.current = true; run(); } }, [needsAuto, mid, run]);
+  const open = analyses.find((x) => x.id === openId) || null;
+  const deficit = latest && isFreshAnalysis(latest, now) && latest.analysisStatus !== "NO_DEFICIT" ? latest : null;
+  return (
+    <Section title="الجدوى التشغيلية" actions={<>
+      {!fixedMid && scope.all && <select aria-label="البلدية" value={pickMid || ""} onChange={(e) => setPickMid(e.target.value || null)} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>
+        <option value="">اختر البلدية</option>{MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.shortAr}</option>)}</select>}
+      <Btn variant="ghost" disabled={!mid || busy} onClick={run}>{busy ? "جارٍ التحليل…" : "فحص الجدوى"}</Btn></>}>
+      {deficit ? (
+        <div style={{ borderInlineStart: `3px solid ${C.warning}`, background: C.warning + "0c", borderRadius: 8, padding: "12px 14px" }}>
+          <div style={{ fontSize: FS.section, fontWeight: 800, color: C.text }}>تعذر تحقيق مستوى الخدمة بالخطة التشغيلية الحالية</div>
+          <div style={{ fontSize: FS.body, color: C.muted, marginTop: 4 }}>سبب العجز: <b style={{ color: C.text }}>{deficit.deficit?.causeText || "—"}</b>{deficit.deficit ? ` · ${binsText(deficit.deficit.unserved)} بلا خدمة${deficit.deficit.late ? ` · ${binsText(deficit.deficit.late)} متأخرة` : ""}` : ""}</div>
+          <div style={{ display: "flex", gap: SP.sm, alignItems: "center", marginTop: SP.md, flexWrap: "wrap" }}>
+            <Btn variant="primary" onClick={() => setOpenId(deficit.id)}>تحليل البدائل التشغيلية</Btn>
+            <span style={{ fontSize: FS.meta, color: C.dim }}>{deficit.recommendedId ? "توجد توصية صالحة" : "لا بديل صالح ضمن النطاق المسموح"} · تحليل {clockText(deficit.createdAt)} · صالح حتى {clockText(deficit.expiresAt)}</span>
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: FS.body, color: C.muted }}>{!mid ? "اختر البلدية لفحص الجدوى التشغيلية." : msg || (latest?.analysisStatus === "NO_DEFICIT" && isFreshAnalysis(latest, now) ? `الخطة الحالية تحقق مستوى الخدمة (تحليل ${clockText(latest.createdAt)}).` : "لا تحليل حديث — افحص الجدوى عند الحاجة، ويُجرى تلقائيًا عند تعذر الإسناد.")}</div>
+      )}
+      {followed && (
+        <div style={{ marginTop: SP.md, display: "flex", justifyContent: "space-between", gap: SP.sm, alignItems: "center", flexWrap: "wrap", fontSize: FS.body }}>
+          <span><Badge tone={ADJ_TONE[followed.status]}>{ADJUSTMENT_STATUS_TEXT[followed.status]}</Badge> <span style={{ color: C.muted }}>تعديل تشغيلي: {altTitle((followed.alternatives || []).find((x) => x.id === followed.approvedAlternativeId))} · {ADJ_OUTCOME_TEXT[followed.outcome?.state] || "لم يُقس بعد"}{followed.outcome ? ` (${followed.outcome.binsCollected} من ${followed.outcome.binsPlanned})` : ""}</span></span>
+          <Btn variant="ghost" onClick={() => setOpenId(followed.id)}>المتابعة</Btn>
+        </div>
+      )}
+      {analyses.filter((x) => ["EXECUTED", "FAILED", "REJECTED"].includes(x.status)).length > 0 && (
+        <Disclosure summary="سجل التعديلات التشغيلية">
+          {analyses.filter((x) => ["EXECUTED", "FAILED", "REJECTED", "STALE"].includes(x.status)).slice(0, 8).map((x) => (
+            <div key={x.id} style={{ display: "flex", justifyContent: "space-between", gap: SP.sm, fontSize: FS.meta, padding: "4px 0", borderBottom: `1px solid ${C.border}` }}>
+              <span><Badge tone={ADJ_TONE[x.status]}>{ADJUSTMENT_STATUS_TEXT[x.status]}</Badge> {dayText(x.createdAt)} {clockText(x.createdAt)} · {x.deficit?.causeText || "—"}</span>
+              <Btn variant="ghost" onClick={() => setOpenId(x.id)}>عرض</Btn>
+            </div>))}
+        </Disclosure>
+      )}
+      {open && <AdjustmentPanel key={open.id} analysis={open} onClose={() => setOpenId(null)} loggedInUser={loggedInUser} bins={bins} />}
+    </Section>
   );
 };
 

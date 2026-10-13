@@ -38,7 +38,7 @@ export const AUTHORITY_TEXT = { employee: "موظف العمليات", manager: 
 
 export const DEFAULT_ADJUSTMENT_POLICY = {
   allowed: { RESEQUENCE: true, REDISTRIBUTE: true, SHIFT_TIMING: true, RESERVE_NEXT: true, IDLE_VEHICLE: true, OVERTIME: false, LOAN: true, ADD_RESOURCE: true },
-  maxCombination: 2,              // interventions per set
+  maxCombination: 3,              // interventions per set (the time limit bounds the search; the result says if it stopped)
   timeLimitMs: 6000,              // whole search
   perSetTimeLimitMs: 700,         // one re-solve
   shiftTimingHorizonMin: 120,     // a covering driver whose shift starts within this may be scheduled at its start
@@ -133,6 +133,8 @@ registerIntervention("LOAN", {
         const subject = `${c.driverName} (${donor.name || donor.municipalityId})`;
         if (c.blockers.length || c.commitments.length || !c.newWork.allowed) continue;          // only idle, usable crews are lendable
         if (!c.origin) { rejected.push({ code: "LOAN", subject, reason: MISSING_DATA_TEXT.ORIGIN_UNKNOWN }); continue; }
+        if (!c.shift.known && !model.policy.allowUnknownShift) { rejected.push({ code: "LOAN", subject, reason: "نافذة مناوبة السائق غير مسجلة — لا يمكن إثبات تغطيتها لفترة الإعارة" }); continue; }
+        if (c.capacityL == null && !model.policy.allowUnknownCapacity) { rejected.push({ code: "LOAN", subject, reason: MISSING_DATA_TEXT.CAPACITY_UNKNOWN }); continue; }
         const leg = model.travel(c.origin, target);
         const travelMin = Math.round(leg.min);
         if (travelMin > policy.maxLoanTravelMin) { rejected.push({ code: "LOAN", subject, reason: `زمن الانتقال ${travelMin} د يتجاوز ${policy.maxLoanTravelMin} د` }); continue; }
@@ -145,7 +147,7 @@ registerIntervention("LOAN", {
           components: [{ code: "loanFixed", units: policy.weights.loanFixed }, { code: "loanTravel", units: 2 * travelMin * policy.weights.driveMinute, minutes: 2 * travelMin }],
           donorMunicipalityId: donor.municipalityId, window: win,
           apply: (m) => { m.crews.push({ ...clone(c), id: c.id, municipalityId: m.municipalityId, coverageAll: true, loan: { from: donor.municipalityId, window: win }, newWorkOverride: true, newWork: { allowed: true } }); },
-          details: { driverId: c.id, driverName: c.driverName, vehicleId: c.vehicleId, vehicleNumber: c.vehicleNumber, fromMunicipalityId: donor.municipalityId, fromName: donor.name || donor.municipalityId, travelMin, travelSource: leg.source, window: win } });
+          details: { driverId: c.id, driverName: c.driverName, vehicleId: c.vehicleId, vehicleNumber: c.vehicleNumber, fromMunicipalityId: donor.municipalityId, fromName: donor.name || donor.municipalityId, travelMin, travelSource: leg.source, window: win, origin: { lat: c.origin.lat, lng: c.origin.lng } } });
       }
     }
     if (!(donors || []).length) rejected.push({ code: "LOAN", subject: "—", reason: "لم تُحمَّل حالة بلديات أخرى للدراسة" });
@@ -158,6 +160,7 @@ registerIntervention("ADD_RESOURCE", {
     const vd = (state.vehicles || []).find((v) => v.municipalityId === model.municipalityId && v.depotLat != null);
     const start = model.depot || (vd ? { id: "depot:virtual", lat: vd.depotLat, lng: vd.depotLng } : null);
     if (!start) { rejected.push({ code: "ADD_RESOURCE", subject: "طاقم إضافي", reason: "لا مستودع مسجل لنقطة انطلاق الطاقم الإضافي (لا تُفترض نقطة انطلاق)" }); return []; }
+    if (!model.crews.some((c) => c.capacityL)) { rejected.push({ code: "ADD_RESOURCE", subject: "طاقم إضافي", reason: "لا سعة مسجلة لأي مركبة في البلدية — لا مرجع لسعة الطاقم الإضافي" }); return []; }
     const caps = model.crews.map((c) => c.capacityL).filter(Boolean).sort((a, b) => a - b);
     const shifts = model.crews.filter((c) => c.shift.known).map((c) => c.shift.endMin).sort((a, b) => a - b);
     const cap = caps.length ? caps[Math.floor(caps.length / 2)] : null;
@@ -165,7 +168,7 @@ registerIntervention("ADD_RESOURCE", {
     return [{ key: "ADD_RESOURCE", resources: ["virtual-crew"], fixedUnits: model.policy.__w.extraCrew, components: [{ code: "extraCrew", units: model.policy.__w.extraCrew }], simulated: true, requiresExternalAction: true,
       apply: (m) => { m.crews.push({ id: "virtual-crew", driverId: null, driverName: "طاقم إضافي (محاكاة)", vehicleId: null, vehicleNumber: "مركبة إضافية (محاكاة)", capacityL: cap, state: "AVAILABLE", blockers: [],
         shift: { known: endMin != null, endMin, startsInMin: null, label: null }, origin: { id: "origin:virtual", lat: start.lat, lng: start.lng, source: "depot" }, depot: start, coverage: [], coverageAll: true,
-        commitments: [], finishInMin: null, newWork: { allowed: true }, availableAtMin: 0, startLoadL: 0, simulated: true }); },
+        commitments: [], finishInMin: null, newWork: { allowed: true }, availableAtMin: 0, startLoadL: 0, simulated: true, virtual: true }); },
       details: { capacityL: cap, shiftEndMin: endMin, start: "مستودع البلدية", basis: cap == null ? "لا سعة مرجعية — غير قابل للإثبات" : "سعة وسيطة لمركبات البلدية ومناوبة وسيطة" } }];
   },
 });
@@ -192,7 +195,7 @@ export function planDiff(baseModel, basePlanResult, model, plan, evalBase, evalN
   const newSegs = [];
   for (const [cid, segs] of Object.entries(plan.crews)) {
     for (const s of segs) {
-      if (!s.routeId) { if (s.binIds.length) newSegs.push({ crewId: cid, driverName: crewLabel(model, cid), binIds: s.binIds, loan: model.crews.find((c) => c.id === cid)?.loan || null, simulated: !!model.crews.find((c) => c.id === cid)?.simulated }); continue; }
+      if (!s.routeId) { if (s.binIds.length) newSegs.push({ crewId: cid, driverName: crewLabel(model, cid), binIds: s.binIds, loan: model.crews.find((c) => c.id === cid)?.loan || null, virtual: !!model.crews.find((c) => c.id === cid)?.virtual }); continue; }
       const o = origOf.get(s.routeId); if (!o) continue;
       const added = s.binIds.filter((id) => !o.binIds.includes(id));
       const removed = o.binIds.filter((id) => !s.binIds.includes(id));
@@ -282,7 +285,7 @@ function evaluateSet(ctx, set) {
     const worse = after.unservedBins.length > d.base.unservedBins.length || (after.lateBins || []).length > (d.base.lateBins || []).length;
     const ok = after.feasible || (!d.base.feasible && !worse);
     donorChecks.push({ municipalityId: did, name: d.name || did, crewsLent: loans.length, ok, before: { status: d.base.feasibilityStatus, unserved: d.base.unservedBins.length }, after: { status: after.feasibilityStatus, unserved: after.unservedBins.length, late: (after.lateBins || []).length },
-      reason: ok ? null : `تفقد ${d.name || did} قدرتها على الوفاء بالتزاماتها خلال فترة الإعارة (${after.unservedBins.length} حاوية بلا خدمة${(after.lateBins || []).length ? `، ${after.lateBins.length} متأخرة` : ""})` });
+      reason: ok ? null : `تفقد ${d.name || did} قدرتها على الوفاء بالتزاماتها خلال فترة الإعارة (${binsText(after.unservedBins.length)} بلا خدمة${(after.lateBins || []).length ? `، ${binsText(after.lateBins.length)} متأخرة` : ""})` });
   }
   const donorOk = donorChecks.every((x) => x.ok);
   const valid = e.valid && donorOk;
@@ -302,7 +305,7 @@ function evaluateSet(ctx, set) {
     blockedBy: e.unserved.length ? [...new Set(explainUnserved(m, solved.plan, e.unserved).map((v) => v.code))] : [],
     authority: set.reduce((a, c) => (ROLE_RANK[c.authority] > ROLE_RANK[a] ? c.authority : a), "employee"),
     requiresExternalAction: set.some((c) => c.requiresExternalAction), simulated: set.some((c) => c.simulated),
-    crews: Object.fromEntries(m.crews.map((c) => [c.id, { driverId: c.driverId, driverName: c.driverName, vehicleId: c.vehicleId, vehicleNumber: c.vehicleNumber, availableAtMin: c.availableAtMin || 0, loan: c.loan || null, simulated: !!c.simulated, commitments: c.commitments.map((k) => k.routeId) }])),
+    crews: Object.fromEntries(m.crews.map((c) => [c.id, { driverId: c.driverId, driverName: c.driverName, vehicleId: c.vehicleId, vehicleNumber: c.vehicleNumber, availableAtMin: c.availableAtMin || 0, loan: c.loan || null, virtual: !!c.virtual, commitments: c.commitments.map((k) => k.routeId) }])),
     diff, plan: solved.plan, times: e.times, solver: { iterations: solved.solver.iterations, elapsedMs: solved.solver.elapsedMs, timedOut: solved.solver.timedOut },
     key: [valid ? 0 : 1, e.unverifiable ? 1 : 0, e.unserved.length, e.late.length, Math.round(e.lateMin), e.costUnits, e.changeUnits, set.length],
   };
@@ -363,7 +366,7 @@ export function analyzeMinimumAdjustment(state, opts = {}) {
     if (x.donorChecks.some((d) => !d.ok)) { x.verdict = "REJECTED_DONOR"; x.rejectReason = x.donorChecks.find((d) => !d.ok).reason; continue; }
     if (x.hardViolations.length) { x.verdict = "HARD_VIOLATION"; x.rejectReason = `يخالف قيدًا صارمًا: ${x.hardViolations.map(constraintText).join("، ")}`; continue; }
     if (x.missing.length) { x.verdict = "INSUFFICIENT_DATA"; x.rejectReason = `بيانات ناقصة: ${x.missing.map(constraintText).join("، ")}`; continue; }
-    if (!x.slaMet) { x.verdict = "SERVICE_LEVEL_NOT_MET"; x.rejectReason = `لا يحقق مستوى الخدمة: ${x.unserved.length} حاوية بلا خدمة${x.late.length ? `، ${x.late.length} متأخرة` : ""}${x.blockedBy.length ? ` — يمنعه قيد صارم: ${x.blockedBy.map(constraintText).join("، ")}` : ""}`; continue; }
+    if (!x.slaMet) { x.verdict = "SERVICE_LEVEL_NOT_MET"; x.rejectReason = `لا يحقق مستوى الخدمة: ${binsText(x.unserved.length)} بلا خدمة${x.late.length ? `، ${binsText(x.late.length)} متأخرة` : ""}${x.blockedBy.length ? ` — يمنعه قيد صارم: ${x.blockedBy.map(constraintText).join("، ")}` : ""}`; continue; }
     x.verdict = "COSTLIER"; x.rejectReason = `صالح لكنه أعلى تكلفة (+${x.costUnits - recommended.costUnits} دقيقة مكافئة)${x.changeUnits > recommended.changeUnits ? " وتغيير أكبر للخطة" : ""}`;
   }
   const elapsedMs = clock() - t0;
@@ -386,6 +389,8 @@ export function analyzeMinimumAdjustment(state, opts = {}) {
   return result;
 }
 
+/** Arabic count agreement for bins: حاوية واحدة · حاويتان · 3–10 حاويات · 11+ حاوية. */
+export const binsText = (n) => (n === 1 ? "حاوية واحدة" : n === 2 ? "حاويتان" : n >= 3 && n <= 10 ? `${n} حاويات` : `${n} حاوية`);
 const safe = (fn) => { try { return fn(); } catch { return null; } };
 const groupBy = (arr, fn) => arr.reduce((o, x) => { (o[fn(x)] ||= []).push(x); return o; }, {});
 
@@ -415,7 +420,7 @@ function ifNotAdopted(base, model) {
   return {
     unservedBins: base.unservedBins.length, lateBins: (base.lateBins || []).length, lateMin: base.evaluation?.lateMin ?? null,
     criticalUnserved: base.unservedBins.filter((id) => model.dueById.get(id)?.critical).length,
-    overflowRiskBins: soon.length, overflowRiskText: soon.length ? `${soon.length} حاوية متوقع امتلاؤها خلال 3 ساعات تبقى بلا خدمة` : null,
+    overflowRiskBins: soon.length, overflowRiskText: soon.length ? `${binsText(soon.length)} متوقع امتلاؤها خلال 3 ساعات تبقى بلا خدمة` : null,
   };
 }
 
@@ -453,7 +458,7 @@ export function adjustmentSummary(r) {
   const scope = r.search.status === "TIME_LIMIT" ? ` (انتهت مهلة البحث بعد ${r.search.setsEvaluated} من ${r.search.setsTotal} تركيبة)` : "";
   const studied = ` قارن النظام ${r.search.setsEvaluated} ${r.search.setsEvaluated === 1 ? "تعديلًا تشغيليًا" : "تعديلات تشغيلية"}${scope}.`;
   if (!r.recommended) {
-    return `${head}${studied} لم يحقق أي تعديل ضمن النطاق المسموح مستوى الخدمة كاملًا${r.bestPartial ? `؛ أفضل بديل صالح جزئيًا يترك ${r.bestPartial.unserved.length} حاوية بلا خدمة` : ""}.`;
+    return `${head}${studied} لم يحقق أي تعديل ضمن النطاق المسموح مستوى الخدمة كاملًا${r.bestPartial ? `؛ أفضل بديل صالح جزئيًا يترك ${binsText(r.bestPartial.unserved.length)} بلا خدمة` : ""}.`;
   }
   const c = r.recommended;
   const names = c.interventions.map((i) => `«${i.title}»`).join(" مع ");

@@ -189,3 +189,19 @@ describe("minimum adjustment — search limits, data, explanation, safety", () =
     expect(a.alternatives.map((x) => x.id)).toEqual(b.alternatives.map((x) => x.id));
   });
 });
+
+describe("approval operations", () => {
+  it("demo-labelled (simulated) drivers get real routes; only the virtual extra crew becomes an external request", async () => {
+    const { buildAdjustmentOperations } = await import("../adjustmentOperations");
+    const s = st({ profiles: [prof("D1", { simulated: true }), prof("D2", { vehicleId: null, simulated: true })], vehicles: [veh("VD1", 2500), veh("VSPARE", 8000)] });
+    const r = run(s);
+    const ops = buildAdjustmentOperations(r.recommended, s, { now: NOW, analysisId: "t" });
+    expect(ops.filter((o) => o.op === "CREATE_ROUTE").length).toBeGreaterThan(0);
+    expect(ops.some((o) => o.op === "EXTERNAL_REQUEST")).toBe(false);
+    expect(ops.find((o) => o.op === "LINK_VEHICLE")).toMatchObject({ driverId: "D2", vehicleId: "VSPARE" });
+    const add = run(st({ vehicles: [veh("VD1", 2500)] }));
+    const ops2 = buildAdjustmentOperations(add.recommended, st({ vehicles: [veh("VD1", 2500)] }), { now: NOW, analysisId: "u" });
+    expect(ops2.some((o) => o.op === "EXTERNAL_REQUEST")).toBe(true);
+    expect(ops2.some((o) => o.op === "CREATE_ROUTE" && o.driverId === null)).toBe(false);
+  });
+});
