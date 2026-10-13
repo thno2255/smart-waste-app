@@ -23,6 +23,7 @@ import { driverOperationalState, DRIVER_STATES } from "./driverState.js";
 import { haversineDistanceKm, estimateTravelMinutes } from "./decisionEngine.js";
 import { normalizeNeighborhoodName } from "./config.js";
 import { ASSUMPTIONS } from "./impact.js";
+import { checkCrewAssignment, constraintText } from "./operationalFeasibilityEngine.js";
 
 export const GAP_KINDS = ["no_driver", "too_far", "capacity", "no_vehicle", "out_of_scope"];
 
@@ -38,12 +39,28 @@ export const LADDER = [
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
+/** Feasibility policy of the ladder: unknown capacity is never "fine"; an unknown shift end is reported as unverified. */
+const LADDER_POLICY = { allowUnknownShift: true };
+
+/** Every option passes through the unified feasibility check (capacity, load, drive + service, start, shift end, dump, return, commitments). */
+function verify(state, settings, now, p) {
+  const r = checkCrewAssignment(state, p, { now, settings, policy: LADDER_POLICY });
+  const unverified = [];
+  const crew = (state.profiles || []).find((x) => x.uid === p.driverId) || p.profile;
+  if (crew && !(crew.shiftStart && crew.shiftEnd)) unverified.push("SHIFT_UNKNOWN");
+  return { ...r, unverified, reasons: [...r.violations.map((v) => constraintText(v.code)), ...r.missing.map((m) => constraintText(m.code))] };
+}
+
 /** Run the engine on a modified copy and read the outcome for the need's bins. */
 function outcomeFor(state, settings, binIds, now) {
   const plan = planDispatch(state, { ...settings, mode: "auto" }, { now });
   const ids = new Set(binIds);
   const hits = plan.actions.filter((a) => (a.type === "create_assign" || a.type === "insert") && (a.binIds || []).some((id) => ids.has(id)));
   if (!hits.length) return null;
+  // The dispatch result must also pass the unified feasibility check for each driver it uses.
+  const checks = hits.map((a) => verify(state, settings, now, { driverId: a.driverId, binIds: (a.binIds || []).filter((id) => ids.has(id)), startAfterMin: a.reservation?.startAfterMin ?? null, overrideNewWork: !!a.reservation || a.type === "insert" }));
+  const failed = checks.find((c) => !c.feasible);
+  if (failed) return { servedBins: 0, allServed: false, worstMin: null, driverNames: [...new Set(hits.map((a) => a.driverName).filter(Boolean))], confidence: null, infeasible: failed.reasons };
   const served = new Set(hits.flatMap((a) => a.binIds).filter((id) => ids.has(id)));
   const timeOf = (a) => {
     const c = (a.explanation?.constraints || []).find((x) => x.code === "CRITICAL_TARGET_MIN");
@@ -120,7 +137,7 @@ export function analyzeResourceGaps(state, plan, settings = {}, { now = Date.now
     {
       const out = simulate(() => {}, { insertMaxAddedMin: S.insertMaxAddedMin * 2, insertMaxKm: S.insertMaxKm * 2 });
       const studied = (a.explanation?.alternatives || []).find((x) => x.option === "INSERT_EXISTING_ROUTE");
-      push(0, out?.allServed
+      push(0, out?.infeasible ? { feasible: false, afterMin: null, cause: `مرفوض بفحص الجدوى: ${out.infeasible.join("، ")}`, action: null, confidence: null, constraints: [] } : out?.allServed
         ? { feasible: true, afterMin: out.worstMin, action: `السماح بانحراف حتى ${S.insertMaxAddedMin * 2} د لإدراج الحاويات في جولة ${out.driverNames.join("، ")}`, cause: `الإدراج الحالي محدود بـ ${S.insertMaxAddedMin} د انحراف`, confidence: out.confidence, constraints: ["يطيل الجولة القائمة", "يتطلب موافقة موظف العمليات"] }
         : { feasible: false, afterMin: null, cause: studied?.codes?.length ? `دُرست الجولات القائمة: ${studied.codes.join("، ")}` : "لا جولات قائمة قابلة للإدراج", action: null, confidence: null, constraints: [] });
     }
@@ -132,7 +149,7 @@ export function analyzeResourceGaps(state, plan, settings = {}, { now = Date.now
         .filter((x) => x.fill < needScore).sort((x, y) => x.fill - y.fill)[0];
       if (queued) {
         const out = simulate((st) => { st.routes = st.routes.filter((r) => r.id !== queued.r.id); });
-        push(1, { feasible: !!out?.allServed, afterMin: out?.worstMin ?? null, action: `تقديم هذه الحاويات على ${queued.r.routeName} (متوسط امتلائها ${Math.round(queued.fill)}%) لدى ${queued.r.driverName || "السائق"}، ثم استكمالها بعدها`,
+        push(1, { feasible: !!out?.allServed, afterMin: out?.worstMin ?? null, ...(out?.infeasible ? { rejectedBy: out.infeasible } : {}), action: `تقديم هذه الحاويات على ${queued.r.routeName} (متوسط امتلائها ${Math.round(queued.fill)}%) لدى ${queued.r.driverName || "السائق"}، ثم استكمالها بعدها`,
           cause: "سائق مغطٍّ للحي محجوز لجولة أقل أولوية لم تبدأ", confidence: out?.confidence || null, constraints: ["تتأخر الجولة الأقل أولوية"] });
       } else push(1, { feasible: false, afterMin: null, cause: "لا جولة معتمدة أقل أولوية لدى سائق يغطي الحي", action: null, confidence: null, constraints: [] });
     }
@@ -141,7 +158,7 @@ export function analyzeResourceGaps(state, plan, settings = {}, { now = Date.now
       const onRoute = covering.filter((x) => x.st.state === DRIVER_STATES.ON_ROUTE && x.st.currentRoute && x.st.finishInMin != null).sort((x, y) => x.st.finishInMin - y.st.finishInMin)[0];
       if (onRoute) {
         const out = simulate(() => {}, { allowNextRouteReservation: true, reserveNextWithinMin: onRoute.st.finishInMin + 1 });
-        push(2, { feasible: !!out?.allServed, afterMin: out?.worstMin ?? null, action: `حجز الجولة التالية لـ${onRoute.p.fullName} بعد إنهاء جولته الحالية (متوقع خلال ${onRoute.st.finishInMin} د)`,
+        push(2, { feasible: !!out?.allServed, afterMin: out?.worstMin ?? null, ...(out?.infeasible ? { rejectedBy: out.infeasible } : {}), action: `حجز الجولة التالية لـ${onRoute.p.fullName} بعد إنهاء جولته الحالية (متوقع خلال ${onRoute.st.finishInMin} د)`,
           cause: `أقرب سائق في جولة ينهيها بعد ${onRoute.st.finishInMin} د، وحد الحجز التلقائي ${S.reserveNextWithinMin} د`, confidence: out?.confidence || null, constraints: ["تقدير زمن الإنهاء من التوقفات المتبقية"] });
       } else push(2, { feasible: false, afterMin: null, cause: "لا سائق يغطي الحي في جولة جارية", action: null, confidence: null, constraints: [] });
     }
@@ -150,11 +167,11 @@ export function analyzeResourceGaps(state, plan, settings = {}, { now = Date.now
       const soon = covering.filter((x) => x.st.state === DRIVER_STATES.OFF_SHIFT && x.st.shift.known && x.st.shift.startsInMin > 0 && x.st.shift.startsInMin <= T.criticalCollectionMin * 2)
         .sort((x, y) => x.st.shift.startsInMin - y.st.shift.startsInMin)[0];
       if (soon) {
-        const v = state.vehicles.find((x) => x.id === soon.p.vehicleId);
-        const ap = approachFrom(v?.depotLat != null ? { lat: v.depotLat, lng: v.depotLng } : depot);
-        const after = ap != null ? soon.st.shift.startsInMin + ap + workloadMin : null;
-        push(3, { feasible: after != null, afterMin: after != null ? soon.st.shift.startsInMin + ap : null, action: `تقديم بداية مناوبة ${soon.p.fullName} أو إسناد الجولة له عند بدايتها (تبدأ خلال ${soon.st.shift.startsInMin} د)`,
-          cause: "سائق يغطي الحي خارج المناوبة الآن", confidence: "medium", constraints: ["يتطلب موافقة السائق والمشرف على تعديل المناوبة"] });
+        // The unified check: the work starts at the shift start and must fit the vehicle, the shift end, the commitments.
+        const chk = verify(state, S, now, { driverId: soon.p.uid, binIds, startAfterMin: soon.st.shift.startsInMin, overrideNewWork: true });
+        push(3, { feasible: chk.feasible, afterMin: chk.feasible ? chk.worstMin : null, action: `إسناد الجولة إلى ${soon.p.fullName} عند بداية مناوبته (تبدأ خلال ${soon.st.shift.startsInMin} د)`,
+          cause: chk.feasible ? "سائق يغطي الحي خارج المناوبة الآن" : `مرفوض بفحص الجدوى: ${chk.reasons.join("، ")}`, confidence: chk.feasible ? "medium" : null,
+          constraints: ["يتطلب موافقة المشرف", ...(chk.unverified.includes("SHIFT_UNKNOWN") ? ["نهاية المناوبة غير مسجلة — لم يُتحقق منها"] : [])], feasibilityCheck: { violations: chk.violations.map((v) => v.code), missing: chk.missing.map((m) => m.code), finishMin: chk.finishMin } });
       } else push(3, { feasible: false, afterMin: null, cause: "لا مناوبة لسائق مغطٍّ تبدأ قريبًا", action: null, confidence: null, constraints: [] });
     }
     // 5. vehicle redistribution: a working covering driver blocked only by their vehicle + an idle vehicle
@@ -163,7 +180,7 @@ export function analyzeResourceGaps(state, plan, settings = {}, { now = Date.now
       const idle = (state.vehicles || []).find((v) => v.status === "available" && !state.profiles.some((p) => p.vehicleId === v.id && p.shiftStatus === "on_shift" && p.uid !== blocked?.p.uid) && !state.routes.some((r) => ["approved", "in_progress"].includes(r.status) && r.vehicleId === v.id));
       if (blocked && idle) {
         const out = simulate((st) => { const p = st.profiles.find((x) => x.uid === blocked.p.uid); p.vehicleId = idle.id; });
-        push(4, { feasible: !!out?.allServed, afterMin: out?.worstMin ?? null, action: `ربط المركبة ${idle.vehicleNumber || idle.id} بالسائق ${blocked.p.fullName}`,
+        push(4, { feasible: !!out?.allServed, afterMin: out?.worstMin ?? null, ...(out?.infeasible ? { rejectedBy: out.infeasible } : {}), action: `ربط المركبة ${idle.vehicleNumber || idle.id} بالسائق ${blocked.p.fullName}`,
           cause: `${blocked.p.fullName} في المناوبة لكن ${blocked.st.codes.includes("NO_VEHICLE") ? "بلا مركبة" : "مركبته متعطلة"}`, confidence: out?.confidence || null, constraints: ["يتحقق من خلو المركبة من إسناد آخر"] });
       } else push(4, { feasible: false, afterMin: null, cause: blocked ? "لا مركبة متاحة غير مسندة" : "لا سائق مغطٍّ معطّل بسبب المركبة فقط", action: null, confidence: null, constraints: [] });
     }

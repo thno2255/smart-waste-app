@@ -139,6 +139,8 @@ import {
   adminUserAction,
   useScopedCollection,
   useDispatchDecisions,
+  useAdjustmentAnalyses,
+  adjustmentAction,
   useDispatchRuns,
   useDriverNotifications,
   markDriverNotificationRead,
@@ -195,7 +197,7 @@ import { INCIDENT_TYPES, canConfirmCollection, routeProgress, nextStopFor, reins
 import { createOfflineQueue } from "./offlineQueue";
 import { DEFAULT_SIM_CONFIG, SIM_EVENTS, generateScenario } from "./simulation/simulationEngine";
 import { buildCollectionPlan, explainRoute, suggestAdditions } from "./collectionPlanner";
-import { makeThermalAlertFor, makeBinContext } from "./binContext";
+import { makeThermalAlertFor, makeBinContext, thermalFeedFromBins, thermalRiskLevel } from "./binContext";
 import { DEFAULT_DISPATCH_SETTINGS, DISPATCH_MODES, DISPATCH_SCOPES, ACTION_LABELS, ESCALATION_LABELS, targetsOf, impactFactorsOf, TARGET_LABELS, DEFAULT_TARGETS } from "./autoDispatchEngine";
 import { EXPLANATION_VERSION, explanationSummary, minutesText, DECISION_TYPES, TRIGGER_TEXT, ALTERNATIVE_TEXT, CONSTRAINT_TEXT, reasonText, operationalImpact } from "./decisionExplain";
 import { DRIVER_STATE_LABELS, shiftWindow, driverOperationalState } from "./driverState";
@@ -206,6 +208,11 @@ import { DEMO_STEPS, DEFAULT_DEMO_MUNICIPALITY, evaluateDemo, nextStepIndex } fr
 import { can, validateDriverProfile, findVehicleAssignmentConflicts, findRouteAssignmentConflicts, activeAssignmentFor, vehicleHolderAt, coverageMatrix, driverCodeFor, locationFreshness, SHIFT_STATUS_LABELS, AVAILABILITY_LABELS } from "./fleetEngine";
 import { getBinMapState, computeNeighborhoodMapStats, binMatchesFilter, neighborhoodMatchesFilter, polygonStyle, markerStyle, MAP_STATE_COLORS, MAP_STATE_LABELS, binNeedsCollection } from "./mapVisual";
 import { computeFleetPerformance, IMPACT_FACTOR_SOURCES, DEFAULT_IMPACT_FACTORS } from "./impact";
+import { deltaText, DISTANCE_BASIS_TEXT, SAVING_KIND_TEXT } from "./savings";
+import { EXECUTION_STATE_TEXT } from "./executionOutcome";
+import { ROLE_RANK, AUTHORITY_TEXT, VERDICT_TEXT, COST_COMPONENT_TEXT, binsText } from "./minimumOperationalAdjustmentEngine";
+import { FEASIBILITY_STATUS_TEXT, PROOF_TEXT } from "./operationalFeasibilityEngine";
+import { ADJUSTMENT_STATUS_TEXT } from "./adjustmentOutcome";
 import { seedAllCollections, migrateStationsToBinsAndNeighborhoods, seedCityDemoData } from "./seedFirestore";
 import { exportAllDataToExcel } from "./exportAllDataToExcel";
 
@@ -933,60 +940,6 @@ const LoadingScreen = () => (
 // DASHBOARD + ALL PAGES (3000+ lines)
 // ============================================================
 const ARABIC_FONT = "'Noto Kufi Arabic', 'Segoe UI', Tahoma, sans-serif";
-
-// --- Simulated Data ---
-const generateStations = () => {
-  const districts = [
-    "حي الخليج", "حي الفايزية", "حي الإسكان", "حي الريان",
-    "حي السالمية", "حي الحمر", "حي المنتزه", "حي الأفق",
-    "حي النقع", "حي الضاحي", "حي الهلالية", "حي البصيرة"
-  ];
-  const types = ["عضوية", "بلاستيك", "ورق", "زجاج", "معادن", "مختلطة"];
-  return Array.from({ length: 12 }, (_, i) => {
-    const fillLevel = Math.random() * 100;
-    const pressure = 0.5 + Math.random() * 4.5;
-    const status = fillLevel > 85 ? "حرج" : fillLevel > 60 ? "تحذير" : "طبيعي";
-    return {
-      id: `ST-${String(i + 1).padStart(3, "0")}`,
-      name: `محطة ${districts[i]}`,
-      district: districts[i],
-      fillLevel: Math.round(fillLevel),
-      pressure: +pressure.toFixed(2),
-      wasteType: types[Math.floor(Math.random() * types.length)],
-      status,
-      lastCollection: new Date(Date.now() - Math.random() * 172800000).toLocaleString("ar-SA"),
-      temperature: Math.round(20 + Math.random() * 25),
-      dailyAvg: Math.round(50 + Math.random() * 200),
-      motorHealth: Math.round(70 + Math.random() * 30),
-      suctionRate: Math.round(60 + Math.random() * 40),
-      lat: 26.30 + Math.random() * 0.12,
-      lng: 43.93 + Math.random() * 0.12,
-    };
-  });
-};
-
-const generateWeeklyData = () => {
-  const days = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
-  return days.map((d) => ({
-    day: d,
-    عضوية: Math.round(100 + Math.random() * 300),
-    بلاستيك: Math.round(50 + Math.random() * 150),
-    ورق: Math.round(30 + Math.random() * 100),
-    زجاج: Math.round(20 + Math.random() * 80),
-    معادن: Math.round(10 + Math.random() * 60),
-  }));
-};
-
-const generateMonthlyTrend = () =>
-  Array.from({ length: 12 }, (_, i) => ({
-    month: ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"][i],
-    عمليات_الجمع: Math.round(200 + Math.random() * 300 + i * 10),
-    الكفاءة: Math.round(60 + Math.random() * 35),
-    التكلفة: Math.round(5000 + Math.random() * 10000),
-  }));
-
-// --- Colors ---
-const WASTE_COLORS = { عضوية: C.accent, بلاستيك: C.info, ورق: C.warning, زجاج: C.purple, معادن: C.danger };
 
 // --- Custom Tooltip ---
 const CustomTooltip = ({ active, payload, label }) => {
@@ -1946,6 +1899,8 @@ const MunicipalityDashboard = ({ mid, stats, neighborhoods = [], bins = [], fire
         </div>
       </div>
 
+      {can(loggedInUser?.role, "routes.assign") && <OperationalAdjustmentCard municipalityId={mid} loggedInUser={loggedInUser} bins={bins.filter((b) => b.municipalityId === mid)} />}
+
       {tab === "map" && <OperationalMap neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} recentReadings={recentReadings} routes={routes} citizenReports={citizenReports} profiles={profiles} municipalityFilter={mid} height={560} onViewBins={onViewBins} onAddToRoute={onAddToRoute} onOpenRoute={onOpenRoute} />}
 
       {tab === "neighborhoods" && (
@@ -2279,6 +2234,8 @@ const DashboardPage = ({ alerts = [], neighborhoods = [], bins = [], fireSensors
       <Section title="يحتاج انتباهك الآن" count={attention.length}>
         <AttentionList items={attention} max={6} />
       </Section>
+
+      <OperationalAdjustmentCard loggedInUser={loggedInUser} bins={bins} decisions={decisions} />
 
       <KpiRow>
         <KpiTile label="حاويات حرجة الآن" value={criticalBins.length} tone={criticalBins.length ? "danger" : "ok"} onClick={() => go("bins")} />
@@ -2731,48 +2688,40 @@ const PerfTable = ({ rows = [], firstCol }) => (
   </div>
 );
 
-const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborhoods = [], routes = [], collectionEvents = [], vehicles = [], auditLog = [] }) => {
+const ReportsPage = ({ bins = [], neighborhoods = [], routes = [], collectionEvents = [], vehicles = [], auditLog = [] }) => {
   const [tab, setTab] = useState("performance");
   const fleet = useMemo(() => computeFleetPerformance(routes, collectionEvents, auditLog, vehicles), [routes, collectionEvents, auditLog, vehicles]);
 
-  // ── Analytics من Firestore ────────────────────────────────────────
-  const { data: kpisDoc } = useAnalyticsDoc("kpis");
-  const { data: envDoc  } = useAnalyticsDoc("environment");
-
-  const kpiItems = kpisDoc?.data || [
-    { label: "متوسط وقت الاستجابة", value: "12 دقيقة", target: "15 دقيقة", ok: true },
-    { label: "نسبة التشغيل",         value: "94.2%",    target: "90%",       ok: true },
-    { label: "معدل الأعطال",         value: "2.1%",     target: "3%",        ok: true },
-    { label: "رضا المستخدمين",       value: "87%",      target: "85%",       ok: true },
-  ];
-
-  const envColors  = [C.accent, C.info, C.warning, C.purple];
-  const goalColors = [C.accent, C.info, C.purple, C.warning];
-
-  const envMetrics = (envDoc?.metrics || [
-    { label: "انبعاثات CO₂ الموفرة", value: "2.4 طن",   icon: <Globe size={36} />, desc: "مقارنة بالطرق التقليدية" },
-    { label: "نسبة إعادة التدوير",   value: "68%",       icon: <Recycle size={36} />, desc: "من إجمالي النفايات"      },
-    { label: "الطاقة الموفرة",       value: "1,200 kWh", icon: <Zap size={36} />, desc: "شهرياً"                  },
-    { label: "تقليل الرحلات",        value: "45%",       icon: <Truck size={36} />, desc: "انخفاض في رحلات النقل"   },
-  ]).map((m, i) => ({ ...m, color: envColors[i % envColors.length] }));
-
-  const sustainGoals = (envDoc?.goals || [
-    { goal: "تقليل النفايات المرسلة للمرادم 50%", progress: 72 },
-    { goal: "رفع نسبة إعادة التدوير إلى 80%",     progress: 68 },
-    { goal: "خفض انبعاثات الكربون 30%",            progress: 85 },
-    { goal: "تحقيق صفر نفايات بحلول 2030",         progress: 42 },
-  ]).map((g, i) => ({ ...g, color: goalColors[i % goalColors.length] }));
-
-  const totalWaste = weeklyData.reduce((acc, d) => acc + d.عضوية + d.بلاستيك + d.ورق + d.زجاج + d.معادن, 0);
-  const wasteByType = Object.entries(WASTE_COLORS).map(([type, color]) => ({
-    name: type, value: weeklyData.reduce((a, d) => a + (d[type] || 0), 0), color,
-  }));
-  const stationFillData = stations.map(s => ({ name: s.district.replace("حي ", ""), الامتلاء: s.fillLevel })).sort((a, b) => b.الامتلاء - a.الامتلاء);
+  // ── Live KPIs, computed from the bins themselves (no seeded/fallback figures) ──
+  const liveKpis = useMemo(() => {
+    const withSensor = bins.filter((b) => b.deviceId);
+    const online = withSensor.filter((b) => getSensorConnectivity(b) === "online");
+    const fills = online.map((b) => Number(b.lastFillLevelPercent)).filter((v) => !Number.isNaN(v));
+    const critical = fills.filter((v) => v >= THRESHOLDS.fillCriticalPct).length;
+    const done = routes.filter((r) => r.status === "completed").length;
+    return [
+      { label: "مستشعرات متصلة الآن", value: withSensor.length ? `${online.length} / ${withSensor.length}` : "—", note: `حاويات أرسلت قراءة خلال آخر ${THRESHOLDS.offlineTimeoutMin} دقيقة` },
+      { label: "متوسط الامتلاء الحي", value: fills.length ? `${Math.round(fills.reduce((a, v) => a + v, 0) / fills.length)}%` : "—", note: "من القراءات الحية فقط" },
+      { label: "حاويات حرجة الآن", value: fills.length ? String(critical) : "—", note: `امتلاء ${THRESHOLDS.fillCriticalPct}% فأكثر` },
+      { label: "جولات مكتملة", value: String(done), note: `من أصل ${routes.length} جولة مسجلة` },
+    ];
+  }, [bins, routes]);
+  const nameByNb = useMemo(() => Object.fromEntries(neighborhoods.map((n) => [n.id, n.name])), [neighborhoods]);
+  const stationFillData = useMemo(() => {
+    const acc = {};
+    for (const b of bins) {
+      const name = nameByNb[b.neighborhoodId];
+      const v = Number(b.lastFillLevelPercent);
+      if (!name || Number.isNaN(v) || getSensorConnectivity(b) !== "online") continue;
+      (acc[name] ||= []).push(v);
+    }
+    return Object.entries(acc).map(([name, v]) => ({ name: name.replace("حي ", ""), الامتلاء: Math.round(v.reduce((a, x) => a + x, 0) / v.length) })).sort((a, b) => b.الامتلاء - a.الامتلاء);
+  }, [bins, nameByNb]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {[{ key: "performance", label: "تقرير الأداء" }, { key: "operations", label: "الجولات والتشغيل" }, { key: "fleet", label: "السائقون والمركبات" }, { key: "impact", label: "الأثر والتوفير" }, { key: "waste", label: "تقرير النفايات · توضيحي" }, { key: "cost", label: "تقرير التكاليف · توضيحي" }, { key: "environment", label: "التأثير البيئي · توضيحي" }].map((t) => (
+        {[{ key: "performance", label: "تقرير الأداء" }, { key: "operations", label: "الجولات والتشغيل" }, { key: "fleet", label: "السائقون والمركبات" }, { key: "impact", label: "الأثر والتوفير" }].map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             padding: "10px 20px", borderRadius: 10, border: `1px solid ${tab === t.key ? C.accent : C.border}`,
             background: tab === t.key ? C.accent + "15" : "transparent", color: tab === t.key ? C.accent : C.muted,
@@ -2784,12 +2733,11 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
       {tab === "performance" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-            {kpiItems.map((kpi, i) => (
-              <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18 }}>
+            {liveKpis.map((kpi) => (
+              <div key={kpi.label} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18 }}>
                 <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>{kpi.label}</div>
                 <div style={{ fontSize: 24, fontWeight: 800, color: C.text, marginBottom: 4 }}>{kpi.value}</div>
-                <div style={{ fontSize: 11, color: C.dim }}>الهدف: {kpi.target}</div>
-                <div style={{ fontSize: 11, color: kpi.ok ? C.accent : C.danger, fontWeight: 600, marginTop: 4 }}>✓ أعلى من الهدف</div>
+                <div style={{ fontSize: 11, color: C.dim }}>{kpi.note}</div>
               </div>
             ))}
           </div>
@@ -2954,92 +2902,6 @@ const ReportsPage = ({ stations, monthlyTrend, weeklyData, bins = [], neighborho
             </>
           )}
           <div style={{ fontSize: 10.5, color: C.dim }}>المخطط = مسافة الجولة ÷ {ASSUMED_SPEED_LABEL} + 4 دقائق لكل حاوية · "في الوقت" = الفعلي ≤ 120% من المخطط.</div>
-        </div>
-      )}
-
-      {tab === "waste" && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-        <div role="note" style={{ fontSize: 12.5, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}50`, borderRadius: 10, padding: "8px 12px" }}><b>بيانات توضيحية:</b> أوزان النفايات والتكاليف هنا من بيانات التهيئة (أو مولّدة عند غيابها)، وليست قياسًا تشغيليًا. التقارير المحسوبة من التشغيل: الأداء، الجولات، السائقون، الأثر.</div>
-          <Card title="توزيع النفايات حسب النوع" icon={<Trash2 size={16} color={C.muted} />}>
-            <ChartBox height={280}><ResponsiveContainer>
-              <PieChart>
-                <Pie data={wasteByType} cx="50%" cy="50%" outerRadius={100} innerRadius={55} dataKey="value" paddingAngle={3}
-                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                  {wasteByType.map((e, i) => <Cell key={i} fill={e.color} />)}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-              </PieChart>
-            </ResponsiveContainer></ChartBox>
-            <div style={{ textAlign: "center", fontSize: 14, fontWeight: 700, color: C.text }}>الإجمالي: {totalWaste.toLocaleString()} كجم</div>
-          </Card>
-          <Card title="النفايات اليومية حسب النوع" icon={<TrendingUp size={16} color={C.muted} />}>
-            <ChartBox height={300}><ResponsiveContainer>
-              <AreaChart data={weeklyData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                {Object.entries(WASTE_COLORS).map(([key, color]) => (
-                  <Area key={key} type="monotone" dataKey={key} stackId="1" stroke={color} fill={color} fillOpacity={0.4} />
-                ))}
-              </AreaChart>
-            </ResponsiveContainer></ChartBox>
-          </Card>
-        </div>
-      )}
-
-      {tab === "cost" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <div role="note" style={{ fontSize: 12.5, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}50`, borderRadius: 10, padding: "8px 12px" }}><b>بيانات توضيحية:</b> أوزان النفايات والتكاليف هنا من بيانات التهيئة (أو مولّدة عند غيابها)، وليست قياسًا تشغيليًا. التقارير المحسوبة من التشغيل: الأداء، الجولات، السائقون، الأثر.</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
-            <StatCard title="إجمالي التكلفة السنوية" value={monthlyTrend.reduce((a, m) => a + m.التكلفة, 0).toLocaleString()} unit="ر.س" icon={<DollarSign size={22} color="#fff" />} gradient={C.g3} />
-            <StatCard title="متوسط التكلفة الشهرية" value={Math.round(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12).toLocaleString()} unit="ر.س" icon={<Calendar size={22} color="#fff" />} gradient={C.g2} trend={-8.5} />
-            <StatCard title="تكلفة الكيلوغرام" value={(monthlyTrend.reduce((a, m) => a + m.التكلفة, 0) / 12 / (totalWaste * 4.3)).toFixed(2)} unit="ر.س" icon={<Scale size={22} color="#fff" />} gradient={C.g1} />
-          </div>
-          <Card title="التكاليف الشهرية مقابل عمليات الجمع" icon={<Banknote size={16} color={C.muted} />}>
-            <ChartBox height={300}><ResponsiveContainer>
-              <ComposedChart data={monthlyTrend} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                <YAxis yAxisId="left" tick={{ fill: C.muted, fontSize: 10 }} />
-                <YAxis yAxisId="right" orientation="left" tick={{ fill: C.muted, fontSize: 10 }} />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                <Bar yAxisId="left" dataKey="التكلفة" fill={C.warning} radius={[4, 4, 0, 0]} opacity={0.8} name="التكلفة (ر.س)" />
-                <Line yAxisId="right" type="monotone" dataKey="عمليات_الجمع" stroke={C.accent} strokeWidth={3} dot={{ r: 3 }} name="عمليات الجمع" />
-              </ComposedChart>
-            </ResponsiveContainer></ChartBox>
-          </Card>
-        </div>
-      )}
-
-      {tab === "environment" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <div role="note" style={{ fontSize: 12.5, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}50`, borderRadius: 10, padding: "8px 12px" }}><b>بيانات توضيحية:</b> مؤشرات هذا التبويب من بيانات التهيئة وليست محسوبة من التشغيل. الأثر البيئي المحسوب فعليًا في تبويب «الأثر والتوفير».</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-            {envMetrics.map((item, i) => (
-              <div key={i} style={{ background: C.card, border: `1px solid ${item.color}30`, borderRadius: 16, padding: 20, textAlign: "center" }}>
-                <div style={{ marginBottom: 8, display: "flex", justifyContent: "center", color: item.color }}>{ico(item.icon)}</div>
-                <div style={{ fontSize: 26, fontWeight: 800, color: item.color }}>{item.value}</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginTop: 4 }}>{item.label}</div>
-                <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>{item.desc}</div>
-              </div>
-            ))}
-          </div>
-          <Card title="أهداف الاستدامة - بريدة" icon={<Leaf size={16} color={C.muted} />}>
-            {sustainGoals.map((item, i) => (
-              <div key={i} style={{ marginBottom: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                  <span style={{ fontSize: 13, color: C.text }}>{item.goal}</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: item.color }}>{item.progress}%</span>
-                </div>
-                <div style={{ width: "100%", height: 10, background: C.bg, borderRadius: 5, overflow: "hidden" }}>
-                  <div style={{ width: `${item.progress}%`, height: "100%", background: item.color, borderRadius: 5, transition: "width 1s ease" }} />
-                </div>
-              </div>
-            ))}
-          </Card>
         </div>
       )}
     </div>
@@ -3659,706 +3521,109 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
   );
 };
 
-// ======================== FIRE ALERT SYSTEM ========================
-const generateFireData = (stations) => {
-  return stations.map((s, i) => {
-    const internalTemp = Math.round(25 + Math.random() * 55);
-    const ambientTemp = Math.round(35 + Math.random() * 15);
-    const gasLevel = Math.round(Math.random() * 100);
-    const humidity = Math.round(20 + Math.random() * 50);
-    const hasFlammable = s.wasteType === "بلاستيك" || s.wasteType === "ورق" || s.wasteType === "مختلطة";
-    const isFull = s.fillLevel > 75;
-    const isHot = internalTemp > 55;
-    const isGassy = gasLevel > 60;
-    const isDry = humidity < 30;
+// ======================== THERMAL MONITORING ========================
+// Built only from the bins' own temperature probes (bins.lastTemperatureCelsius
+// + sensor_readings). The device has no gas/smoke sensor, so none is shown.
+const THERMAL_LEVEL_COLORS = { "خطر عالي": C.danger, "خطر متوسط": "#f97316", "تحذير": C.warning, "آمن": C.accent, "غير معروف": C.dim };
 
-    // Fire risk calculation
-    let riskScore = 0;
-    riskScore += Math.min(internalTemp / 80, 1) * 35;
-    riskScore += (gasLevel / 100) * 25;
-    riskScore += hasFlammable ? 15 : 0;
-    riskScore += isFull ? 10 : 0;
-    riskScore += isDry ? 10 : 0;
-    riskScore += (ambientTemp > 45) ? 5 : 0;
-    riskScore = Math.min(Math.round(riskScore), 100);
+const FireAlertPage = ({ bins = [], neighborhoods = [], recentReadings = [] }) => {
+  const nameById = useMemo(() => Object.fromEntries(neighborhoods.map((n) => [n.id, n.name])), [neighborhoods]);
+  const rows = useMemo(() => bins
+    .filter((b) => b.lastTemperatureCelsius != null && !Number.isNaN(Number(b.lastTemperatureCelsius)))
+    .map((b) => { const temp = Number(b.lastTemperatureCelsius); return { b, temp, conn: getSensorConnectivity(b), level: thermalRiskLevel(temp), nb: nameById[b.neighborhoodId] || "—" }; })
+    .sort((a, z) => z.temp - a.temp), [bins, nameById]);
+  const live = rows.filter((r) => r.conn === "online");
+  const feed = useMemo(() => thermalFeedFromBins(bins, neighborhoods).sort((a, z) => z.maxTemp - a.maxTemp), [bins, neighborhoods]);
+  const count = (lvl) => live.filter((r) => r.level === lvl).length;
+  const alarm = count("خطر عالي") + count("خطر متوسط");
 
-    const riskLevel = riskScore > 75 ? "خطر عالي" : riskScore > 50 ? "خطر متوسط" : riskScore > 30 ? "تحذير" : "آمن";
-
-    return {
-      ...s,
-      internalTemp,
-      ambientTemp,
-      gasLevel,
-      humidity,
-      hasFlammable,
-      riskScore,
-      riskLevel,
-      smokeDetected: riskScore > 70 && Math.random() > 0.5,
-      sparkDetected: riskScore > 80 && Math.random() > 0.6,
-      lastInspection: `${Math.floor(Math.random() * 30) + 1} يوم`,
-      fireExtinguisher: Math.random() > 0.2,
-      autoSuppression: Math.random() > 0.3,
-    };
-  });
-};
-
-const generateTempHistory = () =>
-  Array.from({ length: 24 }, (_, i) => {
-    const baseTemp = 30 + Math.sin((i - 6) * 0.3) * 15;
-    return {
-      hour: `${String(i).padStart(2, "0")}:00`,
-      الحرارة_الداخلية: Math.round(baseTemp + Math.random() * 15),
-      الحرارة_الخارجية: Math.round(35 + Math.sin((i - 14) * 0.4) * 8 + Math.random() * 3),
-      حد_الإنذار: 60,
-      حد_الخطر: 75,
-    };
-  });
-
-const generateWeeklyFireIncidents = () => {
-  const weeks = ["الأسبوع 1", "الأسبوع 2", "الأسبوع 3", "الأسبوع 4", "الأسبوع 5", "الأسبوع 6", "الأسبوع 7", "الأسبوع 8"];
-  return weeks.map(w => ({
-    week: w,
-    إنذارات: Math.floor(Math.random() * 8),
-    حوادث_فعلية: Math.floor(Math.random() * 2),
-    إنذارات_كاذبة: Math.floor(Math.random() * 3),
-  }));
-};
-
-const FireAlertPage = ({ stations, fireSensors = [], fireTempHistory, fireWeekly }) => {
-  const [view, setView] = useState("monitor");
-  const [selectedStation, setSelectedStation] = useState(null);
-  const [simRunning, setSimRunning] = useState(false);
-  const [simTemp, setSimTemp] = useState(25);
-
-  const fireData = useMemo(() => {
-    if (fireSensors.length > 0 && stations.length > 0) {
-      return stations.map(station => {
-        const sensor = fireSensors.find(s => s.district === station.district) || {};
-        const internalTemp = sensor.internalTemp ?? 35;
-        const gasLevel     = sensor.gasLevel     ?? 10;
-        const riskScore    = sensor.riskScore     ?? 15;
-        return {
-          id:               station.id,
-          stationId:        station.id,
-          district:         station.district,
-          wasteType:        station.wasteType,
-          fillLevel:        station.fillLevel,
-          internalTemp,
-          ambientTemp:      sensor.ambientTemp      ?? 42,
-          gasLevel,
-          humidity:         sensor.humidity         ?? 35,
-          smokeDetected:    sensor.smokeDetected     ?? false,
-          sparkDetected:    sensor.sparkDetected     ?? false,
-          riskScore:        Math.min(riskScore, 100),
-          riskLevel:        sensor.riskLevel         ?? "آمن",
-          fireExtinguisher: sensor.fireExtinguisher  ?? true,
-          autoSuppression:  sensor.autoSuppression   ?? true,
-          lastInspection:   sensor.lastInspection    ?? "10 أيام",
-        };
-      });
+  // probe temperatures over the last 24 h of data, hourly max and mean across all bins
+  const history = useMemo(() => {
+    // window = the 24 h before the newest reading (keeps render pure — no clock read)
+    const newest = recentReadings.reduce((m, r) => Math.max(m, new Date(r.timestamp).getTime() || 0), 0);
+    const since = newest - 24 * 3600000, byHour = new Map();
+    for (const r of recentReadings) {
+      const t = new Date(r.timestamp).getTime(), v = Number(r.temperature_celsius);
+      if (r.temperature_celsius == null || Number.isNaN(t) || Number.isNaN(v) || t < since) continue;
+      const k = Math.floor(t / 3600000) * 3600000, e = byHour.get(k) || { max: -Infinity, sum: 0, n: 0 };
+      e.max = Math.max(e.max, v); e.sum += v; e.n += 1; byHour.set(k, e);
     }
-    return generateFireData(stations);
-  }, [stations, fireSensors]);
-
-  const tempHistory     = fireTempHistory || generateTempHistory();
-  const weeklyIncidents = fireWeekly      || generateWeeklyFireIncidents();
-
-  const highRisk = fireData.filter(s => s.riskLevel === "خطر عالي");
-  const medRisk = fireData.filter(s => s.riskLevel === "خطر متوسط");
-  const warnings = fireData.filter(s => s.riskLevel === "تحذير");
-  const safe = fireData.filter(s => s.riskLevel === "آمن");
-
-  const avgTemp = fireData.length ? Math.round(fireData.reduce((a, s) => a + s.internalTemp, 0) / fireData.length) : 0;
-  const avgGas  = fireData.length ? Math.round(fireData.reduce((a, s) => a + s.gasLevel,     0) / fireData.length) : 0;
-  const smokeCount = fireData.filter(s => s.smokeDetected).length;
-
-  const riskDistribution = [
-    { name: "خطر عالي", value: highRisk.length, fill: C.danger },
-    { name: "خطر متوسط", value: medRisk.length, fill: "#f97316" },
-    { name: "تحذير", value: warnings.length, fill: C.warning },
-    { name: "آمن", value: safe.length, fill: C.accent },
-  ];
-
-  const stationRiskChart = fireData.map(s => ({
-    name: s.district.replace("حي ", ""),
-    الخطورة: s.riskScore,
-    الحرارة: s.internalTemp,
-    الغاز: s.gasLevel,
-  })).sort((a, b) => b.الخطورة - a.الخطورة);
-
-  const gasVsTempData = fireData.map(s => ({
-    name: s.district.replace("حي ", ""),
-    الحرارة: s.internalTemp,
-    الغاز: s.gasLevel,
-    الرطوبة: s.humidity,
-  }));
-
-  const getRiskColor = (level) => {
-    const map = { "خطر عالي": C.danger, "خطر متوسط": "#f97316", "تحذير": C.warning, "آمن": C.accent };
-    return map[level] || C.dim;
-  };
-
-  const getRiskBadge = (level) => {
-    const color = getRiskColor(level);
-    return <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: `${color}20`, color, border: `1px solid ${color}40` }}>{level}</span>;
-  };
-
-  // Simulation
-  const simRiskScore = useMemo(() => {
-    let score = 0;
-    score += Math.min(simTemp / 80, 1) * 40;
-    score += simTemp > 60 ? 20 : simTemp > 45 ? 10 : 0;
-    score += simTemp > 75 ? 25 : 0;
-    score += simTemp > 50 ? 15 : 0;
-    return Math.min(Math.round(score), 100);
-  }, [simTemp]);
-
-  const simLevel = simRiskScore > 75 ? "خطر عالي" : simRiskScore > 50 ? "خطر متوسط" : simRiskScore > 30 ? "تحذير" : "آمن";
-
-  if (stations.length === 0) {
-    return (
-      <div style={{ textAlign: "center", padding: "80px 0", color: C.dim }}>
-        <div style={{ fontSize: 48, marginBottom: 12 }}><UiIcon e="🔥" size={38} /></div>
-        <div style={{ fontSize: 16, fontWeight: 700, color: C.muted, marginBottom: 6 }}>جاري تحميل بيانات الأحياء...</div>
-        <div style={{ fontSize: 13 }}>سيظهر نظام التنبيهات الحرارية بعد تحميل بيانات الأحياء</div>
-      </div>
-    );
-  }
+    return [...byHour.entries()].sort((a, z) => a[0] - z[0]).map(([k, e]) => ({
+      hour: new Date(k).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }),
+      الأعلى: Math.round(e.max * 10) / 10, المتوسط: Math.round((e.sum / e.n) * 10) / 10,
+    }));
+  }, [recentReadings]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Tabs */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {[
-          { key: "monitor", label: "المراقبة الحية" },
-          { key: "analysis", label: "التحليل والإحصائيات" },
-          { key: "detail", label: "تفاصيل الأحياء" },
-          { key: "simulation", label: "محاكاة الحريق" },
-          { key: "protocols", label: "بروتوكولات الطوارئ" },
-        ].map(t => (
-          <button key={t.key} onClick={() => setView(t.key)} style={{
-            padding: "10px 20px", borderRadius: 10, border: `1px solid ${view === t.key ? C.danger : C.border}`,
-            background: view === t.key ? "#ef444415" : "transparent", color: view === t.key ? C.danger : C.muted,
-            cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ARABIC_FONT,
-          }}>{t.label}</button>
-        ))}
+      <div role="note" style={{ fontSize: 12.5, color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px", lineHeight: 1.8 }}>
+        المصدر: مسبار الحرارة في كل حاوية. تُحتسب الحاويات المتصلة فقط؛ القراءة المتقادمة لا ترفع إنذارًا ولا تلغيه.
+        حدود التصنيف: تحذير من {THRESHOLDS.tempHighC}°م، خطر متوسط من {THRESHOLDS.tempCriticalC}°م، خطر عالٍ من {THRESHOLDS.tempDangerC}°م.
+        الجهاز الحالي لا يحتوي مستشعر غاز أو دخان.
       </div>
-
-      {/* ===== LIVE MONITORING ===== */}
-      {view === "monitor" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {/* Alert Banner */}
-          {highRisk.length > 0 && (
-            <div style={{
-              background: "#7f1d1d", border: "1px solid #ef4444",
-              borderRadius: 14, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14,
-              animation: "pulse 2s infinite",
-            }}>
-              <style>{`@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.85 } } @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }`}</style>
-              <div style={{ width: 50, height: 50, borderRadius: 14, background: "#ef444440", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, animation: "blink 1s infinite" }}><UiIcon e="🔥" size={22} /></div>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: "#fca5a5" }}>تنبيه حراري - {highRisk.length} حي في خطر عالٍ!</div>
-                <div style={{ fontSize: 12, color: "#fecaca", marginTop: 4 }}>
-                  {highRisk.map(s => s.district).join(" • ")} — يرجى اتخاذ إجراء فوري
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* KPIs */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-            <StatCard title="متوسط الحرارة الداخلية" value={avgTemp} unit="°C" icon={<Thermometer size={22} color="#fff" />} gradient="#ef4444" trend={avgTemp > 45 ? 8.3 : -2.1} />
-            <StatCard title="أحياء عالية الخطورة" value={highRisk.length} icon={<Flame size={22} color="#fff" />} gradient="#f97316" />
-            <StatCard title="كشف دخان" value={smokeCount} unit="حي" icon={<Wind size={22} color="#fff" />} gradient="#64748b" />
-            <StatCard title="متوسط مستوى الغاز" value={avgGas} unit="%" icon={<Gauge size={22} color="#fff" />} gradient="#f59e0b" />
-          </div>
-
-          {/* Temperature Timeline + Risk Pie */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-            <Card title="منحنى الحرارة الداخلية (24 ساعة)" icon={<Thermometer size={16} color={C.muted} />}>
-              <ChartBox height={280}><ResponsiveContainer>
-                <AreaChart data={tempHistory} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
-                  <defs>
-                    <linearGradient id="gIntTemp" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={C.danger} stopOpacity={0.4} />
-                      <stop offset="95%" stopColor={C.danger} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="hour" tick={{ fill: C.muted, fontSize: 9 }} interval={2} />
-                  <YAxis tick={{ fill: C.muted, fontSize: 10 }} domain={[0, 90]} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                  <Area type="monotone" dataKey="الحرارة_الداخلية" stroke={C.danger} fill="url(#gIntTemp)" strokeWidth={2} name="الحرارة الداخلية °C" />
-                  <Line type="monotone" dataKey="الحرارة_الخارجية" stroke={C.warning} strokeWidth={2} strokeDasharray="4 4" dot={false} name="الحرارة الخارجية °C" />
-                  <Line type="monotone" dataKey="حد_الإنذار" stroke="#f97316" strokeWidth={1} strokeDasharray="8 4" dot={false} name="حد الإنذار (60°C)" />
-                  <Line type="monotone" dataKey="حد_الخطر" stroke={C.danger} strokeWidth={1} strokeDasharray="8 4" dot={false} name="حد الخطر (75°C)" />
-                </AreaChart>
-              </ResponsiveContainer></ChartBox>
-            </Card>
-
-            <Card title="توزيع مستويات الخطورة" icon={<Target size={16} color={C.muted} />}>
-              <ChartBox height={200}><ResponsiveContainer>
-                <PieChart>
-                  <Pie data={riskDistribution} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={4}
-                    label={({ name, value }) => value > 0 ? `${value}` : ""}>
-                    {riskDistribution.map((e, i) => <Cell key={i} fill={e.fill} />)}
-                  </Pie>
-                  <Tooltip content={<CustomTooltip />} />
-                </PieChart>
-              </ResponsiveContainer></ChartBox>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
-                {riskDistribution.map((d, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11, color: C.muted }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <div style={{ width: 10, height: 10, borderRadius: 3, background: d.fill }} />
-                      {d.name}
-                    </div>
-                    <span style={{ fontWeight: 700, color: d.fill }}>{d.value}</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </div>
-
-          {/* Station Risk Cards */}
-          <Card title="حالة الأحياء - المراقبة الحية" icon={<Radio size={16} color={C.muted} />}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 12 }}>
-              {fireData.sort((a, b) => b.riskScore - a.riskScore).map((s, i) => {
-                const rColor = getRiskColor(s.riskLevel);
-                return (
-                  <div key={i} style={{ background: C.bg, border: `1px solid ${rColor}30`, borderRadius: 12, padding: 14, position: "relative", overflow: "hidden" }}>
-                    <div style={{ position: "absolute", top: 0, left: 0, width: `${s.riskScore}%`, height: 3, background: rColor }} />
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{s.district}</span>
-                      {getRiskBadge(s.riskLevel)}
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 6, fontSize: 11 }}>
-                      <div style={{ color: C.dim }}>داخلي: <span style={{ color: s.internalTemp > 55 ? C.danger : s.internalTemp > 40 ? C.warning : C.text, fontWeight: 600 }}>{s.internalTemp}°C</span></div>
-                      <div style={{ color: C.dim }}>غاز: <span style={{ color: s.gasLevel > 60 ? C.danger : C.text, fontWeight: 600 }}>{s.gasLevel}%</span></div>
-                      <div style={{ color: C.dim }}>رطوبة: <span style={{ color: C.text, fontWeight: 600 }}>{s.humidity}%</span></div>
-                      <div style={{ color: C.dim }}>امتلاء: <span style={{ color: C.text, fontWeight: 600 }}>{s.fillLevel}%</span></div>
-                    </div>
-                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                      {s.smokeDetected && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#ef444420", color: C.danger, fontWeight: 600 }}>دخان</span>}
-                      {s.sparkDetected && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#f9731620", color: "#f97316", fontWeight: 600 }}>شرارة</span>}
-                      {s.hasFlammable && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#f59e0b20", color: C.warning, fontWeight: 600 }}>قابل للاشتعال</span>}
-                    </div>
-                    {/* Risk bar */}
-                    <div style={{ marginTop: 8 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.dim, marginBottom: 3 }}>
-                        <span>مؤشر الخطورة</span>
-                        <span style={{ color: rColor, fontWeight: 700 }}>{s.riskScore}%</span>
-                      </div>
-                      <div style={{ width: "100%", height: 6, background: C.border, borderRadius: 3, overflow: "hidden" }}>
-                        <div style={{ width: `${s.riskScore}%`, height: "100%", background: `linear-gradient(90deg, ${C.accent}, ${rColor})`, borderRadius: 3, transition: "width 1s" }} />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
+      {rows.length === 0 ? (
+        <EmptyState icon={<Thermometer size={28} />} title="لا توجد قراءات حرارة بعد" desc="تظهر هنا حرارة الحاويات فور وصول أول قراءة من مستشعراتها." />
+      ) : (<>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
+          <StatCard title="حاويات بقراءة حرارة حية" value={`${live.length} / ${rows.length}`} icon={<Thermometer size={22} color="#fff" />} />
+          <StatCard title="أعلى حرارة حية" value={live.length ? live[0].temp.toFixed(1) : "—"} unit={live.length ? "°م" : ""} icon={<Flame size={22} color="#fff" />} />
+          <StatCard title="في نطاق الخطر" value={alarm} unit="حاوية" icon={<AlertTriangle size={22} color="#fff" />} />
+          <StatCard title="في نطاق التحذير" value={count("تحذير")} unit="حاوية" icon={<Eye size={22} color="#fff" />} />
         </div>
-      )}
-
-      {/* ===== ANALYSIS ===== */}
-      {view === "analysis" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            <Card title="مؤشر الخطورة الحرارية لكل حي" icon={<BarChart2 size={16} color={C.muted} />}>
-              <ChartBox height={350}><ResponsiveContainer>
-                <BarChart data={stationRiskChart} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
-                  <YAxis dataKey="name" type="category" width={60} tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="الخطورة" radius={[0, 6, 6, 0]} name="مؤشر الخطورة %">
-                    {stationRiskChart.map((e, i) => <Cell key={i} fill={e.الخطورة > 75 ? C.danger : e.الخطورة > 50 ? "#f97316" : e.الخطورة > 30 ? C.warning : C.accent} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer></ChartBox>
-            </Card>
-
-            <Card title="علاقة الحرارة بالغاز والرطوبة" icon={<Microscope size={16} color={C.muted} />}>
-              <ChartBox height={350}><ResponsiveContainer>
-                <RadarChart cx="50%" cy="50%" outerRadius="70%" data={gasVsTempData}>
-                  <PolarGrid stroke={C.border} />
-                  <PolarAngleAxis dataKey="name" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
-                  <PolarRadiusAxis tick={{ fill: C.dim, fontSize: 8 }} />
-                  <Radar name="الحرارة °C" dataKey="الحرارة" stroke={C.danger} fill={C.danger} fillOpacity={0.15} />
-                  <Radar name="الغاز %" dataKey="الغاز" stroke={C.warning} fill={C.warning} fillOpacity={0.15} />
-                  <Radar name="الرطوبة %" dataKey="الرطوبة" stroke={C.info} fill={C.info} fillOpacity={0.15} />
-                  <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                  <Tooltip content={<CustomTooltip />} />
-                </RadarChart>
-              </ResponsiveContainer></ChartBox>
-            </Card>
-          </div>
-
-          <Card title="سجل الإنذارات والحوادث (8 أسابيع)" icon={<TrendingUp size={16} color={C.muted} />}>
-            <ChartBox height={280}><ResponsiveContainer>
-              <ComposedChart data={weeklyIncidents} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+        {feed.length > 0 && (
+          <Card title="أعلى حرارة في كل حي" icon={<BarChart2 size={16} color={C.muted} />}>
+            <ChartBox height={Math.max(160, feed.length * 34)}><ResponsiveContainer>
+              <BarChart data={feed.map((f) => ({ name: f.district.replace("حي ", ""), الحرارة: Math.round(f.maxTemp * 10) / 10, level: f.riskLevel }))} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                <XAxis dataKey="week" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
+                <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} unit="°" />
+                <YAxis dataKey="name" type="category" width={80} tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
                 <Tooltip content={<CustomTooltip />} />
-                <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                <Bar dataKey="إنذارات" fill={C.warning} radius={[4, 4, 0, 0]} opacity={0.8} name="إنذارات حرارية" />
-                <Bar dataKey="إنذارات_كاذبة" fill={C.dim} radius={[4, 4, 0, 0]} opacity={0.6} name="إنذارات كاذبة" />
-                <Line type="monotone" dataKey="حوادث_فعلية" stroke={C.danger} strokeWidth={3} dot={{ r: 5, fill: C.danger }} name="حوادث فعلية" />
-              </ComposedChart>
+                <Bar dataKey="الحرارة" radius={[0, 6, 6, 0]}>
+                  {feed.map((f, i) => <Cell key={i} fill={THERMAL_LEVEL_COLORS[f.riskLevel] || C.dim} />)}
+                </Bar>
+              </BarChart>
             </ResponsiveContainer></ChartBox>
           </Card>
-
-          {/* Fire risk factors */}
-          <Card title="عوامل خطر الحريق الرئيسية" icon={<Zap size={16} color={C.muted} />}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-              {[
-                { factor: "ارتفاع الحرارة الداخلية", weight: 35, desc: "تجاوز 55°C يزيد الخطر بشكل كبير", icon: <Thermometer size={22} color={C.danger} />, color: C.danger, affected: fireData.filter(s => s.internalTemp > 55).length },
-                { factor: "تسرب الغازات", weight: 25, desc: "غازات الميثان والهيدروجين القابلة للاشتعال", icon: <Gauge size={22} color="#f97316" />, color: "#f97316", affected: fireData.filter(s => s.gasLevel > 60).length },
-                { factor: "مواد قابلة للاشتعال", weight: 15, desc: "بلاستيك، ورق، ومواد مختلطة", icon: <Package size={22} color={C.warning} />, color: C.warning, affected: fireData.filter(s => s.hasFlammable).length },
-                { factor: "الامتلاء الزائد", weight: 10, desc: "الضغط والاحتكاك يولدان حرارة", icon: <BarChart2 size={22} color={C.purple} />, color: C.purple, affected: fireData.filter(s => s.fillLevel > 75).length },
-                { factor: "انخفاض الرطوبة", weight: 10, desc: "الجفاف يسهّل الاشتعال", icon: <Droplets size={22} color={C.info} />, color: C.info, affected: fireData.filter(s => s.humidity < 30).length },
-                { factor: "الحرارة الخارجية", weight: 5, desc: "درجات حرارة بريدة الصيفية العالية", icon: <Zap size={22} color="#06b6d4" />, color: "#06b6d4", affected: fireData.filter(s => s.ambientTemp > 45).length },
-              ].map((f, i) => (
-                <div key={i} style={{ background: C.bg, border: `1px solid ${f.color}25`, borderRadius: 12, padding: 16 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <span>{ico(f.icon)}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: f.color, background: `${f.color}15`, padding: "2px 8px", borderRadius: 6 }}>وزن {f.weight}%</span>
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>{f.factor}</div>
-                  <div style={{ fontSize: 11, color: C.dim, lineHeight: 1.5, marginBottom: 8 }}>{f.desc}</div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 11, color: C.muted }}>أحياء متأثرة</span>
-                    <span style={{ fontSize: 16, fontWeight: 800, color: f.affected > 3 ? C.danger : f.affected > 1 ? C.warning : C.accent }}>{f.affected}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* ===== STATION DETAIL ===== */}
-      {view === "detail" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {selectedStation ? (
-            <>
-              <button onClick={() => setSelectedStation(null)} style={{ alignSelf: "flex-start", padding: "6px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.danger, cursor: "pointer", fontSize: 13, fontFamily: ARABIC_FONT }}>
-                ← العودة
-              </button>
-              <div style={{ background: C.card, border: `1px solid ${getRiskColor(selectedStation.riskLevel)}40`, borderRadius: 16, padding: 24 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-                  <div>
-                    <h2 style={{ fontSize: 22, fontWeight: 800, color: C.text, margin: 0 }}>{selectedStation.name}</h2>
-                    <span style={{ fontSize: 13, color: C.muted }}>{selectedStation.id} | نظام إنذار الحريق</span>
-                  </div>
-                  {getRiskBadge(selectedStation.riskLevel)}
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14, marginBottom: 20 }}>
-                  {[
-                    { label: "الحرارة الداخلية", val: `${selectedStation.internalTemp}°C`, color: selectedStation.internalTemp > 55 ? C.danger : C.warning, icon: <Thermometer size={22} color={selectedStation.internalTemp > 55 ? C.danger : C.warning} /> },
-                    { label: "الحرارة الخارجية", val: `${selectedStation.ambientTemp}°C`, color: C.warning, icon: <Zap size={22} color={C.warning} /> },
-                    { label: "مستوى الغاز", val: `${selectedStation.gasLevel}%`, color: selectedStation.gasLevel > 60 ? C.danger : C.accent, icon: <Gauge size={22} color={selectedStation.gasLevel > 60 ? C.danger : C.accent} /> },
-                    { label: "الرطوبة", val: `${selectedStation.humidity}%`, color: selectedStation.humidity < 30 ? C.warning : C.info, icon: <Droplets size={22} color={selectedStation.humidity < 30 ? C.warning : C.info} /> },
-                    { label: "مؤشر الخطورة", val: `${selectedStation.riskScore}%`, color: getRiskColor(selectedStation.riskLevel), icon: <Flame size={22} color={getRiskColor(selectedStation.riskLevel)} /> },
-                    { label: "آخر فحص", val: selectedStation.lastInspection, color: C.muted, icon: <Clock size={22} color={C.muted} /> },
-                  ].map((item, i) => (
-                    <div key={i} style={{ background: C.bg, borderRadius: 12, padding: 14, textAlign: "center" }}>
-                      <div style={{ marginBottom: 4, display: "flex", justifyContent: "center" }}>{ico(item.icon)}</div>
-                      <div style={{ fontSize: 20, fontWeight: 800, color: item.color }}>{item.val}</div>
-                      <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>{item.label}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginBottom: 20 }}>
-                  {[
-                    { label: "كاشف الدخان", active: selectedStation.smokeDetected, activeText: "تم كشف دخان!", inactiveText: "لا يوجد دخان", icon: <Wind size={20} color={C.muted} /> },
-                    { label: "كاشف الشرارة", active: selectedStation.sparkDetected, activeText: "تم كشف شرارة!", inactiveText: "لا توجد شرارة", icon: <Zap size={20} color={C.muted} /> },
-                    { label: "طفاية حريق", active: selectedStation.fireExtinguisher, activeText: "متوفرة وصالحة", inactiveText: "غير متوفرة!", icon: <FireExtinguisher size={20} color={C.muted} /> },
-                    { label: "نظام إطفاء تلقائي", active: selectedStation.autoSuppression, activeText: "مُفعّل", inactiveText: "غير مُفعّل", icon: <Droplets size={20} color={C.muted} /> },
-                  ].map((item, i) => (
-                    <div key={i} style={{ background: C.bg, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, border: `1px solid ${item.active && (i < 2) ? "#ef444440" : C.border}` }}>
-                      <span>{ico(item.icon)}</span>
-                      <div>
-                        <div style={{ fontSize: 10, color: C.dim }}>{item.label}</div>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: item.active ? (i < 2 ? C.danger : C.accent) : (i < 2 ? C.accent : C.danger) }}>
-                          {item.active ? item.activeText : item.inactiveText}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <Card title="سجل الحرارة الداخلية - 24 ساعة" icon={<TrendingUp size={16} color={C.muted} />}>
-                  <ChartBox height={220}><ResponsiveContainer>
-                    <AreaChart data={tempHistory} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                      <defs>
-                        <linearGradient id="gFire" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={C.danger} stopOpacity={0.3} />
-                          <stop offset="95%" stopColor={C.danger} stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                      <XAxis dataKey="hour" tick={{ fill: C.muted, fontSize: 9 }} interval={2} />
-                      <YAxis tick={{ fill: C.muted, fontSize: 10 }} domain={[0, 90]} />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                      <Area type="monotone" dataKey="الحرارة_الداخلية" stroke={C.danger} fill="url(#gFire)" strokeWidth={2} name="الحرارة الداخلية" />
-                      <Line type="monotone" dataKey="حد_الإنذار" stroke="#f97316" strokeDasharray="6 3" dot={false} name="حد الإنذار 60°C" />
-                      <Line type="monotone" dataKey="حد_الخطر" stroke={C.danger} strokeDasharray="6 3" dot={false} name="حد الخطر 75°C" />
-                    </AreaChart>
-                  </ResponsiveContainer></ChartBox>
-                </Card>
-              </div>
-            </>
+        )}
+        <Card title="حرارة الحاويات خلال 24 ساعة" icon={<TrendingUp size={16} color={C.muted} />}>
+          {history.length < 2 ? (
+            <div style={{ fontSize: 13, color: C.muted, padding: 12 }}>لا توجد قراءات كافية خلال آخر 24 ساعة لرسم المنحنى.</div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
-              {fireData.sort((a, b) => b.riskScore - a.riskScore).map((s, i) => {
-                const rColor = getRiskColor(s.riskLevel);
-                return (
-                  <div key={i} onClick={() => setSelectedStation(s)} style={{
-                    background: C.card, border: `1px solid ${rColor}30`, borderRadius: 14, padding: 18, cursor: "pointer", transition: "all 0.2s",
-                  }}
-                    onMouseEnter={ev => { ev.currentTarget.style.borderColor = rColor + "80"; ev.currentTarget.style.transform = "translateY(-2px)"; }}
-                    onMouseLeave={ev => { ev.currentTarget.style.borderColor = rColor + "30"; ev.currentTarget.style.transform = "translateY(0)"; }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{s.district}</span>
-                      {getRiskBadge(s.riskLevel)}
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
-                      <CircularGauge value={s.riskScore} color={rColor} size={80} />
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 4, fontSize: 11 }}>
-                      <div style={{ color: C.dim }}>{s.internalTemp}°C</div>
-                      <div style={{ color: C.dim }}>{s.gasLevel}%</div>
-                      <div style={{ color: C.dim }}>{s.humidity}%</div>
-                      <div style={{ color: C.dim }}>{s.fillLevel}%</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ===== SIMULATION ===== */}
-      {view === "simulation" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title="محاكاة سيناريو الحريق" icon={<FlaskConical size={16} color={C.muted} />}>
-            <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.7, margin: "0 0 20px 0" }}>
-              حرّك شريط الحرارة لمحاكاة ارتفاع درجة حرارة الحاوية الداخلية ومشاهدة كيف يتغير مستوى الخطورة والإجراءات المطلوبة في الوقت الفعلي.
-            </p>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 20 }}>
-              {/* Control Panel */}
-              <div style={{ background: C.bg, borderRadius: 14, padding: 20 }}>
-                <div style={{ textAlign: "center", marginBottom: 20 }}>
-                  <div style={{ fontSize: 64, marginBottom: 8 }}>{simTemp > 75 ? <UiIcon e="🔥" size={44} /> : simTemp > 55 ? <UiIcon e="🟠" size={44} /> : simTemp > 40 ? <UiIcon e="🟡" size={44} /> : <UiIcon e="🟢" size={44} />}</div>
-                  <div style={{ fontSize: 48, fontWeight: 900, color: getRiskColor(simLevel) }}>{simTemp}°C</div>
-                  <div style={{ fontSize: 14, color: C.muted, marginTop: 4 }}>الحرارة الداخلية</div>
-                </div>
-
-                <div style={{ marginBottom: 20 }}>
-                  <input type="range" min={15} max={95} value={simTemp} onChange={(e) => setSimTemp(+e.target.value)}
-                    style={{ width: "100%", accentColor: getRiskColor(simLevel), height: 8 }} />
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.dim, marginTop: 6 }}>
-                    <span>15°C طبيعي</span>
-                    <span style={{ color: C.warning }}>45°C تحذير</span>
-                    <span style={{ color: "#f97316" }}>60°C إنذار</span>
-                    <span style={{ color: C.danger }}>75°C+ خطر</span>
-                  </div>
-                </div>
-
-                <div style={{ textAlign: "center" }}>
-                  {getRiskBadge(simLevel)}
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>مؤشر الخطورة: <span style={{ fontWeight: 800, color: getRiskColor(simLevel), fontSize: 18 }}>{simRiskScore}%</span></div>
-                </div>
-              </div>
-
-              {/* Response Actions */}
-              <div style={{ background: C.bg, borderRadius: 14, padding: 20 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>الإجراءات المُفعّلة</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {[
-                    { temp: 0, action: "المراقبة الروتينية", desc: "فحص دوري كل 6 ساعات", icon: "✅", color: C.accent },
-                    { temp: 40, action: "تنبيه مبكر", desc: "إرسال إشعار لفريق المراقبة", icon: "📱", color: "#06b6d4" },
-                    { temp: 50, action: "زيادة تردد القراءات", desc: "قراءة المستشعرات كل 5 دقائق", icon: "📡", color: C.info },
-                    { temp: 55, action: "تنبيه تحذيري", desc: "إخطار المشرف المسؤول فوراً", icon: "⚠️", color: C.warning },
-                    { temp: 60, action: "إنذار متوسط", desc: "تفعيل نظام التبريد التلقائي", icon: "❄️", color: "#f97316" },
-                    { temp: 65, action: "تأجيل الجولات القريبة", desc: "تأجيل أي جولة جمع مجدولة قرب الموقع المتأثر حتى انخفاض الحرارة", icon: "🛑", color: "#f97316" },
-                    { temp: 70, action: "استدعاء فريق الطوارئ", desc: "تجهيز فريق الإطفاء الداخلي", icon: "🚒", color: C.danger },
-                    { temp: 75, action: "إنذار حريق!", desc: "تفعيل نظام الإطفاء التلقائي وإخلاء المنطقة", icon: "🔥", color: C.danger },
-                    { temp: 80, action: "اتصال بالدفاع المدني", desc: "طلب دعم خارجي فوري - 998", icon: "📞", color: "#dc2626" },
-                    { temp: 85, action: "إخلاء كامل", desc: "إخلاء المنطقة المحيطة بنطاق 200 متر", icon: "🏃", color: "#991b1b" },
-                  ].map((step, i) => {
-                    const active = simTemp >= step.temp;
-                    return (
-                      <div key={i} style={{
-                        display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", borderRadius: 10,
-                        background: active ? `${step.color}10` : "transparent",
-                        border: `1px solid ${active ? step.color + "40" : C.border}`,
-                        opacity: active ? 1 : 0.4, transition: "all 0.3s",
-                      }}>
-                        <span style={{ fontSize: 18, filter: active ? "none" : "grayscale(1)" }}>{ico(step.icon)}</span>
-                        <div>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: active ? step.color : C.dim }}>{step.action}</div>
-                          <div style={{ fontSize: 10, color: active ? C.muted : C.dim }}>{step.desc}</div>
-                        </div>
-                        <span style={{ fontSize: 9, color: C.dim, marginRight: "auto" }}>{step.temp}°C</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Simulation Chart */}
-          <Card title="منحنى المحاكاة - تصاعد الحرارة" icon={<TrendingUp size={16} color={C.muted} />}>
-            <ChartBox height={240}><ResponsiveContainer>
-              <AreaChart data={Array.from({ length: 60 }, (_, i) => {
-                const t = 25 + (simTemp - 25) * (1 - Math.exp(-i / 20));
-                return { دقيقة: `${i}`, الحرارة: Math.round(t), حد_الإنذار: 60, حد_الخطر: 75 };
-              })} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                <defs>
-                  <linearGradient id="gSim" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={getRiskColor(simLevel)} stopOpacity={0.4} />
-                    <stop offset="95%" stopColor={getRiskColor(simLevel)} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
+            <ChartBox height={260}><ResponsiveContainer>
+              <LineChart data={history} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                <XAxis dataKey="دقيقة" tick={{ fill: C.muted, fontSize: 9 }} interval={9} label={{ value: "دقيقة", fill: C.dim, fontSize: 10, position: "insideBottom", offset: -2 }} />
-                <YAxis tick={{ fill: C.muted, fontSize: 10 }} domain={[0, 100]} />
+                <XAxis dataKey="hour" tick={{ fill: C.muted, fontSize: 10 }} />
+                <YAxis tick={{ fill: C.muted, fontSize: 10 }} unit="°" />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                <Area type="monotone" dataKey="الحرارة" stroke={getRiskColor(simLevel)} fill="url(#gSim)" strokeWidth={2} name="الحرارة °C" />
-                <Line type="monotone" dataKey="حد_الإنذار" stroke="#f97316" strokeDasharray="6 3" dot={false} name="حد الإنذار" />
-                <Line type="monotone" dataKey="حد_الخطر" stroke={C.danger} strokeDasharray="6 3" dot={false} name="حد الخطر" />
-              </AreaChart>
+                <Line type="monotone" dataKey="الأعلى" stroke={C.danger} dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="المتوسط" stroke={C.info} dot={false} strokeWidth={2} />
+              </LineChart>
             </ResponsiveContainer></ChartBox>
-          </Card>
-        </div>
-      )}
-
-      {/* ===== PROTOCOLS ===== */}
-      {view === "protocols" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card title="بروتوكولات الاستجابة لحرائق الحاويات" icon={<ClipboardList size={16} color={C.muted} />}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {[
-                {
-                  level: "المستوى 1 - مراقبة",
-                  range: "أقل من 45°C",
-                  color: C.accent,
-                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.accent,flexShrink:0}} />,
-                  steps: ["فحص دوري للمستشعرات كل 6 ساعات", "تسجيل القراءات في السجل اليومي", "التأكد من عمل كواشف الدخان"],
-                },
-                {
-                  level: "المستوى 2 - تحذير",
-                  range: "45°C - 60°C",
-                  color: C.warning,
-                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.warning,flexShrink:0}} />,
-                  steps: ["إخطار المشرف المسؤول عبر الرسائل", "زيادة تردد القراءات إلى كل 15 دقيقة", "فحص مصدر الحرارة والتحقق من وجود مواد خطرة", "تجهيز معدات الإطفاء الأولية"],
-                },
-                {
-                  level: "المستوى 3 - إنذار",
-                  range: "60°C - 75°C",
-                  color: "#f97316",
-                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:"#f97316",flexShrink:0}} />,
-                  steps: ["تفعيل نظام التبريد التلقائي", "تأجيل أي جولة جمع مجدولة قرب الحي المتأثر", "إرسال فريق الفحص الميداني", "إعداد فريق الإطفاء الداخلي", "إبلاغ إدارة المنشأة"],
-                },
-                {
-                  level: "المستوى 4 - خطر حريق",
-                  range: "أعلى من 75°C",
-                  color: C.danger,
-                  icon: <div style={{width:10,height:10,borderRadius:"50%",background:C.danger,flexShrink:0}} />,
-                  steps: ["تفعيل نظام الإطفاء التلقائي فوراً", "الاتصال بالدفاع المدني (998)", "إخلاء المنطقة المحيطة 200 متر", "قطع التيار الكهربائي عن الموقع المتأثر", "تفعيل خطة الطوارئ الشاملة", "توثيق الحادثة بالصور والفيديو"],
-                },
-              ].map((protocol, i) => (
-                <div key={i} style={{ background: C.bg, border: `1px solid ${protocol.color}30`, borderRadius: 14, padding: 18 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center" }}>{ico(protocol.icon)}</div>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: protocol.color }}>{protocol.level}</div>
-                        <div style={{ fontSize: 11, color: C.dim }}>النطاق: {protocol.range}</div>
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {protocol.steps.map((step, j) => (
-                      <div key={j} style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12, color: C.muted, lineHeight: 1.6 }}>
-                        <span style={{ color: protocol.color, fontWeight: 700, fontSize: 14, flexShrink: 0, marginTop: -1 }}>{j + 1}</span>
-                        {step}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* Emergency Contacts */}
-          <Card title="جهات الاتصال في حالات الطوارئ" icon={<Phone size={16} color={C.muted} />}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-              {[
-                { name: "الدفاع المدني", phone: "998", icon: "🚒", color: C.danger, desc: "الاستجابة الأولى للحرائق" },
-                { name: "الإسعاف", phone: "997", icon: "🚑", color: C.info, desc: "الطوارئ الطبية" },
-                { name: "الشرطة", phone: "999", icon: "🚔", color: C.purple, desc: "الأمن والسلامة" },
-                { name: "مشرف المنطقة", phone: "055-XXX-XXXX", icon: "👷", color: C.warning, desc: "المسؤول المباشر" },
-                { name: "فريق الصيانة", phone: "050-XXX-XXXX", icon: "🔧", color: C.accent, desc: "الدعم التقني" },
-                { name: "إدارة البلدية", phone: "940", icon: "🏛️", color: "#06b6d4", desc: "التنسيق الحكومي" },
-              ].map((contact, i) => (
-                <div key={i} style={{ background: C.bg, border: `1px solid ${contact.color}25`, borderRadius: 12, padding: 16, display: "flex", gap: 12, alignItems: "center" }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 12, background: `${contact.color}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>{ico(contact.icon)}</div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{contact.name}</div>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: contact.color, direction: "ltr", textAlign: "right" }}>{contact.phone}</div>
-                    <div style={{ fontSize: 10, color: C.dim }}>{contact.desc}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* Equipment Checklist */}
-          <Card title="قائمة فحص معدات السلامة" icon={<FireExtinguisher size={16} color={C.muted} />}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
-              {[
-                { item: "طفاية حريق بودرة ABC", stations: fireData.filter(s => s.fireExtinguisher).length, total: 12, icon: <FireExtinguisher size={22} color={C.muted} /> },
-                { item: "نظام إطفاء تلقائي", stations: fireData.filter(s => s.autoSuppression).length, total: 12, icon: <Droplets size={22} color={C.muted} /> },
-                { item: "كاشف دخان فعّال", stations: 11, total: 12, icon: <Wind size={22} color={C.muted} /> },
-                { item: "كاشف حرارة فعّال", stations: 12, total: 12, icon: <Thermometer size={22} color={C.muted} /> },
-                { item: "كاشف غاز فعّال", stations: 10, total: 12, icon: <Gauge size={22} color={C.muted} /> },
-                { item: "إضاءة طوارئ", stations: 9, total: 12, icon: <Zap size={22} color={C.muted} /> },
-              ].map((eq, i) => {
-                const pct = Math.round((eq.stations / eq.total) * 100);
-                const eqColor = pct === 100 ? C.accent : pct > 75 ? C.warning : C.danger;
-                return (
-                  <div key={i} style={{ background: C.bg, borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-                    <span>{ico(eq.icon)}</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
-                        <span style={{ color: C.text, fontWeight: 600 }}>{eq.item}</span>
-                        <span style={{ color: eqColor, fontWeight: 700 }}>{eq.stations}/{eq.total}</span>
-                      </div>
-                      <div style={{ width: "100%", height: 5, background: C.border, borderRadius: 3, overflow: "hidden" }}>
-                        <div style={{ width: `${pct}%`, height: "100%", background: eqColor, borderRadius: 3 }} />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-        </div>
-      )}
+          )}
+        </Card>
+        <Card title="الحاويات الأعلى حرارة" icon={<Flame size={16} color={C.muted} />}>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead><tr style={{ color: C.muted, textAlign: "right" }}>
+                {["الحاوية", "الحي", "الحرارة", "التصنيف", "الامتلاء", "آخر قراءة"].map((hd) => <th key={hd} style={{ padding: "8px 6px", borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{hd}</th>)}
+              </tr></thead>
+              <tbody>
+                {rows.slice(0, 15).map(({ b, temp, conn, level, nb }) => (
+                  <tr key={b.id} style={{ borderBottom: `1px solid ${C.border}`, opacity: conn === "online" ? 1 : 0.55 }}>
+                    <td style={{ padding: "8px 6px", color: C.text }}>{b.name || b.id}</td>
+                    <td style={{ padding: "8px 6px", color: C.muted }}>{nb}</td>
+                    <td style={{ padding: "8px 6px", fontWeight: 700, color: THERMAL_LEVEL_COLORS[level] }}>{temp.toFixed(1)}°م</td>
+                    <td style={{ padding: "8px 6px", color: C.muted }}>{conn === "online" ? level : "قراءة غير حية"}</td>
+                    <td style={{ padding: "8px 6px", color: C.muted }}>{b.lastFillLevelPercent != null ? `${Math.round(b.lastFillLevelPercent)}%` : "—"}</td>
+                    <td style={{ padding: "8px 6px", color: C.muted }}>{getReadingAgeLabel(b.lastReadingAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </>)}
     </div>
   );
 };
@@ -5802,7 +5067,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
   useEffect(() => onSnapshot(DEMO_SESSION_REF(), (snap) => setSession(snap.exists() ? snap.data() : null), () => setSession(null)), []);
   const { runs } = useOptimizationRuns(true, scopeFor(loggedInUser).all ? null : scopeFor(loggedInUser).municipalityId);
   const { scenarios } = useSimulationScenarios(true, scopeFor(loggedInUser).all ? null : scopeFor(loggedInUser).municipalityId || "__none__");
-  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings });
+  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings, transfers });
   const evaluation = useMemo(() => evaluateDemo(session, { bins, routes, profiles, readings: recentReadings, runs, scenarios, supportRequests, transfers, audit: auditLog }), [session, bins, routes, profiles, recentReadings, runs, scenarios, supportRequests, transfers, auditLog]);
   const { index, doneByKey, newlyPassed } = useMemo(() => nextStepIndex(session, evaluation), [session, evaluation]);
   // Persist newly passed observe-steps so completion survives later data changes and page refreshes.
@@ -5830,7 +5095,7 @@ const DemoScenarioPage = ({ neighborhoods = [], bins = [], routes = [], profiles
       const plan = buildCollectionPlan({ municipalityId: mid, neighborhoods: munNeighborhoods, bins: munBins, profiles: profiles.filter((p) => p.municipalityId === mid), vehicles: vehicles.filter((v) => v.municipalityId === mid), routes: routes.filter((r) => r.municipalityId === mid), readingsByBin, contextFor: ctx.forBin, depot });
       const id = await saveOptimizationRun({ municipalityId: mid, summary: plan.summary, routes: plan.routes.map((r) => ({ neighborhoodId: r.neighborhoodId, routeName: r.routeName, stops: r.stops.length, deferred: r.deferredStops.length, distanceKm: r.distanceKm, durationMin: r.durationMin, matrixSource: r.matrixSource, driver: r.driver ? { driverId: r.driver.driverId, driverName: r.driver.driverName } : null })), constraints: plan.constraints, assumptions: plan.assumptions, applied: false, demoScenario: true, demo: munBins.some((b) => b.demo) }, actor);
       await patch({ planRunId: id });
-      return `خُطّطت ${plan.summary.routes} جولة لـ ${plan.summary.needCollection} حاوية · ${plan.summary.unassignedRoutes} بلا سائق · ${plan.summary.reductionPct != null ? `خفض مسافة ${plan.summary.reductionPct}% مقابل خط الأساس` : "لا مقارنة بخط الأساس"} (مسافات جوية — للطرق الفعلية: صفحة خطة الجمع الذكية)`;
+      return `خُطّطت ${plan.summary.routes} جولة لـ ${plan.summary.needCollection} حاوية · ${plan.summary.unassignedRoutes} بلا سائق · ${plan.summary.reductionPct != null ? (plan.summary.kmSaved >= 0 ? `خفض مسافة ${plan.summary.reductionPct}% مقابل خط الأساس` : `زيادة مسافة ${Math.abs(plan.summary.reductionPct)}% عن خط الأساس`) : "لا مقارنة بخط الأساس"} (مسافات جوية — للطرق الفعلية: صفحة خطة الجمع الذكية)`;
     }),
     shortage: run("shortage", async () => {
       const munVehicles = vehicles.filter((v) => v.municipalityId === mid);
@@ -6063,7 +5328,7 @@ const SmartPlanPage = ({ neighborhoods = [], bins = [], profiles = [], vehicles 
             ))}
           </div>
           {plan.summary.reductionPct != null ? (
-            <div style={{ fontSize: 12, color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>مقارنة عادلة بخط الأساس (جولة لكل حي من نفس المستودع تزور كل حاوياته، مسافات جوية للطرفين): {plan.summary.baselineKm} كم ← {plan.summary.totalKm} كم (توفير {plan.summary.kmSaved} كم ≈ {plan.summary.reductionPct}% · وقود تقديري {plan.summary.fuelSavedL} لتر بافتراض {plan.assumptions.truckFuelLitersPerKm} لتر/كم).</div>
+            <div style={{ fontSize: 12, color: C.muted, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>مقارنة عادلة بخط الأساس (جولة لكل حي من نفس المستودع تزور كل حاوياته، مسافات جوية للطرفين): {plan.summary.baselineKm} كم ← {plan.summary.planComparableKm} كم ({deltaText(plan.summary.kmSaved, "كم")} ≈ {Math.abs(plan.summary.reductionPct)}% · فرق وقود تقديري: {deltaText(plan.summary.fuelSavedL, "لتر")} بافتراض {plan.assumptions.truckFuelLitersPerKm} لتر/كم).</div>
           ) : <div style={{ fontSize: 12, color: C.dim }}>لا تُعرض نسبة توفير: البيانات غير كافية للمقارنة.</div>}
           {plan.constraints.length > 0 && <ul style={{ margin: 0, paddingInlineStart: 18, fontSize: 12, color: C.warning, lineHeight: 1.9 }}>{plan.constraints.map((c, i) => <li key={i}>{c}</li>)}</ul>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -6376,7 +5641,7 @@ const SOURCE_TEXT = {
 };
 
 /** Detail drawer — opens from the left (RTL start of content stays visible). */
-const SidePanel = ({ open, onClose, title, subtitle, children }) => {
+const SidePanel = ({ open, onClose, title, subtitle, children, width = 540 }) => {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -6387,7 +5652,7 @@ const SidePanel = ({ open, onClose, title, subtitle, children }) => {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.28)", zIndex: 1300, display: "flex", justifyContent: "flex-end" }}>
       <aside role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()} dir="rtl"
-        style={{ width: "min(540px, 100vw)", height: "100%", background: C.bg, borderInlineStart: `1px solid ${C.border}`, overflowY: "auto", fontFamily: ARABIC_FONT, boxShadow: "0 0 28px rgba(15,23,42,0.12)" }}>
+        style={{ width: `min(${width}px, 100vw)`, height: "100%", background: C.bg, borderInlineStart: `1px solid ${C.border}`, overflowY: "auto", fontFamily: ARABIC_FONT, boxShadow: "0 0 28px rgba(15,23,42,0.12)" }}>
         <div style={{ position: "sticky", top: 0, zIndex: 1, background: C.card, borderBottom: `1px solid ${C.border}`, padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: SP.md }}>
           <div>
             <div style={{ fontSize: FS.section, fontWeight: 800, color: C.text }}>{title}</div>
@@ -6505,10 +5770,10 @@ const DecisionDetails = ({ decision }) => {
           {exp.impact ? <>
             <Fact label="مسافة الجولة المحسّنة" value={numText(exp.impact.routeKm, "كم")} />
             <Fact label="المسار المرجعي لنفس الحاويات" value={numText(exp.impact.referenceKm, "كم")} />
-            <Fact label="المسافة الموفرة" value={numText(exp.impact.kmSaved, "كم")} />
-            <Fact label="الوقود المقدّر توفيره" value={numText(exp.impact.fuelL, "لتر")} />
-            <Fact label="الانبعاثات المقدّر تجنبها" value={numText(exp.impact.co2Kg, "كجم CO₂")} />
-            <div style={{ color: C.dim, marginTop: 6 }}>المرجع: نفس الحاويات من نفس نقطة الانطلاق بترتيب الأكثر إلحاحًا أولًا، بقياس جوي موحد للطرفين.</div>
+            <Fact label="الفرق عن المسار المرجعي" value={deltaText(exp.impact.kmSaved, "كم")} />
+            <Fact label="فرق الوقود المقدّر" value={deltaText(exp.impact.fuelL, "لتر")} />
+            <Fact label="فرق الانبعاثات المقدّر" value={deltaText(exp.impact.co2Kg, "كجم CO₂")} />
+            <div style={{ color: C.dim, marginTop: 6 }}>{DISTANCE_BASIS_TEXT.expected_haversine}. المرجع: نفس الحاويات من نفس نقطة الانطلاق بترتيب الأكثر إلحاحًا أولًا، بقياس جوي موحد للطرفين. القيمة «زيادة» تعني أن المسار المختار أطول من المرجع.</div>
           </> : <div>{NA_TEXT} — لا إحداثيات كافية أو نقطة انطلاق للحساب.</div>}
         </PanelSection>
       )}
@@ -6729,16 +5994,16 @@ const PerformanceImpactPanel = ({ municipalityId = null, compact = false, onOpen
   const why = (v, reason) => (v == null ? reason : undefined);
   const noRoutes = "لا جولات مكتملة بإحداثيات في الفترة";
   const realisedTiles = [
-    { label: "المسافة الموفرة", value: r.kmSaved, unit: "كم", hint: why(r.kmSaved, noRoutes) ?? `${numText(r.distanceKm)} بدل ${numText(r.referenceKm)} كم` },
-    { label: "الوقود المقدّر توفيره", value: r.fuelL, unit: "لتر", hint: why(r.fuelL, F.fuelLitersPerKm == null ? "معامل الاستهلاك غير مضبوط" : noRoutes) },
-    { label: "الانبعاثات المقدّر تجنبها", value: r.co2Kg, unit: "كجم CO₂", hint: why(r.co2Kg, F.co2KgPerLiter == null || F.fuelLitersPerKm == null ? "معامل غير مضبوط" : noRoutes) },
-    { label: "زمن التشغيل الموفر", value: r.minutesSaved == null ? null : r.minutesSaved >= 60 ? r.hoursSaved : r.minutesSaved, unit: r.minutesSaved >= 60 ? "ساعة" : "د", hint: why(r.minutesSaved, noRoutes) ?? "المسافة الموفرة ÷ متوسط السرعة" },
+    { label: "فرق المسافة عن المرجع", value: r.kmSaved == null ? null : deltaText(r.kmSaved, "كم"), unit: "", tone: r.kmSaved != null && r.kmSaved < 0 ? "warning" : "neutral", hint: why(r.kmSaved, noRoutes) ?? `${numText(r.distanceKm)} بدل ${numText(r.referenceKm)} كم · ${SAVING_KIND_TEXT.realised_estimate}` },
+    { label: "فرق الوقود المقدّر", value: r.fuelL == null ? null : deltaText(r.fuelL, "لتر"), unit: "", hint: why(r.fuelL, F.fuelLitersPerKm == null ? "معامل الاستهلاك غير مضبوط" : noRoutes) },
+    { label: "فرق الانبعاثات المقدّر", value: r.co2Kg == null ? null : deltaText(r.co2Kg, "كجم CO₂"), unit: "", hint: why(r.co2Kg, F.co2KgPerLiter == null || F.fuelLitersPerKm == null ? "معامل غير مضبوط" : noRoutes) },
+    { label: "فرق زمن التشغيل المقدّر", value: r.minutesSaved == null ? null : deltaText(r.minutesSaved, "د", { tolerance: 1 }), unit: "", hint: why(r.minutesSaved, noRoutes) ?? "فرق المسافة ÷ متوسط السرعة" },
     { label: "الالتزام بزمن الجمع", value: r.onTimePct, unit: "%", hint: r.onTimePct == null ? "لا حاويات حرجة مجموعة في الفترة" : `الهدف ${T.onTimePct}% · متأخرة ${r.lateCritical}`, tone: r.onTimePct == null ? "neutral" : r.onTimePct >= T.onTimePct ? "ok" : "warning" },
     { label: "استغلال المركبات", value: r.utilizationPct, unit: "%", hint: r.utilizationPct == null ? "لا جولات مكتملة بسعة مسجلة" : `الهدف ${T.vehicleUtilizationPct}% · حمولة مقدّرة من الامتلاء`, tone: r.utilizationPct == null ? "neutral" : r.utilizationPct >= T.vehicleUtilizationPct ? "ok" : "warning" },
     { label: "متوسط زمن الاستجابة", value: r.avgResponseMin, unit: "د", hint: why(r.avgResponseMin, "لا عمليات جمع في الفترة") ?? "من القرار إلى تأكيد الجمع" },
     { label: "الحاويات التي جُمعت", value: r.binsCollected, unit: "" },
     { label: "الجولات المكتملة", value: r.routesCompleted, unit: "" },
-    { label: "القرارات الآلية الناجحة", value: r.autoDecisionsExecuted ? `${r.autoDecisionsSucceeded} من ${r.autoDecisionsExecuted}` : null, unit: "", hint: why(r.autoDecisionsExecuted || null, "لا قرارات آلية منفذة في الفترة") ?? "نُفذت وجُمعت حاوياتها" },
+    { label: "القرارات الآلية المكتملة", value: r.autoDecisionsExecuted ? `${r.autoDecisionsSucceeded} من ${r.autoDecisionsExecuted}` : null, unit: "", hint: why(r.autoDecisionsExecuted || null, "لا قرارات آلية منفذة في الفترة") ?? `اكتملت كل حاوياتها · ${EXECUTION_STATE_TEXT.COMPLETED_ON_TIME}: ${r.autoDecisionsOnTime} · ${EXECUTION_STATE_TEXT.PARTIAL}: ${r.autoDecisionsByState?.PARTIAL ?? 0} · ${EXECUTION_STATE_TEXT.DELAYED}: ${r.autoDecisionsByState?.DELAYED ?? 0} · ${EXECUTION_STATE_TEXT.FAILED}: ${r.autoDecisionsByState?.FAILED ?? 0}` },
   ];
   const tile = (t) => <KpiTile key={t.label} label={t.label} value={t.value ?? <span style={{ fontSize: 14, fontWeight: 600, color: C.dim }}>{NA_TEXT}</span>} unit={t.value == null ? "" : t.unit} tone={t.tone || "neutral"} hint={t.hint} />;
   const periodSel = (
@@ -6760,14 +6025,15 @@ const PerformanceImpactPanel = ({ municipalityId = null, compact = false, onOpen
       </Section>
       <Section title="المتوقع" hint="من الجولات المعتمدة والجارية — قبل التنفيذ">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: SP.sm }}>
-          {[{ label: "جولات قيد التنفيذ أو الانتظار", value: e.routesPlanned, unit: "" }, { label: "المسافة المتوقع توفيرها", value: e.kmSaved, unit: "كم", hint: why(e.kmSaved, "لا جولات مخططة بإحداثيات") },
-            { label: "الوقود المتوقع توفيره", value: e.fuelL, unit: "لتر" }, { label: "الانبعاثات المتوقع تجنبها", value: e.co2Kg, unit: "كجم CO₂" },
+          {[{ label: "جولات قيد التنفيذ أو الانتظار", value: e.routesPlanned, unit: "" }, { label: "فرق المسافة المتوقع", value: e.kmSaved == null ? null : deltaText(e.kmSaved, "كم"), unit: "", tone: e.kmSaved != null && e.kmSaved < 0 ? "warning" : "neutral", hint: why(e.kmSaved, "لا جولات مخططة بإحداثيات") ?? SAVING_KIND_TEXT.expected },
+            { label: "فرق الوقود المتوقع", value: e.fuelL == null ? null : deltaText(e.fuelL, "لتر"), unit: "" }, { label: "فرق الانبعاثات المتوقع", value: e.co2Kg == null ? null : deltaText(e.co2Kg, "كجم CO₂"), unit: "" },
             { label: "متوسط زمن الجمع المتوقع", value: e.avgExpectedCollectionMin, unit: "د", hint: why(e.avgExpectedCollectionMin, "لا جولات بزمن متوقع مسجل") ?? `الهدف للحرجة ${T.criticalCollectionMin} د` }].map(tile)}
         </div>
       </Section>
       <Disclosure summary="طريقة الحساب ومصادر المعاملات">
         <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
           <div>{imp.basis}.</div>
+          <div>المتحقق: {DISTANCE_BASIS_TEXT.realised_haversine}. المتوقع: {DISTANCE_BASIS_TEXT.expected_haversine}. {imp.realised.financial?.text}.</div>
           <div>الوقود = المسافة الموفرة × {F.fuelLitersPerKm ?? NA_TEXT} لتر/كم — {IMPACT_FACTOR_SOURCES.fuelLitersPerKm}.</div>
           <div>الانبعاثات = الوقود × {F.co2KgPerLiter ?? NA_TEXT} كجم CO₂/لتر — {IMPACT_FACTOR_SOURCES.co2KgPerLiter}.</div>
           <div>ساعات التشغيل = المسافة الموفرة ÷ {F.avgUrbanSpeedKmh ?? NA_TEXT} كم/س — {IMPACT_FACTOR_SOURCES.avgUrbanSpeedKmh}.</div>
@@ -7121,83 +6387,6 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
   );
 };
 
-// NOTE: the following generator functions are used by ExecDashboard below
-// (executive portal) — intentionally untouched/out of scope for this phase,
-// left exactly as before including their pre-existing "شفط"/station wording.
-const generateQuarterlyData = () => [
-  { quarter: "Q1", الإيرادات: 450000, التكاليف: 320000, الأرباح: 130000, الكفاءة: 78 },
-  { quarter: "Q2", الإيرادات: 520000, التكاليف: 295000, الأرباح: 225000, الكفاءة: 84 },
-  { quarter: "Q3", الإيرادات: 480000, التكاليف: 310000, الأرباح: 170000, الكفاءة: 81 },
-  { quarter: "Q4", الإيرادات: 610000, التكاليف: 280000, الأرباح: 330000, الكفاءة: 91 },
-];
-
-const generateDistrictPerformance = () => [
-  { district: "الخليج", الأداء: 92, التكلفة: 28000, الرضا: 88, الحوادث: 1 },
-  { district: "الفايزية", الأداء: 85, التكلفة: 32000, الرضا: 82, الحوادث: 3 },
-  { district: "الإسكان", الأداء: 78, التكلفة: 35000, الرضا: 75, الحوادث: 5 },
-  { district: "الريان", الأداء: 95, التكلفة: 25000, الرضا: 91, الحوادث: 0 },
-  { district: "السالمية", الأداء: 71, التكلفة: 38000, الرضا: 68, الحوادث: 7 },
-  { district: "الحمر", الأداء: 88, التكلفة: 29000, الرضا: 85, الحوادث: 2 },
-  { district: "المنتزه", الأداء: 82, التكلفة: 31000, الرضا: 79, الحوادث: 4 },
-  { district: "الأفق", الأداء: 90, التكلفة: 27000, الرضا: 87, الحوادث: 1 },
-  { district: "النقع", الأداء: 75, التكلفة: 36000, الرضا: 72, الحوادث: 6 },
-  { district: "الضاحي", الأداء: 68, التكلفة: 42000, الرضا: 65, الحوادث: 8 },
-  { district: "الهلالية", الأداء: 87, التكلفة: 30000, الرضا: 84, الحوادث: 2 },
-  { district: "البصيرة", الأداء: 93, التكلفة: 26000, الرضا: 90, الحوادث: 1 },
-];
-
-const generateROIData = () =>
-  Array.from({ length: 12 }, (_, i) => ({
-    month: ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"][i],
-    العائد: Math.round(80000 + Math.random() * 60000 + i * 5000),
-    الاستثمار: Math.round(50000 + Math.random() * 20000 - i * 1000),
-    التوفير: Math.round(20000 + Math.random() * 40000 + i * 3000),
-  }));
-
-const generateBenchmarkData = () => [
-  { metric: "كفاءة التشغيل", بريدة: 87, المعيار_الوطني: 72, أفضل_ممارسة: 95 },
-  { metric: "إعادة التدوير", بريدة: 68, المعيار_الوطني: 45, أفضل_ممارسة: 85 },
-  { metric: "رضا المستخدمين", بريدة: 82, المعيار_الوطني: 65, أفضل_ممارسة: 92 },
-  { metric: "تقليل الانبعاثات", بريدة: 75, المعيار_الوطني: 50, أفضل_ممارسة: 90 },
-  { metric: "التكلفة/الطن", بريدة: 80, المعيار_الوطني: 60, أفضل_ممارسة: 88 },
-  { metric: "زمن الاستجابة", بريدة: 91, المعيار_الوطني: 70, أفضل_ممارسة: 96 },
-];
-
-const generateScenarios = () => [
-  {
-    id: 1, name: "توسعة 5 نقاط جمع جديدة", type: "توسعة",
-    investment: 2500000, annualSaving: 850000, roi: 34, payback: "2.9 سنة",
-    risk: "متوسط", impact: "زيادة التغطية 40%", recommendation: "موصى به",
-    details: "إضافة 5 نقاط جمع ذكية في الأحياء الجديدة لتغطية النمو العمراني المتوقع",
-    pros: ["تغطية أحياء جديدة", "خفض تكاليف النقل", "رفع رضا المواطنين"],
-    cons: ["استثمار أولي عالي", "يحتاج 6 أشهر للتنفيذ"],
-  },
-  {
-    id: 2, name: "ترقية المستشعرات إلى IoT 5G", type: "تقنية",
-    investment: 800000, annualSaving: 320000, roi: 40, payback: "2.5 سنة",
-    risk: "منخفض", impact: "دقة بيانات 99.5%", recommendation: "موصى به بشدة",
-    details: "ترقية جميع المستشعرات إلى تقنية IoT على شبكة 5G لبيانات لحظية أدق",
-    pros: ["بيانات لحظية دقيقة", "صيانة تنبؤية", "تكامل مع الأنظمة الذكية"],
-    cons: ["يحتاج تدريب الفريق", "تبعية لتغطية 5G"],
-  },
-  {
-    id: 3, name: "نظام إعادة تدوير متكامل", type: "بيئية",
-    investment: 1800000, annualSaving: 600000, roi: 33, payback: "3 سنوات",
-    risk: "متوسط", impact: "رفع إعادة التدوير إلى 85%", recommendation: "موصى به",
-    details: "إنشاء مركز فرز وإعادة تدوير متكامل مرتبط بالحاويات الذكية",
-    pros: ["إيرادات من المواد المعاد تدويرها", "تقليل النفايات 60%", "دعم رؤية 2030"],
-    cons: ["يحتاج مساحة كبيرة", "تراخيص بيئية"],
-  },
-  {
-    id: 4, name: "الطاقة الشمسية لنقاط الجمع", type: "استدامة",
-    investment: 600000, annualSaving: 180000, roi: 30, payback: "3.3 سنة",
-    risk: "منخفض", impact: "تقليل استهلاك الكهرباء 70%", recommendation: "اختياري",
-    details: "تركيب ألواح شمسية على مواقع نقاط الجمع لتشغيلها بالطاقة المتجددة",
-    pros: ["خفض فاتورة الكهرباء", "استدامة بيئية", "صورة إيجابية"],
-    cons: ["تأثر بالغبار والرمال", "صيانة الألواح"],
-  },
-];
-
 // ── Isolated clock — لمنع re-render الكامل كل ثانية ──────────
 const ExecHeaderClock = () => {
   const [t, setT] = useState(new Date());
@@ -7270,12 +6459,248 @@ const SessionTimeout = ({ onLogout, timeoutMin = 30, countdownSec = 10 }) => {
   );
 };
 
+// ======================== MINIMUM OPERATIONAL ADJUSTMENT (command centre) ========================
+// The engine (src/minimumOperationalAdjustmentEngine.js) runs on the server; this UI only reads the stored analysis
+// and sends ids. Most important first; every detail is one click away.
+const ADJ_TONE = { PROPOSED: "warning", SIMULATED: "neutral", APPROVED: "info", EXECUTED: "ok", REJECTED: "neutral", FAILED: "danger", STALE: "neutral" };
+const ADJ_WHY_TEXT = {
+  LOWEST_COST_VALID_IN_SCOPE: "أقل تكلفة بين البدائل الصالحة التي جرى تقييمها",
+  NO_EXTRA_OR_BORROWED_RESOURCE: "لا تتطلب موارد إضافية أو إعارة من بلدية أخرى",
+  RESPECTS_HARD_CONSTRAINTS: "تحترم كل القيود الصارمة: السعة، المناوبة، الصلاحيات، التغطية",
+  MEETS_SERVICE_LEVEL: "تحقق مستوى الخدمة لكل الحاويات المستحقة",
+  DONOR_VERIFIED: "تحققنا من قدرة البلدية المعيرة على الوفاء بالتزاماتها طوال الإعارة",
+};
+const ADJ_OUTCOME_TEXT = { NOT_STARTED: "لم يبدأ التنفيذ", IN_PROGRESS: "قيد التنفيذ", PARTIAL_FINAL: "انتهى جزئيًا", EXECUTED: "نُفذ بالكامل", FAILED: "تعذر التنفيذ", AWAITING_EXTERNAL: "بانتظار إجراء خارجي (إعارة أو موارد)", NO_TRACKED_WORK: "لا عمل ميداني للمتابعة" };
+const OPTIMALITY_TEXT = { BEST_IN_SEARCH_SCOPE: "أفضل بديل صالح ضمن نطاق البحث (قُيّمت كل التركيبات المسموحة)", BEST_FOUND_BEFORE_TIME_LIMIT: "أفضل بديل صالح وُجد قبل انتهاء مهلة البحث — قد يوجد أفضل منه", NONE: "لا بديل صالح ضمن النطاق" };
+const CREW_COLORS = ["#1f5fbf", "#2f9e5f", "#6d4bd6", "#c77700", "#0f766e", "#9d174d"];
+const isFreshAnalysis = (a, now = currentTimeMs()) => !!a && ["PROPOSED", "SIMULATED"].includes(a.status) && new Date(a.expiresAt).getTime() > now;
+const moneyText = (m) => (m?.value != null ? `${Number(m.value).toLocaleString("ar-SA")} ${m.currency || ""}${m.kind === "simulation" ? " (معامل تجريبي)" : ""}` : (m?.text || "التكلفة المالية غير متاحة"));
+const altTitle = (alt) => (alt?.interventions || []).map((i) => i.title).join(" + ") || "—";
+
+/** Fit the map to the points once they are known. */
+function FitPoints({ points }) {
+  const map = useMap();
+  const key = points.map((p) => p.join(",")).join("|");
+  useEffect(() => { if (points.length) map.fitBounds(points, { padding: [24, 24], maxZoom: 15 }); }, [key, map]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
+/** Before / after on the map: committed + base plan (dashed grey), the adjusted plan (one colour per crew), the bins that change, the lent crew's approach. */
+const AdjustmentMap = ({ analysis, alt, bins = [] }) => {
+  const binById = useMemo(() => new Map(bins.map((b) => [b.id, b])), [bins]);
+  const pt = (id) => { const b = binById.get(id); return b?.lat != null ? [b.lat, b.lng] : null; };
+  const lines = (plan) => Object.entries(plan?.crews || {}).map(([cid, segs]) => ({ cid, pts: segs.flatMap((sg) => sg.binIds.map(pt)).filter(Boolean) })).filter((l) => l.pts.length > 1);
+  const before = lines(analysis.base?.plan);
+  const after = lines(alt?.plan);
+  const changed = new Set([...(alt?.diff?.routeChanges || []).flatMap((r) => [...r.added, ...r.removed]), ...(alt?.diff?.newRoutes || []).flatMap((r) => r.binIds)]);
+  const unservedBefore = new Set(analysis.base?.unservedBins || []);
+  const planned = new Set(Object.values(alt?.plan?.crews || {}).flatMap((segs) => segs.flatMap((sg) => sg.binIds)));
+  const loans = (alt?.interventions || []).filter((i) => i.code === "LOAN" && i.details?.origin).map((i) => {
+    const first = (alt.diff.newRoutes.find((r) => r.crewId === i.details.driverId)?.binIds || []).map(pt).find(Boolean);
+    return first ? { from: [i.details.origin.lat, i.details.origin.lng], to: first, label: i.details.fromName } : null;
+  }).filter(Boolean);
+  const all = [...before.flatMap((l) => l.pts), ...after.flatMap((l) => l.pts), ...[...unservedBefore].map(pt).filter(Boolean), ...loans.flatMap((l) => [l.from, l.to])];
+  const crewIdx = Object.keys(alt?.plan?.crews || {});
+  if (!all.length) return <div style={{ fontSize: FS.meta, color: C.dim }}>لا إحداثيات كافية لعرض الخطة على الخريطة.</div>;
+  return (
+    <div>
+      <div style={{ height: 300, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
+        <MapContainer center={all[0]} zoom={13} style={{ height: "100%", width: "100%" }} scrollWheelZoom={false}>
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
+          <FitPoints points={all} />
+          {before.map((l) => <Polyline key={"b" + l.cid} positions={l.pts} pathOptions={{ color: C.dim, weight: 3, opacity: 0.55, dashArray: "6 6" }} />)}
+          {after.map((l) => <Polyline key={"a" + l.cid} positions={l.pts} pathOptions={{ color: CREW_COLORS[crewIdx.indexOf(l.cid) % CREW_COLORS.length], weight: 4, opacity: 0.85 }} />)}
+          {loans.map((l, i) => <Polyline key={"l" + i} positions={[l.from, l.to]} pathOptions={{ color: C.purple, weight: 3, dashArray: "2 8" }} />)}
+          {[...new Set([...planned, ...unservedBefore])].map((id) => { const p = pt(id); if (!p) return null; const ch = changed.has(id), miss = unservedBefore.has(id) && !planned.has(id);
+            return <CircleMarker key={id} center={p} radius={ch ? 7 : 5} pathOptions={{ color: miss ? C.danger : ch ? C.warning : C.accent, weight: ch ? 3 : 2, fillColor: miss ? "#fff" : ch ? C.warning : C.accent, fillOpacity: miss ? 0.2 : 0.75 }} />; })}
+        </MapContainer>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: SP.md, fontSize: FS.meta, color: C.muted, marginTop: 6 }}>
+        <span><span style={{ display: "inline-block", width: 18, borderTop: `3px dashed ${C.dim}`, verticalAlign: "middle" }} /> الخطة قبل التعديل</span>
+        <span><span style={{ display: "inline-block", width: 18, borderTop: `4px solid ${CREW_COLORS[0]}`, verticalAlign: "middle" }} /> الخطة بعد التعديل (لون لكل طاقم)</span>
+        <span><Dot color={C.warning} /> حاوية تغيّر إسنادها</span>
+        <span><Dot color={C.danger} hollow /> حاوية بلا خدمة قبل التعديل</span>
+        {loans.length > 0 && <span><span style={{ display: "inline-block", width: 18, borderTop: `3px dotted ${C.purple}`, verticalAlign: "middle" }} /> اقتراب الطاقم المعار</span>}
+      </div>
+      <div style={{ fontSize: FS.meta, color: C.dim, marginTop: 4 }}>الخطوط مستقيمة بين التوقفات بترتيب الخطة — تمثيل للترتيب وليست مسار قيادة.</div>
+    </div>
+  );
+};
+
+/** The seven sections, progressive: summary open, the rest on demand. */
+const AdjustmentPanel = ({ analysis: a, onClose, loggedInUser, bins = [] }) => {
+  const [selId, setSelId] = useState(a.approvedAlternativeId || a.recommendedId || a.alternatives?.find((x) => x.success)?.id || a.alternatives?.[0]?.id || null);
+  const [busy, setBusy] = useState(""); const [msg, setMsg] = useState("");
+  const alts = a.alternatives || [];
+  const sel = alts.find((x) => x.id === selId) || null;
+  const rec = alts.find((x) => x.id === a.recommendedId) || null;
+  const role = loggedInUser?.role;
+  const canApprove = sel?.success && (ROLE_RANK[role] || 0) >= (ROLE_RANK[sel.authority] || 99) && isFreshAnalysis(a);
+  const act = (body, ok) => async () => { setBusy(body.action); setMsg(""); try { const r = await adjustmentAction(body); setMsg(ok(r)); } catch (e) { setMsg(`${e.code === "STALE" ? "تغيرت الظروف — " : ""}${e.message}`); } finally { setBusy(""); } };
+  const binName = (id) => bins.find((b) => b.id === id)?.name || id;
+  const d = a.deficit || {};
+  const comparable = [...alts].sort((x, y) => Number(y.success) - Number(x.success) || x.costUnits - y.costUnits).slice(0, 8);
+  return (
+    <SidePanel open onClose={onClose} width={760} title="تحليل البدائل التشغيلية" subtitle={`${municipalityById(a.municipalityId)?.shortAr || a.municipalityId} · ${clockText(a.createdAt)} · ${ADJUSTMENT_STATUS_TEXT[a.status] || a.status}`}>
+      {msg && <div role="status" style={{ fontSize: FS.body, color: C.text, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px" }}>{msg}</div>}
+      <PanelSection title="1. ملخص المشكلة" defaultOpen>
+        <div style={{ color: C.text, fontSize: FS.body, lineHeight: 1.9, marginBottom: 8 }}>{a.summary}</div>
+        <Fact label="حالة الخطة الحالية" value={FEASIBILITY_STATUS_TEXT[a.base?.feasibilityStatus] || a.base?.feasibilityStatus} />
+        <Fact label="حاويات بلا خدمة بالخطة الحالية" value={numText(d.unserved)} />
+        <Fact label="حاويات تتجاوز الزمن المستهدف" value={numText(d.late)} />
+        {a.ifNotAdopted && <Fact label="إن لم تُعتمد التوصية" value={`${binsText(a.ifNotAdopted.unservedBins)} بلا خدمة${a.ifNotAdopted.criticalUnserved ? `، منها ${a.ifNotAdopted.criticalUnserved} حرجة` : ""}${a.ifNotAdopted.overflowRiskText ? ` · ${a.ifNotAdopted.overflowRiskText}` : ""}`} />}
+        {a.simulatedEnvironment && <div style={{ color: C.dim, marginTop: 6 }}>بيانات محاكاة — لا تمثل نتائج ميدانية.</div>}
+      </PanelSection>
+      <PanelSection title="2. سبب العجز والقيود" hint={d.causeText}>
+        {(d.blockingConstraints || []).map((c) => <Check key={c.code} ok={false}>{c.text}{c.hard ? " — قيد صارم" : ""}</Check>)}
+        {(d.proofs || []).length > 0 && <div style={{ marginTop: 6 }}><div style={{ color: C.text, fontWeight: 600 }}>ما يثبت التعذر ضمن النموذج</div>{d.proofs.map((p, i) => <div key={i}>• {PROOF_TEXT[p.code] || p.code}{p.value != null ? ` (${numText(p.value)} من ${numText(p.limit)})` : p.earliestMin != null ? ` (أبكر وصول ${minText(p.earliestMin)} والهدف ${minText(p.deadlineMin)})` : ""}</div>)}</div>}
+        {(d.missing || []).length > 0 && <div style={{ marginTop: 6 }}><div style={{ color: C.text, fontWeight: 600 }}>بيانات ناقصة</div>{d.missing.map((m) => <div key={m.code}>• {m.text}</div>)}</div>}
+        {(a.dataQuality || []).length > 0 && <div style={{ marginTop: 6, color: C.dim }}>{a.dataQuality.map((q) => q.text).join(" · ")}</div>}
+      </PanelSection>
+      <PanelSection title="3. التعديلات الممكنة" hint={`${alts.filter((x) => x.success).length} صالحة من ${alts.length}`} defaultOpen>
+        <div role="radiogroup" aria-label="البدائل" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {alts.slice(0, 12).map((x) => (
+            <label key={x.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "8px 10px", borderRadius: 8, border: `1px solid ${x.id === selId ? C.brand : C.border}`, background: x.id === selId ? C.brand + "0d" : C.bg, cursor: "pointer" }}>
+              <input type="radio" name="adj-alt" checked={x.id === selId} onChange={() => setSelId(x.id)} style={{ marginTop: 3 }} />
+              <span style={{ flex: 1 }}>
+                <span style={{ color: C.text, fontWeight: 700 }}>{altTitle(x)}</span>{" "}
+                <Badge tone={x.verdict === "CHOSEN" ? "ok" : x.success ? "info" : "neutral"}>{VERDICT_TEXT[x.verdict] || x.verdict}</Badge>
+                <div style={{ fontSize: FS.meta, color: C.muted }}>الاعتماد: {AUTHORITY_TEXT[x.authority]}{x.rejectReason ? ` · ${x.rejectReason}` : ""}</div>
+              </span>
+            </label>
+          ))}
+        </div>
+        {(a.rejectedCandidates || []).length > 0 && <Disclosure summary={`تعديلات لم تُدرس (${a.rejectedCandidates.length})`}>{a.rejectedCandidates.map((r, i) => <div key={i} style={{ fontSize: FS.meta }}>• {r.subject !== "—" ? `${r.subject}: ` : ""}{r.reason}</div>)}</Disclosure>}
+      </PanelSection>
+      <PanelSection title="4. مقارنة التكلفة والزمن والخدمة" hint="التكلفة التشغيلية بالدقائق المكافئة">
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr style={{ color: C.muted, textAlign: "right" }}>{["البديل", "يحقق الخدمة", "بلا خدمة / متأخرة", "التكلفة التشغيلية", "التكلفة المالية", "الإنجاز المتوقع", "تغيير الخطة"].map((h) => <th key={h} style={{ padding: "6px 4px", borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{h}</th>)}</tr></thead>
+            <tbody>{comparable.map((x) => (
+              <tr key={x.id} style={{ color: C.text, background: x.id === selId ? C.brand + "0d" : "transparent" }}>
+                <td style={{ padding: "6px 4px" }}>{altTitle(x)}</td>
+                <td style={{ padding: "6px 4px", color: x.success ? C.accent : C.danger }}>{x.success ? "نعم" : "لا"}</td>
+                <td style={{ padding: "6px 4px" }}>{x.unserved.length} / {x.late.length}</td>
+                <td style={{ padding: "6px 4px" }}>{numText(x.costUnits)}</td>
+                <td style={{ padding: "6px 4px", color: x.money?.value == null ? C.dim : C.text }}>{moneyText(x.money)}</td>
+                <td style={{ padding: "6px 4px", whiteSpace: "nowrap" }}>{x.completionMin != null ? `${Number(x.completionMin).toLocaleString("ar-SA")} د` : NA_TEXT}</td>
+                <td style={{ padding: "6px 4px" }}>{numText(x.changeUnits)}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>
+        {sel && <Disclosure summary="تفاصيل تكلفة البديل المحدد">{sel.costBreakdown.map((c, i) => <Fact key={i} label={COST_COMPONENT_TEXT[c.code] || c.code} value={`${numText(Math.round(c.units))}${c.minutes != null ? ` (${minText(c.minutes)})` : c.count != null ? ` (${c.count})` : ""}`} />)}
+          <div style={{ color: C.dim, marginTop: 6 }}>الدقيقة المكافئة: أوزان تشغيلية معلنة وقابلة للضبط (القيادة 1، الإضافي {a.costModel?.weights?.overtimeMinute}، نقل حاوية {a.costModel?.weights?.movedBin}، الإعارة {a.costModel?.weights?.loanFixed}، الطاقم الإضافي {a.costModel?.weights?.extraCrew}) — ليست مبالغ مالية. المسافة {numText(sel.km, "كم")} تقدير هندسي متوقع.</div></Disclosure>}
+      </PanelSection>
+      <PanelSection title="5. أثر التعديل على بقية الجولات" hint={sel ? `${sel.diff.routeChanges.length} جولة قائمة · ${sel.diff.newRoutes.length} جولة جديدة` : ""}>
+        {sel && <AdjustmentMap analysis={a} alt={sel} bins={bins} />}
+        {sel?.diff.routeChanges.map((r) => <div key={r.routeId} style={{ marginTop: 6 }}>• <b style={{ color: C.text }}>{r.routeName}</b> ({r.driverName}): {[r.reordered && "إعادة ترتيب", r.added.length && `+${r.added.length} حاوية`, r.removed.length && `−${r.removed.length} حاوية تنتقل`, r.maxDelayMin > 0 && `تأخير حتى ${minText(r.maxDelayMin)} لتوقف قائم`].filter(Boolean).join(" · ") || "دون تغيير جوهري"}</div>)}
+        {sel?.diff.newRoutes.map((r, i) => <div key={i} style={{ marginTop: 4 }}>• جولة جديدة لـ<b style={{ color: C.text }}>{r.driverName}</b>{r.loan ? ` (معار من ${r.loan.from})` : ""}{r.virtual ? " (طاقم إضافي — محاكاة)" : ""}: {r.binIds.slice(0, 5).map(binName).join("، ")}{r.binIds.length > 5 ? "…" : ""}</div>)}
+        {sel?.donorChecks?.map((x) => <Check key={x.municipalityId} ok={x.ok}>البلدية المعيرة {x.name}: {x.ok ? `تبقى قادرة على التزاماتها (${x.after.unserved} بلا خدمة)` : x.reason}</Check>)}
+      </PanelSection>
+      <PanelSection title="6. سبب اختيار التوصية" hint={OPTIMALITY_TEXT[a.search?.optimality] ? "" : ""}>
+        {rec ? (a.explanation?.chosen?.why || []).map((w) => <Check key={w} ok>{ADJ_WHY_TEXT[w] || w}</Check>) : <div>لا توصية صالحة ضمن النطاق.</div>}
+        <div style={{ marginTop: 6 }}>{OPTIMALITY_TEXT[a.search?.optimality] || ""}</div>
+        <div style={{ color: C.dim, marginTop: 4 }}>نطاق البحث: {a.search?.setsEvaluated} من {a.search?.setsTotal} تركيبة (حتى {a.search?.maxCombination} تدخلات) · {numText(a.search?.elapsedMs, "مللي ثانية")} · إصدار المحرك {a.engineVersion} · سياسة {a.policyVersion}. الأسباب مستخرجة من أرقام المحرك نفسه، لا من نموذج لغوي.</div>
+      </PanelSection>
+      <PanelSection title="7. الاعتماد والتنفيذ" hint={ADJUSTMENT_STATUS_TEXT[a.status]} defaultOpen={["APPROVED", "EXECUTED", "FAILED"].includes(a.status)}>
+        {["PROPOSED", "SIMULATED"].includes(a.status) && sel && <>
+          <Fact label="البديل المحدد" value={altTitle(sel)} />
+          <Fact label="صلاحية الاعتماد المطلوبة" value={AUTHORITY_TEXT[sel.authority]} />
+          <Fact label="صالح حتى" value={clockText(a.expiresAt)} />
+          {sel.requiresExternalAction && <div style={{ color: C.warning, marginTop: 6 }}>يتضمن طاقمًا إضافيًا: يُسجَّل كطلب موارد ولا تُنشأ جولة لطاقم غير موجود.</div>}
+          {!isFreshAnalysis(a) && <div style={{ color: C.warning, marginTop: 6 }}>انتهت صلاحية التحليل — أعد التحليل قبل الاعتماد.</div>}
+          {sel.success && (ROLE_RANK[role] || 0) < (ROLE_RANK[sel.authority] || 99) && <div style={{ color: C.muted, marginTop: 6 }}>اعتماد هذا البديل من صلاحية {AUTHORITY_TEXT[sel.authority]}.</div>}
+          <div style={{ display: "flex", gap: SP.sm, marginTop: SP.md, flexWrap: "wrap" }}>
+            <Btn variant="primary" disabled={!canApprove || !!busy} onClick={() => { if (window.confirm(`اعتماد «${altTitle(sel)}»؟ يعيد الخادم التحقق من كل القيود قبل تحديث الخطة.`)) act({ action: "approve", analysisId: a.id, alternativeId: sel.id }, () => "اعتُمد التعديل وحُدّثت الخطة بعد إعادة التحقق — التنفيذ يُتابع من بيانات الجمع")(); }}>{busy === "approve" ? "جارٍ الاعتماد…" : "اعتماد البديل"}</Btn>
+            <Btn disabled={!!busy} onClick={() => { const note = window.prompt("سبب الرفض:", ""); if (note !== null) act({ action: "reject", analysisId: a.id, note }, () => "رُفضت التوصية")(); }}>رفض</Btn>
+          </div>
+        </>}
+        {a.status === "STALE" && <div>{a.staleReason || "تغيرت الظروف منذ التحليل"} — أعد التحليل.</div>}
+        {a.status === "REJECTED" && <div>رُفضت بواسطة {a.rejectedByName || "—"}: {a.rejectNote || "—"}</div>}
+        {["APPROVED", "EXECUTED", "FAILED"].includes(a.status) && <>
+          <Fact label="اعتمده" value={`${a.approvedByName || "—"} · ${clockText(a.approvedAt)}`} />
+          <Fact label="البديل المعتمد" value={altTitle(alts.find((x) => x.id === a.approvedAlternativeId))} />
+          <Fact label="جولات أُنشئت / عُدّلت" value={`${a.applied?.createdRoutes?.length || 0} / ${a.applied?.modifiedRoutes?.length || 0}`} />
+          <Fact label="حالة التنفيذ" value={ADJ_OUTCOME_TEXT[a.outcome?.state] || "لم يُقس بعد"} />
+          {a.outcome && <Fact label="الحاويات المجموعة" value={`${a.outcome.binsCollected} من ${a.outcome.binsPlanned}`} />}
+          <Fact label="الإنجاز المتوقع" value={a.expected?.completionAt ? clockText(a.expected.completionAt) : NA_TEXT} />
+          <Fact label="الوفر الفعلي" value={a.outcome?.realised?.savingText || "الوفر الفعلي غير متاح"} />
+          <div style={{ color: C.dim, marginTop: 6 }}>الاعتماد لا يعني التنفيذ: تُحسب الحالة من تأكيدات الجمع الخادمية فقط.</div>
+        </>}
+      </PanelSection>
+    </SidePanel>
+  );
+};
+
+/**
+ * Command-centre card. Shown when the latest analysis found a real deficit (or an approved adjustment is being
+ * followed); otherwise a quiet line with the action to check. `autoAnalyze`: run one analysis on arrival when the
+ * dispatch engine has open capacity escalations and there is no fresh analysis.
+ */
+const OperationalAdjustmentCard = ({ municipalityId: fixedMid = null, loggedInUser, bins = [], decisions = [] }) => {
+  const scope = scopeFor(loggedInUser);
+  const [pickMid, setPickMid] = useState(fixedMid || scope.municipalityId || null);
+  const mid = fixedMid || scope.municipalityId || pickMid;
+  const { analyses } = useAdjustmentAnalyses(!!mid, mid);
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(""); const [openId, setOpenId] = useState(null);
+  const now = currentTimeMs();
+  const latest = analyses[0] || null;
+  const followed = analyses.find((x) => x.status === "APPROVED") || null;
+  const gapEscalations = decisions.filter((d2) => d2.type === "escalate" && d2.status === "open" && ["capacity", "no_driver", "no_vehicle", "too_far", "out_of_scope", "target_gap"].includes(d2.kind) && (!mid || d2.municipalityId === mid));
+  const run = useCallback(async () => {
+    if (!mid) return;
+    setBusy(true); setMsg("");
+    try { const r = await adjustmentAction({ action: "analyze", municipalityId: mid }); if (r.analysisStatus === "NO_DEFICIT") setMsg("الخطة التشغيلية الحالية تحقق مستوى الخدمة — لا حاجة لتعديل."); }
+    catch (e) { setMsg(`تعذر التحليل: ${e.message}`); } finally { setBusy(false); }
+  }, [mid]);
+  const autoRan = useRef(false);
+  const needsAuto = gapEscalations.length > 0 && !(latest && (isFreshAnalysis(latest, now) || latest.status === "APPROVED"));
+  useEffect(() => { if (needsAuto && !autoRan.current && mid) { autoRan.current = true; run(); } }, [needsAuto, mid, run]);
+  const open = analyses.find((x) => x.id === openId) || null;
+  const deficit = latest && isFreshAnalysis(latest, now) && latest.analysisStatus !== "NO_DEFICIT" ? latest : null;
+  return (
+    <Section title="الجدوى التشغيلية" actions={<>
+      {!fixedMid && scope.all && <select aria-label="البلدية" value={pickMid || ""} onChange={(e) => setPickMid(e.target.value || null)} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 12, fontFamily: ARABIC_FONT }}>
+        <option value="">اختر البلدية</option>{MUNICIPALITIES.map((m) => <option key={m.id} value={m.id}>{m.shortAr}</option>)}</select>}
+      <Btn variant="ghost" disabled={!mid || busy} onClick={run}>{busy ? "جارٍ التحليل…" : "فحص الجدوى"}</Btn></>}>
+      {deficit ? (
+        <div style={{ borderInlineStart: `3px solid ${C.warning}`, background: C.warning + "0c", borderRadius: 8, padding: "12px 14px" }}>
+          <div style={{ fontSize: FS.section, fontWeight: 800, color: C.text }}>تعذر تحقيق مستوى الخدمة بالخطة التشغيلية الحالية</div>
+          <div style={{ fontSize: FS.body, color: C.muted, marginTop: 4 }}>سبب العجز: <b style={{ color: C.text }}>{deficit.deficit?.causeText || "—"}</b>{deficit.deficit ? ` · ${binsText(deficit.deficit.unserved)} بلا خدمة${deficit.deficit.late ? ` · ${binsText(deficit.deficit.late)} متأخرة` : ""}` : ""}</div>
+          <div style={{ display: "flex", gap: SP.sm, alignItems: "center", marginTop: SP.md, flexWrap: "wrap" }}>
+            <Btn variant="primary" onClick={() => setOpenId(deficit.id)}>تحليل البدائل التشغيلية</Btn>
+            <span style={{ fontSize: FS.meta, color: C.dim }}>{deficit.recommendedId ? "توجد توصية صالحة" : "لا بديل صالح ضمن النطاق المسموح"} · تحليل {clockText(deficit.createdAt)} · صالح حتى {clockText(deficit.expiresAt)}</span>
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: FS.body, color: C.muted }}>{!mid ? "اختر البلدية لفحص الجدوى التشغيلية." : msg || (latest?.analysisStatus === "NO_DEFICIT" && isFreshAnalysis(latest, now) ? `الخطة الحالية تحقق مستوى الخدمة (تحليل ${clockText(latest.createdAt)}).` : "لا تحليل حديث — افحص الجدوى عند الحاجة، ويُجرى تلقائيًا عند تعذر الإسناد.")}</div>
+      )}
+      {followed && (
+        <div style={{ marginTop: SP.md, display: "flex", justifyContent: "space-between", gap: SP.sm, alignItems: "center", flexWrap: "wrap", fontSize: FS.body }}>
+          <span><Badge tone={ADJ_TONE[followed.status]}>{ADJUSTMENT_STATUS_TEXT[followed.status]}</Badge> <span style={{ color: C.muted }}>تعديل تشغيلي: {altTitle((followed.alternatives || []).find((x) => x.id === followed.approvedAlternativeId))} · {ADJ_OUTCOME_TEXT[followed.outcome?.state] || "لم يُقس بعد"}{followed.outcome ? ` (${followed.outcome.binsCollected} من ${followed.outcome.binsPlanned})` : ""}</span></span>
+          <Btn variant="ghost" onClick={() => setOpenId(followed.id)}>المتابعة</Btn>
+        </div>
+      )}
+      {analyses.filter((x) => ["EXECUTED", "FAILED", "REJECTED"].includes(x.status)).length > 0 && (
+        <Disclosure summary="سجل التعديلات التشغيلية">
+          {analyses.filter((x) => ["EXECUTED", "FAILED", "REJECTED", "STALE"].includes(x.status)).slice(0, 8).map((x) => (
+            <div key={x.id} style={{ display: "flex", justifyContent: "space-between", gap: SP.sm, fontSize: FS.meta, padding: "4px 0", borderBottom: `1px solid ${C.border}` }}>
+              <span><Badge tone={ADJ_TONE[x.status]}>{ADJUSTMENT_STATUS_TEXT[x.status]}</Badge> {dayText(x.createdAt)} {clockText(x.createdAt)} · {x.deficit?.causeText || "—"}</span>
+              <Btn variant="ghost" onClick={() => setOpenId(x.id)}>عرض</Btn>
+            </div>))}
+        </Disclosure>
+      )}
+      {open && <AdjustmentPanel key={open.id} analysis={open} onClose={() => setOpenId(null)} loggedInUser={loggedInUser} bins={bins} />}
+    </Section>
+  );
+};
+
 // ======================== AMANAH STRATEGIC COMMAND (Phase 5 — Inter-Municipality Resource Optimization) ========================
 const PRESSURE_LABEL = { critical: ["حرج", C.danger], high: ["مرتفع", C.warning], moderate: ["متوسط", C.info], low: ["منخفض", C.accent] };
 const TRANSFER_STATUS = { proposed: ["مقترح", C.warning], approved: ["معتمد", C.info], executed: ["منفَّذ", C.accent], returned: ["أُعيد", C.dim], rejected: ["مرفوض", C.danger] };
 
 /** Pure-ish helper shared by the Amanah panel and the municipality dashboard: live subsets + pressure per municipality. */
-const useCityPressure = ({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings }) => useMemo(() => {
+const useCityPressure = ({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings, transfers = [] }) => useMemo(() => {
   const groups = groupNeighborhoodsByName(neighborhoods, bins);
   const zones = operationalZones(FEATURE_BY_KEY, groups, neighborhoods);
   const centroids = Object.fromEntries(Object.values(zones).map((z) => [z.municipalityId, { lat: z.hull.reduce((a, p) => a + p[0], 0) / z.hull.length, lng: z.hull.reduce((a, p) => a + p[1], 0) / z.hull.length }]));
@@ -7288,14 +6713,17 @@ const useCityPressure = ({ neighborhoods, bins, profiles, vehicles, routes, inci
     routes: routes.filter((r) => r.municipalityId === m.id), incidents: incidents.filter((i) => i.municipalityId === m.id), predictedSoonIds,
   }]));
   const pressures = MUNICIPALITIES.map((m) => municipalityPressure(m, live[m.id]));
-  const transfersRec = recommendTransfers(pressures, { centroids });
+  // Approved / executed loans hold their resources for their window — never offered again in an overlapping one.
+  const existingReservations = transfers.filter((t) => ["approved", "executed"].includes(t.status)).flatMap((t) => [...new Set([t.driverId, t.vehicleId, t.resourceId].filter(Boolean))]
+    .map((resourceId) => ({ resourceId, startAt: t.window?.startAt || t.decidedAt || t.createdAt, endAt: t.window?.endAt || t.until || null, status: "active", id: t.id })));
+  const transfersRec = recommendTransfers(pressures, { centroids, existingReservations });
   return { pressures, comparison: compareMunicipalities(pressures), transfersRec, centroids, live, predictedSoon: predictedSoonIds.size };
-}, [neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings]);
+}, [neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings, transfers]);
 
 /** Transfer record built from an interMunicipalEngine recommendation (used by the Amanah panel and the demo scenario). */
-const transferFromRecommendation = (rec) => ({ resourceType: rec.resourceType, resourceId: rec.resourceType === "driver" ? rec.driverId : rec.vehicleId, resourceLabel: rec.resourceLabel, driverId: rec.driverId, driverName: rec.driverName, vehicleId: rec.vehicleId, vehicleNumber: rec.vehicleNumber, fromMunicipalityId: rec.fromMunicipalityId, toMunicipalityId: rec.toMunicipalityId, impact: rec.impact, travelMin: rec.travelMin, travelKm: rec.travelKm, travelSource: rec.travelSource, benefit: rec.benefit, cost: rec.cost, net: rec.net, reason: rec.reason, until: new Date(Date.now() + 8 * 3600000).toISOString() });
+const transferFromRecommendation = (rec) => ({ resourceType: rec.resourceType, resourceId: rec.resourceType === "driver" ? rec.driverId : rec.vehicleId, resourceLabel: rec.resourceLabel, driverId: rec.driverId, driverName: rec.driverName, vehicleId: rec.vehicleId, vehicleNumber: rec.vehicleNumber, fromMunicipalityId: rec.fromMunicipalityId, toMunicipalityId: rec.toMunicipalityId, impact: rec.impact, travelMin: rec.travelMin, travelKm: rec.travelKm, travelSource: rec.travelSource, benefit: rec.benefit, cost: rec.cost, net: rec.net, reason: rec.reason, window: rec.window || null, resourceIds: rec.resourceIds || [], until: rec.window?.endAt || new Date(Date.now() + 8 * 3600000).toISOString() });
 const AmanahStrategicPanel = ({ neighborhoods = [], bins = [], profiles = [], vehicles = [], routes = [], incidents = [], recentReadings = [], fireSensors = [], citizenReports = [], supportRequests = [], transfers = [], auditLog = [], loggedInUser, onOpenMunicipality }) => {
-  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings });
+  const city = useCityPressure({ neighborhoods, bins, profiles, vehicles, routes, incidents, recentReadings, transfers });
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
   const actor = { uid: loggedInUser?.uid, name: loggedInUser?.name };
@@ -7559,8 +6987,7 @@ const IntelligencePage = ({ neighborhoods = [], bins = [], profiles = [], vehicl
 };
 
 /** Executive tabs whose figures are generated / seeded (illustrative), not derived from live operations. */
-const EXEC_ILLUSTRATIVE_TABS = [["overview", "نظرة تنفيذية"], ["financial", "التحليل المالي"], ["districts", "أداء الأحياء"], ["benchmark", "المقارنة المعيارية"], ["scenarios", "سيناريوهات القرار"], ["strategic", "الأهداف الاستراتيجية"]];
-const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, neighborhoods = [], bins = [], routes = [], fireSensors = [], citizenReports = [], collectionEvents = [], auditLog = [], vehicles = [], recentReadings = [], profiles = [], incidents = [], supportRequests = [], transfers = [], loggedInUser = null, onOpenMunicipality , embedded = false}) => {
+const ExecDashboard = ({ user, onLogout, stations, neighborhoods = [], bins = [], routes = [], fireSensors = [], citizenReports = [], collectionEvents = [], auditLog = [], vehicles = [], recentReadings = [], profiles = [], incidents = [], supportRequests = [], transfers = [], loggedInUser = null, onOpenMunicipality , embedded = false}) => {
   const [tab, setTab] = useState("amanah");
 
   // ── "ملخص اليوم" — the city on one page, from live smart-bin data ──
@@ -7590,7 +7017,6 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
       avgFill: (() => { const v = bins.map((b) => b.lastFillLevelPercent).filter((x) => x != null && x <= 100); return v.length ? Math.round(v.reduce((a, x) => a + x, 0) / v.length) : null; })(),
     };
   }, [neighborhoods, bins, routes, fireSensors, citizenReports, collectionEvents, auditLog, vehicles, recentReadings]);
-  const [selectedScenario, setSelectedScenario] = useState(null);
   const [showPassModal, setShowPassModal] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   useEffect(() => {
@@ -7598,51 +7024,6 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
     window.addEventListener("resize", fn);
     return () => window.removeEventListener("resize", fn);
   }, []);
-
-  // ── Analytics من Firestore (مع fallback للقيم الافتراضية) ────────
-  const { data: _qdoc  } = useAnalyticsDoc("quarterly");
-  const { data: _dpdoc } = useAnalyticsDoc("districts_perf");
-  const { data: _roidoc } = useAnalyticsDoc("roi");
-  const { data: _satdoc } = useAnalyticsDoc("satisfaction");
-
-  const quarterlyData = _qdoc?.data  || generateQuarterlyData();
-  const districtPerf  = _dpdoc?.data || generateDistrictPerformance();
-  const roiData       = _roidoc?.data || generateROIData();
-  const benchmarkData = useMemo(() => generateBenchmarkData(), []);
-  const scenarios     = useMemo(() => generateScenarios(), []);
-
-  const totalRevenue = quarterlyData.reduce((a, q) => a + q.الإيرادات, 0);
-  const totalCost = quarterlyData.reduce((a, q) => a + q.التكاليف, 0);
-  const totalProfit = quarterlyData.reduce((a, q) => a + q.الأرباح, 0);
-  const avgEfficiency = Math.round(quarterlyData.reduce((a, q) => a + q.الكفاءة, 0) / 4);
-  const bestDistrict = districtPerf.reduce((max, d) => d.الأداء > max.الأداء ? d : max, districtPerf[0]);
-  const worstDistrict = districtPerf.reduce((min, d) => d.الأداء < min.الأداء ? d : min, districtPerf[0]);
-
-  const costBreakdown = [
-    { name: "التشغيل", value: 40, color: C.info },
-    { name: "الصيانة", value: 20, color: C.warning },
-    { name: "الموظفون", value: 25, color: C.purple },
-    { name: "الوقود", value: 10, color: C.danger },
-    { name: "أخرى", value: 5, color: C.dim },
-  ];
-
-  const satisfactionTrend = _satdoc?.data || [
-    { month:"يناير",   الرضا:70, الشكاوى:28 }, { month:"فبراير",  الرضا:72, الشكاوى:26 },
-    { month:"مارس",    الرضا:73, الشكاوى:25 }, { month:"أبريل",   الرضا:75, الشكاوى:23 },
-    { month:"مايو",    الرضا:76, الشكاوى:21 }, { month:"يونيو",   الرضا:78, الشكاوى:20 },
-    { month:"يوليو",   الرضا:79, الشكاوى:18 }, { month:"أغسطس",  الرضا:80, الشكاوى:17 },
-    { month:"سبتمبر", الرضا:82, الشكاوى:15 }, { month:"أكتوبر", الرضا:83, الشكاوى:14 },
-    { month:"نوفمبر", الرضا:85, الشكاوى:12 }, { month:"ديسمبر", الرضا:87, الشكاوى:10 },
-  ];
-
-  const strategicGoals = [
-    { goal: "رفع كفاءة التشغيل إلى 95%", current: avgEfficiency, target: 95, color: C.accent },
-    { goal: "خفض التكاليف التشغيلية 25%", current: 72, target: 100, color: C.info },
-    { goal: "تغطية 100% من أحياء بريدة", current: 85, target: 100, color: C.warning },
-    { goal: "الوصول لصفر نفايات 2030", current: 42, target: 100, color: C.purple },
-    { goal: "رضا المواطنين 90%+", current: 82, target: 90, color: "#ec4899" },
-    { goal: "إعادة تدوير 80% من النفايات", current: 68, target: 80, color: "#06b6d4" },
-  ];
 
   return (
     <div dir="rtl" style={{ fontFamily: ARABIC_FONT, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -7678,14 +7059,8 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
           { key: "amanah", label: "القيادة الاستراتيجية" },
           { key: "today", label: "ملخص اليوم" },
           ...(embedded ? [] : [{ key: "brain", label: "محرك القرارات التشغيلية" }]),
-          ...EXEC_ILLUSTRATIVE_TABS.map(([key, label]) => ({ key, label: `${label} · توضيحي` })),
         ]} />
         {embedded && <div style={{ display: "flex", justifyContent: "flex-end" }}><Btn variant="ghost" onClick={() => window.__showAdminPanel && window.__showAdminPanel()}>إدارة المستخدمين</Btn></div>}
-        {EXEC_ILLUSTRATIVE_TABS.some(([k]) => k === tab) && (
-          <div role="note" style={{ fontSize: 12.5, color: C.warning, background: C.warning + "12", border: `1px solid ${C.warning}50`, borderRadius: 10, padding: "8px 12px" }}>
-            <b>بيانات توضيحية:</b> أرقام هذا التبويب مولّدة أو من بيانات التهيئة لعرض شكل التحليل، ولا تُشتق من التشغيل الفعلي. لا تُستخدم لاتخاذ قرار.
-          </div>
-        )}
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: embedded ? "14px 0 0" : "20px 28px" }}>
@@ -7754,378 +7129,6 @@ const ExecDashboard = ({ user, onLogout, stations, monthlyTrend, weeklyData, nei
                   </div>
                 ))}
               </div>
-            </Card>
-          </div>
-        )}
-
-        {/* ===== EXECUTIVE OVERVIEW ===== */}
-        {tab === "overview" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
-              <StatCard title="إجمالي الإيرادات" value={(totalRevenue / 1000000).toFixed(2)} unit="مليون ر.س" icon={<DollarSign size={22} color="#fff" />} gradient="#f59e0b" />
-              <StatCard title="إجمالي التكاليف" value={(totalCost / 1000000).toFixed(2)} unit="مليون ر.س" icon={<TrendingDown size={22} color="#fff" />} gradient="#ef4444" />
-              <StatCard title="صافي الأرباح" value={(totalProfit / 1000000).toFixed(2)} unit="مليون ر.س" icon={<TrendingUp size={22} color="#fff" />} gradient="#10b981" trend={18.5} />
-              <StatCard title="كفاءة التشغيل" value={avgEfficiency} unit="%" icon={<Zap size={22} color="#fff" />} gradient="#3b82f6" trend={5.2} />
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-              <Card title="الأداء الربعي (ر.س)" icon={<BarChart2 size={16} color={C.muted} />}>
-                <ChartBox height={280}><ResponsiveContainer>
-                  <ComposedChart data={quarterlyData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                    <XAxis dataKey="quarter" tick={{ fill: C.muted, fontSize: 12 }} />
-                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                    <Bar dataKey="الإيرادات" fill={C.warning} radius={[4, 4, 0, 0]} opacity={0.8} />
-                    <Bar dataKey="التكاليف" fill={C.danger} radius={[4, 4, 0, 0]} opacity={0.6} />
-                    <Line type="monotone" dataKey="الأرباح" stroke={C.accent} strokeWidth={3} dot={{ r: 5 }} />
-                  </ComposedChart>
-                </ResponsiveContainer></ChartBox>
-              </Card>
-
-              <Card title="رضا المواطنين والشكاوى" icon={<Smile size={16} color={C.muted} />}>
-                <ChartBox height={280}><ResponsiveContainer>
-                  <AreaChart data={satisfactionTrend} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
-                    <defs>
-                      <linearGradient id="gSat" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={C.accent} stopOpacity={0.3} />
-                        <stop offset="95%" stopColor={C.accent} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                    <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
-                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                    <Area type="monotone" dataKey="الرضا" stroke={C.accent} fill="url(#gSat)" strokeWidth={2} name="نسبة الرضا %" />
-                    <Line type="monotone" dataKey="الشكاوى" stroke={C.danger} strokeWidth={2} strokeDasharray="4 4" dot={{ r: 3 }} name="الشكاوى" />
-                  </AreaChart>
-                </ResponsiveContainer></ChartBox>
-              </Card>
-            </div>
-
-            {/* Quick Insights */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 14 }}>
-              {[
-                { title: "أفضل حي أداءً", value: bestDistrict.district, sub: `${bestDistrict.الأداء}% كفاءة`, icon: <Trophy size={26} color={C.accent} />, color: C.accent },
-                { title: "حي يحتاج تحسين", value: worstDistrict.district, sub: `${worstDistrict.الأداء}% كفاءة`, icon: <AlertTriangle size={26} color={C.danger} />, color: C.danger },
-                { title: "هامش الربح", value: `${Math.round((totalProfit / totalRevenue) * 100)}%`, sub: "نسبة مئوية سنوية", icon: <TrendingUp size={26} color={C.warning} />, color: C.warning },
-                { title: "العائد على الاستثمار", value: "340%", sub: "منذ بداية المشروع", icon: <Target size={26} color={C.purple} />, color: C.purple },
-              ].map((insight, i) => (
-                <div key={i} style={{ background: C.card, border: `1px solid ${insight.color}30`, borderRadius: 14, padding: 18, display: "flex", gap: 14, alignItems: "center" }}>
-                  <div style={{ width: 50, height: 50, borderRadius: 14, background: `${insight.color}15`, display: "flex", alignItems: "center", justifyContent: "center" }}>{ico(insight.icon)}</div>
-                  <div>
-                    <div style={{ fontSize: 11, color: C.dim }}>{insight.title}</div>
-                    <div style={{ fontSize: 20, fontWeight: 800, color: insight.color }}>{insight.value}</div>
-                    <div style={{ fontSize: 10, color: C.muted }}>{insight.sub}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ===== FINANCIAL ANALYSIS ===== */}
-        {tab === "financial" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-              <Card title="العائد على الاستثمار الشهري (ر.س)" icon={<TrendingUp size={16} color={C.muted} />}>
-                <ChartBox height={300}><ResponsiveContainer>
-                  <AreaChart data={roiData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
-                    <defs>
-                      <linearGradient id="gROI" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={C.warning} stopOpacity={0.3} />
-                        <stop offset="95%" stopColor={C.warning} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                    <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
-                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                    <Area type="monotone" dataKey="العائد" stroke={C.warning} fill="url(#gROI)" strokeWidth={2} />
-                    <Line type="monotone" dataKey="الاستثمار" stroke={C.danger} strokeWidth={2} strokeDasharray="4 4" dot={false} />
-                    <Line type="monotone" dataKey="التوفير" stroke={C.accent} strokeWidth={2} dot={{ r: 3 }} />
-                  </AreaChart>
-                </ResponsiveContainer></ChartBox>
-              </Card>
-
-              <Card title="توزيع التكاليف التشغيلية" icon={<LucidePieChart size={16} color={C.muted} />}>
-                <ChartBox height={240}><ResponsiveContainer>
-                  <PieChart>
-                    <Pie data={costBreakdown} cx="50%" cy="50%" outerRadius={90} innerRadius={50} dataKey="value" paddingAngle={3}
-                      label={({ name, value }) => `${name} ${value}%`}>
-                      {costBreakdown.map((e, i) => <Cell key={i} fill={e.color} />)}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer></ChartBox>
-              </Card>
-            </div>
-
-            <Card title="مقارنة التكلفة لكل حي (ر.س/شهر)" icon={<Banknote size={16} color={C.muted} />}>
-              <ChartBox height={300}><ResponsiveContainer>
-                <BarChart data={districtPerf} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="district" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                  <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="التكلفة" radius={[6, 6, 0, 0]} name="التكلفة الشهرية (ر.س)">
-                    {districtPerf.map((e, i) => <Cell key={i} fill={e.التكلفة > 35000 ? C.danger : e.التكلفة > 30000 ? C.warning : C.accent} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer></ChartBox>
-            </Card>
-          </div>
-        )}
-
-        {/* ===== DISTRICTS ===== */}
-        {tab === "districts" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Card title="أداء الأحياء الشامل" icon={<Building size={16} color={C.muted} />}>
-              <ChartBox height={350}><ResponsiveContainer>
-                <BarChart data={districtPerf} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis type="number" domain={[0, 100]} tick={{ fill: C.muted, fontSize: 10 }} />
-                  <YAxis dataKey="district" type="category" width={60} tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                  <Bar dataKey="الأداء" fill={C.info} radius={[0, 4, 4, 0]} opacity={0.8} name="الأداء %" />
-                  <Bar dataKey="الرضا" fill={C.accent} radius={[0, 4, 4, 0]} opacity={0.8} name="الرضا %" />
-                </BarChart>
-              </ResponsiveContainer></ChartBox>
-            </Card>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-              <Card title="الأداء مقابل الرضا" icon={<Target size={16} color={C.muted} />}>
-                <ChartBox height={280}><ResponsiveContainer>
-                  <RadarChart cx="50%" cy="50%" outerRadius="70%" data={districtPerf.slice(0, 8)}>
-                    <PolarGrid stroke={C.border} />
-                    <PolarAngleAxis dataKey="district" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
-                    <PolarRadiusAxis tick={{ fill: C.dim, fontSize: 8 }} />
-                    <Radar name="الأداء" dataKey="الأداء" stroke={C.info} fill={C.info} fillOpacity={0.2} />
-                    <Radar name="الرضا" dataKey="الرضا" stroke={C.accent} fill={C.accent} fillOpacity={0.2} />
-                    <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                    <Tooltip content={<CustomTooltip />} />
-                  </RadarChart>
-                </ResponsiveContainer></ChartBox>
-              </Card>
-
-              <Card title="عدد الحوادث لكل حي" icon={<AlertTriangle size={16} color={C.muted} />}>
-                <ChartBox height={280}><ResponsiveContainer>
-                  <BarChart data={[...districtPerf].sort((a, b) => b.الحوادث - a.الحوادث)} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                    <XAxis dataKey="district" tick={{ fill: C.muted, fontSize: 9, fontFamily: ARABIC_FONT }} />
-                    <YAxis tick={{ fill: C.muted, fontSize: 10 }} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Bar dataKey="الحوادث" radius={[6, 6, 0, 0]} name="عدد الحوادث">
-                      {districtPerf.map((e, i) => <Cell key={i} fill={e.الحوادث > 5 ? C.danger : e.الحوادث > 2 ? C.warning : C.accent} />)}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer></ChartBox>
-              </Card>
-            </div>
-          </div>
-        )}
-
-        {/* ===== BENCHMARK ===== */}
-        {tab === "benchmark" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Card title="المقارنة المعيارية - بريدة مقابل المعايير الوطنية" icon={<TrendingUp size={16} color={C.muted} />}>
-              <ChartBox height={350}><ResponsiveContainer>
-                <BarChart data={benchmarkData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                  <XAxis dataKey="metric" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                  <YAxis tick={{ fill: C.muted, fontSize: 10 }} domain={[0, 100]} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                  <Bar dataKey="بريدة" fill={C.warning} radius={[4, 4, 0, 0]} name="بريدة" />
-                  <Bar dataKey="المعيار_الوطني" fill={C.dim} radius={[4, 4, 0, 0]} opacity={0.6} name="المعيار الوطني" />
-                  <Bar dataKey="أفضل_ممارسة" fill={C.accent} radius={[4, 4, 0, 0]} opacity={0.5} name="أفضل ممارسة عالمية" />
-                </BarChart>
-              </ResponsiveContainer></ChartBox>
-            </Card>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
-              {benchmarkData.map((b, i) => {
-                const gap = b.أفضل_ممارسة - b.بريدة;
-                return (
-                  <div key={i} style={{ background: C.card, border: `1px solid #1e293b`, borderRadius: 14, padding: 18 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>{b.metric}</div>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-                      <span style={{ fontSize: 32, fontWeight: 900, color: C.warning }}>{b.بريدة}%</span>
-                      <span style={{ fontSize: 12, color: gap <= 5 ? C.accent : gap <= 15 ? C.warning : C.danger }}>
-                        {gap <= 5 ? "✓ ممتاز" : gap <= 15 ? "جيد" : "↑ يحتاج تحسين"} (فجوة {gap}%)
-                      </span>
-                    </div>
-                    <div style={{ display: "flex", gap: 10, fontSize: 11 }}>
-                      <span style={{ color: C.dim }}>الوطني: {b.المعيار_الوطني}%</span>
-                      <span style={{ color: C.accent }}>الأفضل: {b.أفضل_ممارسة}%</span>
-                    </div>
-                    <div style={{ width: "100%", height: 8, background: C.bg, borderRadius: 4, marginTop: 8, overflow: "hidden", position: "relative" }}>
-                      <div style={{ position: "absolute", width: `${b.المعيار_الوطني}%`, height: "100%", background: "#64748b40", borderRadius: 4 }} />
-                      <div style={{ position: "absolute", width: `${b.بريدة}%`, height: "100%", background: C.warning, borderRadius: 4 }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* ===== SCENARIOS ===== */}
-        {tab === "scenarios" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ background: C.card, border: "1px solid #f59e0b30", borderRadius: 14, padding: 18 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.warning, marginBottom: 6, display: "flex", alignItems: "center", gap: 7 }}><Target size={16} color={C.warning} /> أداة دعم القرار</div>
-              <p style={{ fontSize: 12, color: C.muted, margin: 0, lineHeight: 1.7 }}>
-                استعرض السيناريوهات المختلفة مع تحليل العائد والمخاطر لكل خيار. اضغط على أي سيناريو لعرض التفاصيل الكاملة والتوصيات.
-              </p>
-            </div>
-
-            {selectedScenario ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                <button onClick={() => setSelectedScenario(null)} style={{ alignSelf: "flex-start", padding: "6px 16px", borderRadius: 8, border: "1px solid #1e293b", background: "transparent", color: C.warning, cursor: "pointer", fontSize: 13, fontFamily: ARABIC_FONT }}>
-                  ← العودة
-                </button>
-                <div style={{ background: C.card, border: "1px solid #f59e0b30", borderRadius: 16, padding: 28 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-                    <div>
-                      <h2 style={{ fontSize: 22, fontWeight: 900, color: C.text, margin: "0 0 4px 0" }}>{selectedScenario.name}</h2>
-                      <span style={{ fontSize: 12, color: C.warning }}>{selectedScenario.type}</span>
-                    </div>
-                    <span style={{ padding: "6px 16px", borderRadius: 10, fontSize: 13, fontWeight: 700,
-                      background: selectedScenario.recommendation === "موصى به بشدة" ? "#10b98120" : selectedScenario.recommendation === "موصى به" ? "#f59e0b20" : "#64748b20",
-                      color: selectedScenario.recommendation === "موصى به بشدة" ? C.accent : selectedScenario.recommendation === "موصى به" ? C.warning : C.muted,
-                      border: `1px solid ${selectedScenario.recommendation === "موصى به بشدة" ? "#10b98140" : "#f59e0b40"}`
-                    }}>{selectedScenario.recommendation}</span>
-                  </div>
-
-                  <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.8, margin: "0 0 24px 0" }}>{selectedScenario.details}</p>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14, marginBottom: 24 }}>
-                    {[
-                      { label: "الاستثمار المطلوب", val: `${(selectedScenario.investment / 1000000).toFixed(1)}M ر.س`, color: C.danger, icon: <DollarSign size={22} color={C.danger} /> },
-                      { label: "التوفير السنوي", val: `${(selectedScenario.annualSaving / 1000).toFixed(0)}K ر.س`, color: C.accent, icon: <TrendingUp size={22} color={C.accent} /> },
-                      { label: "العائد ROI", val: `${selectedScenario.roi}%`, color: C.warning, icon: <TrendingUp size={22} color={C.warning} /> },
-                      { label: "فترة الاسترداد", val: selectedScenario.payback, color: C.info, icon: <Clock size={22} color={C.info} /> },
-                      { label: "مستوى المخاطرة", val: selectedScenario.risk, color: selectedScenario.risk === "منخفض" ? C.accent : C.warning, icon: <Zap size={22} color={selectedScenario.risk === "منخفض" ? C.accent : C.warning} /> },
-                      { label: "الأثر المتوقع", val: selectedScenario.impact, color: C.purple, icon: <Target size={22} color={C.purple} /> },
-                    ].map((item, i) => (
-                      <div key={i} style={{ background: "#070b14", borderRadius: 12, padding: 16, textAlign: "center" }}>
-                        <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>{ico(item.icon)}</div>
-                        <div style={{ fontSize: 16, fontWeight: 800, color: item.color }}>{item.val}</div>
-                        <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>{item.label}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-                    <div style={{ background: "#10b98110", border: "1px solid #10b98130", borderRadius: 12, padding: 16 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 10 }}>المميزات</div>
-                      {selectedScenario.pros.map((p, i) => (
-                        <div key={i} style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "flex", gap: 6 }}>
-                          <span style={{ color: C.accent }}>●</span> {p}
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ background: "#ef444410", border: "1px solid #ef444430", borderRadius: 12, padding: 16 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.danger, marginBottom: 10 }}>التحديات</div>
-                      {selectedScenario.cons.map((c, i) => (
-                        <div key={i} style={{ fontSize: 12, color: C.muted, marginBottom: 6, display: "flex", gap: 6 }}>
-                          <span style={{ color: C.danger }}>●</span> {c}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
-                {scenarios.map(s => (
-                  <div key={s.id} onClick={() => setSelectedScenario(s)} style={{
-                    background: C.card, border: "1px solid #1e293b", borderRadius: 14, padding: 20, cursor: "pointer", transition: "all 0.2s",
-                  }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = "#f59e0b60"; e.currentTarget.style.transform = "translateY(-3px)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.transform = "translateY(0)"; }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                      <span style={{ fontSize: 11, color: C.warning, background: "#f59e0b15", padding: "3px 10px", borderRadius: 6, fontWeight: 600 }}>{s.type}</span>
-                      <span style={{ fontSize: 11, color: s.recommendation.includes("بشدة") ? C.accent : C.warning, fontWeight: 600 }}>{s.recommendation}</span>
-                    </div>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: C.text, marginBottom: 8 }}>{s.name}</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 8, fontSize: 11 }}>
-                      <div style={{ color: C.dim, display: "flex", alignItems: "center", gap: 4 }}><DollarSign size={11} /> استثمار: <span style={{ color: C.text }}>{(s.investment / 1000000).toFixed(1)}M</span></div>
-                      <div style={{ color: C.dim, display: "flex", alignItems: "center", gap: 4 }}><TrendingUp size={11} /> ROI: <span style={{ color: C.warning, fontWeight: 700 }}>{s.roi}%</span></div>
-                      <div style={{ color: C.dim, display: "flex", alignItems: "center", gap: 4 }}><Clock size={11} /> استرداد: <span style={{ color: C.text }}>{s.payback}</span></div>
-                      <div style={{ color: C.dim, display: "flex", alignItems: "center", gap: 4 }}><Zap size={11} /> خطر: <span style={{ color: s.risk === "منخفض" ? C.accent : C.warning }}>{s.risk}</span></div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ===== STRATEGIC GOALS ===== */}
-        {tab === "strategic" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24 }}>
-              <div style={{ fontSize: 18, fontWeight: 900, color: C.warning, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}><MapIcon size={20} color={C.warning} /> الخطة الاستراتيجية - رؤية 2030</div>
-              <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.8 }}>
-                متابعة التقدم نحو الأهداف الاستراتيجية لنظام إدارة النفايات الذكي في مدينة بريدة، 
-                بما يتوافق مع أهداف رؤية المملكة 2030 في الاستدامة البيئية وجودة الحياة.
-              </p>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14 }}>
-              {strategicGoals.map((g, i) => {
-                const pct = Math.round((g.current / g.target) * 100);
-                const status = pct >= 90 ? "على المسار" : pct >= 70 ? "تقدم جيد" : "يحتاج تسريع";
-                const statusColor = pct >= 90 ? C.accent : pct >= 70 ? C.warning : C.danger;
-                return (
-                  <div key={i} style={{ background: C.card, border: `1px solid ${g.color}25`, borderRadius: 16, padding: 20 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{g.goal}</span>
-                      <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, background: `${statusColor}15`, color: statusColor, fontWeight: 600 }}>{status}</span>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 10 }}>
-                      <span style={{ fontSize: 36, fontWeight: 900, color: g.color }}>{g.current}</span>
-                      <span style={{ fontSize: 14, color: C.dim }}>/ {g.target}</span>
-                    </div>
-                    <div style={{ width: "100%", height: 12, background: "#070b14", borderRadius: 6, overflow: "hidden", marginBottom: 8 }}>
-                      <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg, ${g.color}80, ${g.color})`, borderRadius: 6, transition: "width 1.5s ease" }} />
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.dim }}>
-                      <span>التقدم: {pct}%</span>
-                      <span>المتبقي: {g.target - g.current}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Vision 2030 Alignment */}
-            <Card title="التوافق مع رؤية 2030" icon={<Flag size={16} color={C.muted} />}>
-              <ChartBox height={300}><ResponsiveContainer>
-                <RadarChart cx="50%" cy="50%" outerRadius="75%" data={[
-                  { axis: "الاستدامة البيئية", الحالي: 75, المستهدف: 95 },
-                  { axis: "جودة الحياة", الحالي: 82, المستهدف: 95 },
-                  { axis: "الاقتصاد الدائري", الحالي: 60, المستهدف: 90 },
-                  { axis: "التحول الرقمي", الحالي: 88, المستهدف: 95 },
-                  { axis: "كفاءة الإنفاق", الحالي: 80, المستهدف: 90 },
-                  { axis: "المشاركة المجتمعية", الحالي: 65, المستهدف: 85 },
-                ]}>
-                  <PolarGrid stroke={C.border} />
-                  <PolarAngleAxis dataKey="axis" tick={{ fill: C.muted, fontSize: 10, fontFamily: ARABIC_FONT }} />
-                  <PolarRadiusAxis tick={{ fill: C.dim, fontSize: 8 }} domain={[0, 100]} />
-                  <Radar name="الوضع الحالي" dataKey="الحالي" stroke={C.warning} fill={C.warning} fillOpacity={0.25} strokeWidth={2} />
-                  <Radar name="المستهدف 2030" dataKey="المستهدف" stroke={C.accent} fill={C.accent} fillOpacity={0.1} strokeWidth={2} strokeDasharray="6 3" />
-                  <Legend wrapperStyle={{ fontFamily: ARABIC_FONT, fontSize: 11 }} />
-                  <Tooltip content={<CustomTooltip />} />
-                </RadarChart>
-              </ResponsiveContainer></ChartBox>
             </Card>
           </div>
         )}
@@ -9615,17 +8618,10 @@ function SmartWasteManagement() {
   // ملاحظة: analytics/hourly (نشاط الشفط سابقًا) لم تعد تُقرأ هنا — الرسم الذي
   // كان يعرضها في الداشبورد استُبدل بـ Empty State بدل اختلاق بيانات جمع غير
   // حقيقية؛ المستند نفسه في Firestore لم يُحذف.
-  const { data: _wDoc  } = useAnalyticsDoc("weekly");
-  const { data: _mDoc  } = useAnalyticsDoc("monthly");
-  const { data: _ftDoc } = useAnalyticsDoc("fire_temp");
-  const { data: _fwDoc } = useAnalyticsDoc("fire_weekly");
-  const { data: _fsCol } = useCollection("fire_sensors", null);
-
-  const weeklyData               = _wDoc?.data   || generateWeeklyData();
-  const monthlyTrend             = _mDoc?.data   || generateMonthlyTrend();
-  const fireTempHistory          = _ftDoc?.data  || generateTempHistory();
-  const fireWeeklyData           = _fwDoc?.data  || generateWeeklyFireIncidents();
-  const fireSensors              = useMemo(() => _fsCol || [], [_fsCol]);
+  // Thermal alerts are derived from the bins' own temperature probes; the seeded
+  // fire_sensors collection is no longer read. Same shape, so every consumer
+  // (priority context, rankings, the thermal page) is unchanged.
+  const fireSensors = useMemo(() => thermalFeedFromBins(bins, neighborhoods), [bins, neighborhoods]);
   // analytics/station_history is still written (below, via recordDailyStationHistory)
   // but no longer read here — StationsPage (its only reader) was replaced by
   // NeighborhoodsPage/BinsPage in this phase. Tracked as part of the existing
@@ -10030,11 +9026,11 @@ function SmartWasteManagement() {
           {resolvedPage === "neighborhoods" && <NeighborhoodsPage neighborhoods={neighborhoods} bins={bins} fireSensors={fireSensors} routes={routes} citizenReports={citizenReports} loading={loadingNeighborhoods} onViewBins={goToBins} onOpenRoute={goToRoute} onShowOnMap={goToMapNeighborhood} />}
           {resolvedPage === "bins"        && <BinsPage neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} loading={loadingBins} initialNeighborhoodId={binsNeighborhoodFilter} onAddToRoute={goToRouteWithBin} onOpenRoute={goToRoute} />}
           {resolvedPage === "requests"   && <RequestsManagementPage loggedInUser={loggedInUser} />}
-          {resolvedPage === "fire"       && <FireAlertPage stations={stations} fireSensors={fireSensors} fireTempHistory={fireTempHistory} fireWeekly={fireWeeklyData} />}
-          {resolvedPage === "reports"    && <ReportsPage stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData} bins={bins} neighborhoods={neighborhoods} routes={routes} collectionEvents={collectionEvents} vehicles={vehicles} auditLog={auditLog} fireSensors={fireSensors} citizenReports={citizenReports} />}
+          {resolvedPage === "fire"       && <FireAlertPage bins={bins} neighborhoods={neighborhoods} recentReadings={recentReadings} />}
+          {resolvedPage === "reports"    && <ReportsPage bins={bins} neighborhoods={neighborhoods} routes={routes} collectionEvents={collectionEvents} vehicles={vehicles} auditLog={auditLog} fireSensors={fireSensors} citizenReports={citizenReports} />}
           {resolvedPage === "demo"       && <DemoScenarioPage neighborhoods={neighborhoods} bins={bins} routes={routes} profiles={driverProfiles} vehicles={vehicles} incidents={routeIncidents} supportRequests={supportRequests} transfers={resourceTransfers} auditLog={auditLog} recentReadings={recentReadings} fireSensors={fireSensors} citizenReports={citizenReports} loggedInUser={loggedInUser} onNavigate={(pg, extra) => { if (extra?.municipalityId) setMunicipalityInitialId(extra.municipalityId); setPage(pg); }} />}
           {resolvedPage === "simulation" && <SimulationPage neighborhoods={neighborhoods} bins={bins} vehicles={vehicles} loggedInUser={loggedInUser} />}
-          {resolvedPage === "exec"       && <ExecDashboard embedded user={loggedInUser} onLogout={handleLogout} stations={stations} monthlyTrend={monthlyTrend} weeklyData={weeklyData}
+          {resolvedPage === "exec"       && <ExecDashboard embedded user={loggedInUser} onLogout={handleLogout} stations={stations}
             neighborhoods={neighborhoods} bins={bins} routes={routes} fireSensors={fireSensors} citizenReports={citizenReports} collectionEvents={collectionEvents} auditLog={auditLog} vehicles={vehicles} recentReadings={recentReadings}
             profiles={driverProfiles} incidents={routeIncidents} supportRequests={supportRequests} transfers={resourceTransfers} loggedInUser={loggedInUser} onOpenMunicipality={(mid) => { setMunicipalityInitialId(mid); setPage("municipalities"); }} />}
           {resolvedPage === "settings"   && <SettingsPage bins={bins} loggedInUser={loggedInUser} autoSyncRoutes={autoSyncRoutes} onToggleAutoSync={toggleAutoSync} />}

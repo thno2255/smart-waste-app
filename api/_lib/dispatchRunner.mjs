@@ -17,7 +17,7 @@
  */
 import { FieldValue } from "firebase-admin/firestore";
 import { planDispatch, actionInScope, cheapestInsertion, driverBlocker, pendingStops, DEFAULT_DISPATCH_SETTINGS, ESCALATION_LABELS } from "../../src/autoDispatchEngine.js";
-import { makeBinContext } from "../../src/binContext.js";
+import { makeBinContext, thermalFeedFromBins } from "../../src/binContext.js";
 import { driverOrigin } from "../../src/assignmentEngine.js";
 import { routeRemaining } from "../../src/driverState.js";
 import { analyzeResourceGaps } from "../../src/resourceGapEngine.js";
@@ -66,11 +66,10 @@ export async function readDispatchSettings(db) {
 export async function loadMunicipalityState(db, mid, now = Date.now()) {
   const byMun = (col) => db.collection(col).where("municipalityId", "==", mid).get().then(docs);
   const since = iso(now - READINGS_WINDOW_MS);
-  const [bins, neighborhoods, profiles, vehicles, routesAll, incidents, fireSensors, reports, simReadings, devReadings] = await Promise.all([
+  const [bins, neighborhoods, profiles, vehicles, routesAll, incidents, reports, simReadings, devReadings] = await Promise.all([
     byMun("bins"), byMun("neighborhoods"), byMun("driver_profiles"), byMun("vehicles"),
     db.collection("collection_routes").where("municipalityId", "==", mid).where("status", "in", ["suggested", "approved", "in_progress"]).get().then(docs),
     db.collection("route_incidents").where("municipalityId", "==", mid).where("status", "==", "open").get().then(docs),
-    db.collection("fire_sensors").get().then(docs),
     db.collection("citizen_reports").get().then(docs).catch(() => []),
     db.collection("simulated_readings").where("timestamp", ">=", since).get().then(docs),
     db.collection("sensor_readings").where("timestamp", ">=", since).get().then(docs),
@@ -79,13 +78,14 @@ export async function loadMunicipalityState(db, mid, now = Date.now()) {
   const readingsByBin = {};
   for (const r of [...simReadings, ...devReadings]) if (binIds.has(r.bin_id)) (readingsByBin[r.bin_id] ||= []).push(r);
   for (const k of Object.keys(readingsByBin)) readingsByBin[k].sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
-  const ctx = makeBinContext(fireSensors, reports, neighborhoods);
+  // thermal alerts from the bins' own probes (same rule as the browser; seeded fire_sensors retired)
+  const ctx = makeBinContext(thermalFeedFromBins(bins, neighborhoods, now), reports, neighborhoods);
   const v = vehicles.find((x) => x.depotLat != null);
   return { municipalityId: mid, neighborhoods, bins, readingsByBin, contextFor: ctx.forBin, profiles, vehicles, routes: routesAll, incidents, depot: v ? { lat: v.depotLat, lng: v.depotLng } : null };
 }
 
 /** Municipality ids that have bins (the six official ones in this deployment). */
-async function municipalityIds(db) {
+export async function municipalityIds(db) {
   const snap = await db.collection("municipalities").get();
   if (!snap.empty) return snap.docs.map((d) => d.id);
   const bins = await db.collection("bins").select("municipalityId").get();
@@ -260,6 +260,8 @@ export async function runDispatchCycle(db, { trigger = "manual", municipalityId 
       if (status === "executed") tally.executed += 1; else if (status === "observed") tally.observed += 1; else if (status === "rejected_at_commit") tally.rejected += 1; else if (status === "duplicate") tally.duplicates += 1; else if (status === "open") tally.escalationsOpen += 1;
     }
     result.municipalities[mid] = tally;
+    // Approved operational adjustments: measure their outcome from the collections confirmed so far.
+    try { const { syncAdjustmentOutcomes } = await import("./adjustment.mjs"); tally.adjustmentsSynced = await syncAdjustmentOutcomes(db, mid, now); } catch (e) { tally.adjustmentsSyncError = String(e?.message || e).slice(0, 120); }
   }
   result.finishedAt = iso(Date.now());
   await db.collection("dispatch_runs").doc(runId).set({ ...result, actor: actor ? { uid: actor.uid, name: actor.name || "" } : null, settings: { mode: settings.mode, scope: settings.scope, periodMinutes: settings.periodMinutes } });

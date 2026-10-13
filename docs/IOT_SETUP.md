@@ -28,6 +28,7 @@ npm i -g firebase-tools && firebase login && firebase deploy --only firestore:ru
 
 ## 5. الجهاز
 - ESP32 + HC-SR04 (TRIG 5 / ECHO 18 عبر مقسّم جهد) + DS18B20 (GPIO 4).
+- ركّب DS18B20 داخل الحاوية قرب المستشعر في مسار الصدى، لا على اللوحة ولا داخل الغلاف المعرّض للشمس: الـsketch يستخدم قراءته لتعويض سرعة الصوت حراريًا. بدون التعويض تبدو الحاوية الفارغة ممتلئة بنحو 5% عند 50°م. إذا انفصل المسبار يرجع الحساب تلقائيًا لسرعة 20°م.
 - عدّل `WIFI_SSID/WIFI_PASSWORD/INGEST_URL/BIN_HEIGHT_CM` في الـsketch وارفعه من Arduino IDE (مكتبات: OneWire, DallasTemperature, ArduinoJson).
 - أول قراءة ناجحة ترد `201` وتظهر فورًا على الخريطة ولوحة التحكم.
 

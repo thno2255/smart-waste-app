@@ -1269,6 +1269,8 @@ export const withdrawOpenSupportRequests = async (actor, note = "") => {
 export const proposeResourceTransfer = (data, actor) =>
   addItem(COLLECTIONS.RESOURCE_TRANSFERS, { ...data, status: "proposed", proposedBy: actor?.uid || "", proposedByName: actor?.name || "" });
 export const decideResourceTransfer = async (transfer, actor, decision, note = "") => {
+  // Approval reserves the lent resources for the loan window — server-side, atomically (no double booking).
+  if (decision === "approved") return adminTransferAction("approve", transfer.id, note);
   const batch = writeBatch(db);
   const ref = doc(db, COLLECTIONS.RESOURCE_TRANSFERS, transfer.id);
   batch.update(ref, { status: decision, decidedBy: actor?.uid || "", decidedByName: actor?.name || "", decidedAt: ts(), decisionNote: note, updatedAt: ts() });
@@ -1277,16 +1279,34 @@ export const decideResourceTransfer = async (transfer, actor, decision, note = "
 };
 /** Executes / returns an APPROVED transfer on the SERVER (/api/admin/transfers): vehicle, driver profile, driver
  * account and transfer status change in ONE Firestore transaction — all or nothing. */
-export async function adminTransferAction(action, transferId) {
+export async function adminTransferAction(action, transferId, note = undefined) {
   const token = await auth.currentUser?.getIdToken();
   if (!token) throw new Error("غير مسجل الدخول");
-  const res = await fetch("/api/admin/transfers", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ action, transferId }) });
+  const res = await fetch("/api/admin/transfers", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(note ? { action, transferId, note } : { action, transferId }) });
   const out = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
   return out;
 }
 export const executeResourceTransfer = (transfer) => adminTransferAction("execute", transfer.id);
 export const returnResourceTransfer = (transfer) => adminTransferAction("return", transfer.id);
+
+/**
+ * Minimum operational adjustment (server-only writes). Analyses of one municipality, newest first; the actions
+ * (analyze / approve / reject) go through /api/ops/adjustment, which recomputes and re-verifies everything.
+ */
+COLLECTIONS.ADJUSTMENT_ANALYSES = "adjustment_analyses";
+export function useAdjustmentAnalyses(enabled = true, municipalityId = null) {
+  const { data, loading, error } = useScopedCollection(COLLECTIONS.ADJUSTMENT_ANALYSES, { enabled: enabled && !!municipalityId, municipalityId });
+  return { analyses: data, loading, error };
+}
+export async function adjustmentAction(body) {
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) throw new Error("غير مسجل الدخول");
+  const res = await fetch("/api/ops/adjustment", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) { const e = new Error(out.error || `HTTP ${res.status}`); e.code = out.code || null; e.status = res.status; throw e; }
+  return out;
+}
 
 /** Planner / simulation records (immutable history of what the engines computed and why). */
 export const saveOptimizationRun = (data, actor) => addItem(COLLECTIONS.OPTIMIZATION_RUNS, { ...data, createdBy: actor?.uid || "", createdByName: actor?.name || "" });
