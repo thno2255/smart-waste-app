@@ -23,6 +23,7 @@ import { getApps, initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { runDispatchCycle } from "../_lib/dispatchRunner.mjs";
+import { nextStoredExposure } from "../../src/thermalExposure.js";
 
 const BOUNDS = { fillMin: 0, fillMax: 100, tempMin: -10, tempMax: 120 }; // mirrors src/config.js THRESHOLDS.faultReadingBounds
 const MIN_SECONDS_BETWEEN_READINGS = 5; // per device — light abuse guard, not a production rate limiter
@@ -96,6 +97,14 @@ export default async function handler(req, res) {
     battery_level: num(body.battery_level), signal: num(body.signal),
     timestamp, receivedAt, source: "device",
   };
+  // Optional audit fields from firmware ≥ temperature compensation: raw echo distance and whether it was compensated.
+  const distanceCm = num(body.distance_cm);
+  if (distanceCm != null && distanceCm >= 0 && distanceCm <= 500) reading.distance_cm = distanceCm;
+  if (typeof body.temp_compensated === "boolean") reading.temp_compensated = body.temp_compensated;
+
+  const binRef = db.collection("bins").doc(dev.binId);
+  const binSnap = await binRef.get();
+  const binData = binSnap.exists ? binSnap.data() : {};
 
   const batch = db.batch();
   batch.set(db.collection("sensor_readings").doc(), reading);
@@ -103,7 +112,9 @@ export default async function handler(req, res) {
   if (fill != null) binUpdate.lastFillLevelPercent = fill;
   if (temp != null) binUpdate.lastTemperatureCelsius = temp;
   if (reading.battery_level != null) binUpdate.lastBatteryLevel = reading.battery_level;
-  batch.update(db.collection("bins").doc(dev.binId), binUpdate);
+  // Heat-hygiene running total (degree-days since the last emptying), advanced with this probe value.
+  if (temp != null) { const exp = nextStoredExposure(binData, temp, timestamp); if (exp) Object.assign(binUpdate, exp); }
+  batch.update(binRef, binUpdate);
   batch.update(devDoc.ref, { lastSeenAt: receivedAt, readingsCount: FieldValue.increment(1) });
   await batch.commit();
 
@@ -112,8 +123,7 @@ export default async function handler(req, res) {
   // periodMinutes have elapsed). Failures never reject the reading itself.
   let dispatch = null;
   try {
-    const binSnap = await db.collection("bins").doc(dev.binId).get();
-    const mid = binSnap.get("municipalityId") || null;
+    const mid = binData.municipalityId || null;
     const critical = (fill != null && fill >= CRITICAL_FILL_PCT) || (temp != null && temp >= CRITICAL_TEMP_C);
     if (critical && mid) dispatch = await runDispatchCycle(db, { trigger: "critical_reading", municipalityId: mid });
     else dispatch = await runDispatchCycle(db, { trigger: "heartbeat" });

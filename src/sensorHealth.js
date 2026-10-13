@@ -17,10 +17,11 @@ import { detectAnomalies } from "./prediction.js";
  * @param {object} bin
  * @param {object} [latestReading]
  * @param {Array<object>} [recentReadings] bounded window, not full history
+ * @param {number} [now] clock for the connectivity check (tests / server cycles pass their own)
  * @returns {{status: "healthy"|"warning"|"fault", reasons: string[], connectivity: string}}
  */
-export function getSensorHealth(bin, latestReading, recentReadings = []) {
-  const connectivity = getSensorConnectivity(bin, latestReading);
+export function getSensorHealth(bin, latestReading, recentReadings = [], now = Date.now()) {
+  const connectivity = getSensorConnectivity(bin, latestReading, now);
   const reasons = [];
 
   if (connectivity === "no_sensor") {
@@ -36,7 +37,7 @@ export function getSensorHealth(bin, latestReading, recentReadings = []) {
 
   if (connectivity === "offline") {
     reasons.push("المستشعر غير متصل حاليًا");
-    return { status: hasStuck || hasJumpOrOsc ? "fault" : "warning", connectivity, reasons };
+    return { status: hasStuck || hasJumpOrOsc ? "fault" : "warning", connectivity, reasons, stuck: hasStuck };
   }
 
   // connectivity === "online" from here
@@ -52,7 +53,7 @@ export function getSensorHealth(bin, latestReading, recentReadings = []) {
     reasons.push(`مستوى البطارية منخفض (${battery}%)`);
   }
 
-  if (hasStuck) return { status: "fault", connectivity, reasons };
+  if (hasStuck) return { status: "fault", connectivity, reasons, stuck: true };
   if (hasJumpOrOsc || reasons.length > 0) return { status: "warning", connectivity, reasons };
   return { status: "healthy", connectivity, reasons: [] };
 }

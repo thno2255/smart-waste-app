@@ -79,10 +79,12 @@ service cloud.firestore {
       allow read: if (isStaff() && inMun(resource.data)) || isCitizen();
       allow create: if isEmployee() && inMun(request.resource.data);
       allow delete: if isEmployee() && inMun(resource.data);
-      // Collection time is written by the server confirmation route only (/api/field/confirm-collection).
+      // Collection time, the heat-hygiene running total and the learned fill rate are written by the
+    // server only (/api/field/confirm-collection, /api/iot/readings, the dispatch cycle).
       // Exception: SIMULATED demo bins, whose simulator models the physical emptying.
       allow update: if isEmployee() && staysInMun()
-                    && (!changed().hasAny(["lastCollectionAt"]) || resource.data.get("simulated", false) == true);
+                    && (!changed().hasAny(["lastCollectionAt", "thermalExposureDD", "thermalExposureAt", "learnedFillRatePerDay", "learnedFillRateAt"]) || resource.data.get("simulated", false) == true)
+                    && (!changed().hasAny(["exposure"]) || request.resource.data.exposure in ["sun", "shade"]);
     }
     // Real readings: append-only, written ONLY by /api/iot/readings (firebase-admin).
     match /sensor_readings/{id} {
@@ -148,6 +150,7 @@ service cloud.firestore {
     match /dispatch_settings/{id} {
       allow read: if isEmployee();
       allow write: if isAdmin() && request.resource.data.mode in ["off", "observe", "auto"] && request.resource.data.scope in ["demo_only", "all"]
+                   && request.resource.data.get("heatModelMode", "observe") in ["off", "observe", "active"]
                    && validTargets(request.resource.data.get("targets", {})) && validImpactFactors(request.resource.data.get("impactFactors", {}));
     }
     // Operational targets and impact factors are decision inputs: typed, bounded, no extra keys.

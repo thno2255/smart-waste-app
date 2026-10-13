@@ -145,6 +145,7 @@ import {
   useDriverNotifications,
   markDriverNotificationRead,
   saveDispatchSettings,
+  updateBin,
   resolveDispatchDecision,
   requestDispatchCycle,
   useSupportRequests,
@@ -197,7 +198,8 @@ import { INCIDENT_TYPES, canConfirmCollection, routeProgress, nextStopFor, reins
 import { createOfflineQueue } from "./offlineQueue";
 import { DEFAULT_SIM_CONFIG, SIM_EVENTS, generateScenario } from "./simulation/simulationEngine";
 import { buildCollectionPlan, explainRoute, suggestAdditions } from "./collectionPlanner";
-import { makeThermalAlertFor, makeBinContext, thermalFeedFromBins, thermalRiskLevel } from "./binContext";
+import { makeThermalAlertFor, makeBinContext, thermalFeedFromBins, thermalRiskLevel, withHeatModelMode } from "./binContext";
+import { computeServiceQuality } from "./serviceQuality";
 import { DEFAULT_DISPATCH_SETTINGS, DISPATCH_MODES, DISPATCH_SCOPES, ACTION_LABELS, ESCALATION_LABELS, targetsOf, impactFactorsOf, TARGET_LABELS, DEFAULT_TARGETS } from "./autoDispatchEngine";
 import { EXPLANATION_VERSION, explanationSummary, minutesText, DECISION_TYPES, TRIGGER_TEXT, ALTERNATIVE_TEXT, CONSTRAINT_TEXT, reasonText, operationalImpact } from "./decisionExplain";
 import { DRIVER_STATE_LABELS, shiftWindow, driverOperationalState } from "./driverState";
@@ -2433,9 +2435,16 @@ const BIN_FILTERS = [
  * the §6/§7 predicted-full-time + future-state table are only ever computed
  * for a single open bin, never for the whole list (§39 performance).
  */
-const BinDetailModal = ({ bin, neighborhood, onClose, onAddToRoute, openRoute = null, onOpenRoute }) => {
+const BinDetailModal = ({ bin, neighborhood, onClose, onAddToRoute, openRoute = null, onOpenRoute, context = {} }) => {
   const { readings, loading: loadingReadings } = useBinReadings(bin.id);
-  const priority = useMemo(() => getBinPriority(bin, null, readings), [bin, readings]);
+  const priority = useMemo(() => getBinPriority(bin, null, readings, context), [bin, readings, context]);
+  const [exposureMsg, setExposureMsg] = useState("");
+  const setExposure = async (v) => {
+    setExposureMsg("");
+    try { await updateBin(bin.id, { exposure: v }); setExposureMsg("حُفظ — يُحدَّث الحساب مع البيانات التالية"); }
+    catch (e) { setExposureMsg("تعذر الحفظ: " + friendlyError(e)); }
+  };
+  const hy = priority.hygiene;
   const future = useMemo(
     () => [1, 3, 6].map((h) => ({ h, ...predictFutureState(bin, readings, h) })),
     [bin, readings]
@@ -2472,7 +2481,36 @@ const BinDetailModal = ({ bin, neighborhood, onClose, onAddToRoute, openRoute = 
           <div>معرّف الجهاز: <span style={{ color: C.text }}>{bin.deviceId || "—"}</span></div>
           <div>البطارية: <span style={{ color: C.text }}>{bin.lastBatteryLevel != null ? `${bin.lastBatteryLevel}%` : "غير متوفرة"}</span></div>
           <div>الموقع: <span style={{ color: C.text }}>{bin.lat != null ? `${bin.lat.toFixed(4)}, ${bin.lng.toFixed(4)}` : "غير مُحدَّد بعد"}</span></div>
+          {priority.estimatedFill != null && <div>امتلاء مقدَّر (المستشعر غير موثوق): <b style={{ color: C.warning }}>{Math.round(priority.estimatedFill)}%</b> <span style={{ fontSize: 11, color: C.dim }}>من معدل {bin.learnedFillRatePerDay}%/يوم منذ آخر تفريغ</span></div>}
           <div>آخر قراءة: <span style={{ color: C.text }}>{getReadingAgeLabel(bin.lastReadingAt)}</span>{isStale && <span style={{ color: C.warning }}> — قراءة قديمة، لا تُعرض كقيمة حيّة</span>}</div>
+        </div>
+
+        <div style={{ marginTop: 14, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>التعرض الحراري للنفايات</div>
+          {!hy?.applies ? (
+            <div style={{ fontSize: 12, color: C.dim }}>{hy?.reason || "لا ينطبق"}</div>
+          ) : !hy.available ? (
+            <div style={{ fontSize: 12, color: C.dim }}>{hy.reason}</div>
+          ) : (<>
+            <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.9 }}>
+              <b style={{ color: hy.overLimit ? C.danger : hy.wouldTrigger ? C.warning : C.text }}>{hy.dd}</b> من {hy.limit} درجة-يوم منذ آخر تفريغ،
+              {" "}ومتوقع <b style={{ color: C.text }}>{hy.projectedDD}</b> قبل الجولة القادمة
+            </div>
+            <div style={{ height: 8, background: C.card, borderRadius: 4, overflow: "hidden", margin: "6px 0" }}>
+              <div style={{ width: `${Math.min(100, hy.ratio * 100)}%`, height: "100%", background: hy.overLimit ? C.danger : hy.wouldTrigger ? C.warning : C.accent }} />
+            </div>
+            <div style={{ fontSize: 11, color: C.dim }}>
+              المصدر: {({ probe: "مسبار الحاوية", mixed: "المسبار مع المناخ المرجعي", climatology: "المناخ المرجعي لبريدة" })[hy.source] || hy.source}
+              {" "}· {context.heatModelMode === "active" ? "مفعّل في الأولوية" : context.heatModelMode === "off" ? "موقوف" : "وضع المراقبة — لا يغيّر الأولوية"}
+            </div>
+          </>)}
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, fontSize: 11.5, color: C.muted }}>
+            موقع الحاوية:
+            {[["sun", "مكشوفة للشمس"], ["shade", "مظللة"]].map(([v, l]) => (
+              <button key={v} onClick={() => setExposure(v)} style={{ padding: "3px 10px", borderRadius: 6, cursor: "pointer", fontFamily: ARABIC_FONT, fontSize: 11.5, border: `1px solid ${(bin.exposure || "sun") === v ? C.accent : C.border}`, background: (bin.exposure || "sun") === v ? C.accent + "15" : "transparent", color: (bin.exposure || "sun") === v ? C.accent : C.muted }}>{l}</button>
+            ))}
+          </div>
+          {exposureMsg && <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>{exposureMsg}</div>}
         </div>
 
         <div style={{ marginTop: 14, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
@@ -2650,6 +2688,7 @@ const BinsPage = ({ neighborhoods = [], bins = [], routes = [], fireSensors = []
         <BinDetailModal
           bin={selectedBin}
           neighborhood={neighborhoodById[selectedBin.neighborhoodId]}
+          context={binCtx.forBin(selectedBin)}
           onClose={() => setSelectedBin(null)}
           onAddToRoute={onAddToRoute}
           openRoute={findOpenRouteForBin(selectedBin.id, routes)}
@@ -2937,9 +2976,8 @@ const generatePredictionData = (events, actualMonthlyData = {}) => {
     const combined = monthEvents.reduce((acc, e) => acc + (e.wasteMultiplier - 1) * 0.6, 0);
     const effectiveMultiplier = 1 + Math.min(combined, maxMultiplier - 0.2);
     const predicted = Math.round(baseDaily * effectiveMultiplier);
-    const storedActual = actualMonthlyData[m] ?? null;
-    const actual = storedActual !== null ? storedActual
-      : (i < new Date().getMonth() ? Math.round(predicted * 0.96) : null);
+    // Only a recorded actual is shown — a missing month stays empty (never derived from the prediction).
+    const actual = actualMonthlyData[m] ?? null;
     return {
       month: m,
       المتوقع: predicted,
@@ -3104,7 +3142,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
   const peakMonth = predictionData.reduce((max, d) => d.المتوقع > max.المتوقع ? d : max, predictionData[0]);
   const avgAccuracy = (() => {
     const withActual = predictionData.filter(d => d.الفعلي);
-    if (!withActual.length) return 0;
+    if (!withActual.length) return null;
     return Math.round(withActual.reduce((a, d) => a + (1 - Math.abs(d.المتوقع - d.الفعلي) / d.المتوقع), 0) / withActual.length * 100);
   })();
 
@@ -3180,7 +3218,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
           {/* KPIs */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
             <StatCard title="إجمالي التوقعات السنوية" value={Math.round(totalPredicted / 1000)} unit="طن" icon={<LuLightbulb size={22} color="#fff" />} gradient="#f59e0b" />
-            <StatCard title="دقة التنبؤ" value={avgAccuracy} unit="%" icon={<Target size={22} color="#fff" />} gradient="#10b981" />
+            <StatCard title="دقة التنبؤ" value={avgAccuracy ?? "—"} unit={avgAccuracy != null ? "%" : "لا توجد قيم فعلية مسجّلة"} icon={<Target size={22} color="#fff" />} gradient="#10b981" />
             <StatCard title="ذروة متوقعة" value={peakMonth.month} icon={<BarChart2 size={22} color="#fff" />} gradient="#ef4444" />
             <StatCard title="أحداث مؤثرة" value={EVENTS_DB.length} icon={<Calendar size={22} color="#fff" />} gradient="#8b5cf6" />
           </div>
@@ -6084,6 +6122,15 @@ const DispatchCenter = ({ loggedInUser, onOpenRoute, routes = [], events = [], n
     actions: d.status === "open" ? <>{d.routeId && onOpenRoute && <Btn onClick={() => onOpenRoute(d.routeId)}>فتح الجولة</Btn>}<Btn tone="ok" disabled={busy === d.id} onClick={close(d, "resolved")}>تم التعامل</Btn><Btn variant="ghost" disabled={busy === d.id} onClick={close(d, "dismissed")}>تجاهل</Btn></> : null,
   }));
   const lastRun = runs[0];
+  // Heat-hygiene shadow report of the last cycle (summed over its municipalities)
+  const heatLine = (() => {
+    const h = Object.values(lastRun?.municipalities || {}).map((t) => t.heat).filter(Boolean);
+    if (!h.length) return null;
+    const n = h.reduce((a, x) => a + (x.wouldTrigger || 0), 0);
+    const mode = h[0].mode;
+    return mode === "active" ? `القيد الحراري مفعّل: ${n} حاوية تبلغ الحد الصحي قبل الجولة القادمة`
+      : mode === "observe" ? `القيد الحراري (مراقبة): كان سيرفع ${n} حاوية` : null;
+  })();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: SP.md }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: SP.sm, flexWrap: "wrap", background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 14px" }}>
@@ -6091,6 +6138,7 @@ const DispatchCenter = ({ loggedInUser, onOpenRoute, routes = [], events = [], n
           <DispatchModeBadge settings={settings} />
           <span>آخر دورة: {lastRun ? `${getReadingAgeLabel(lastRun.startedAt)} (${({ cron: "دورية", heartbeat: "دورية", critical_reading: "قراءة حرجة", simulator_event: "حدث محاكاة", manual: "يدوية" })[lastRun.trigger] || lastRun.trigger})` : "لم تعمل بعد"}</span>
           <span>· كل {s.periodMinutes} د، والحالات الحرجة فورًا</span>
+          {heatLine && <span>· {heatLine}</span>}
         </div>
         <Btn variant="primary" disabled={busy === "run" || s.mode === "off"} onClick={runNow}>{busy === "run" ? "جارٍ التشغيل…" : "تشغيل دورة الآن"}</Btn>
       </div>
@@ -6136,6 +6184,14 @@ const DispatchSettingsCard = ({ loggedInUser }) => {
         {Object.entries(DISPATCH_MODES).map(([k, l]) => <Btn key={k} variant={s.mode === k ? "primary" : "secondary"} disabled={!canEdit} onClick={() => set("mode", k)}>{l}</Btn>)}
         <span style={{ width: 1, background: C.border, margin: "0 4px" }} />
         {Object.entries(DISPATCH_SCOPES).map(([k, l]) => <Btn key={k} variant={s.scope === k ? "primary" : "secondary"} tone={k === "all" ? "warning" : undefined} disabled={!canEdit} onClick={() => set("scope", k)}>{l}</Btn>)}
+      </div>
+      <div style={{ display: "flex", gap: SP.sm, flexWrap: "wrap", alignItems: "center", marginBottom: SP.md }}>
+        <span style={{ fontSize: FS.meta, color: C.muted }}>القيد الصحي الحراري:</span>
+        {Object.entries(HEAT_MODEL_MODES).map(([k, l]) => <Btn key={k} variant={(s.heatModelMode || "observe") === k ? "primary" : "secondary"} disabled={!canEdit} onClick={() => set("heatModelMode", k)}>{l}</Btn>)}
+        <span style={{ fontSize: FS.meta, color: C.dim, flexBasis: "100%" }}>
+          يحسب «درجات-الأيام» فوق {THRESHOLDS.thermalBaseC}°م التي تعرّضت لها النفايات منذ آخر تفريغ (عتبة نمو الذباب)، ويقارنها بحد {THRESHOLDS.hygieneDegreeDays}.
+          في وضع المراقبة يُعرض ويُسجَّل فقط دون تغيير الأولوية؛ الحد مشتق من دراسات مخبرية ولم يُعايَر ميدانيًا بعد.
+        </span>
       </div>
       <Disclosure summary="قيود التشغيل (قابلة للضبط)">
         <div style={{ display: "flex", gap: SP.md, flexWrap: "wrap" }}>
@@ -6386,6 +6442,8 @@ const RouteManagementPage = ({ neighborhoods = [], bins = [], recentReadings = [
     </div>
   );
 };
+
+const HEAT_MODEL_MODES = { off: "إيقاف", observe: "مراقبة فقط", active: "مفعّل في الأولوية" };
 
 // ── Isolated clock — لمنع re-render الكامل كل ثانية ──────────
 const ExecHeaderClock = () => {
@@ -7011,7 +7069,8 @@ const ExecDashboard = ({ user, onLogout, stations, neighborhoods = [], bins = []
     offlineHeavy.forEach((x) => decisions.push({ icon: "⚫", title: `صيانة مستشعرات ${x.g.name}`, why: `${x.off.length} من ${x.nb.length} حاوية بلا بيانات موثوقة — القرارات هناك تعتمد على آخر قراءة قديمة`, state: "طلب فريق الصيانة" }));
     thermal.forEach((g) => decisions.push({ icon: "🔥", title: `متابعة التنبيه الحراري في ${g.name}`, why: "مستشعر حرارة/غاز فوق حد الإنذار", state: "إشعار الدفاع المدني عند استمرار الارتفاع" }));
     if (ctx.openCount > 0) decisions.push({ icon: "📣", title: `${ctx.openCount} بلاغ مواطن مفتوح`, why: "مرفوعة ضمن أولوية الحاويات المعنية تلقائيًا", state: "رد على المواطنين بعد الجمع" });
-    return { scored, ranked, fleet, offline, decisions: decisions.slice(0, 6), groupsCount: groups.length,
+    const quality = computeServiceQuality({ bins, events: collectionEvents, readings: recentReadings, scored });
+    return { scored, ranked, fleet, offline, quality, heatModelMode: ctx.heatModelMode, decisions: decisions.slice(0, 6), groupsCount: groups.length,
       critical: scored.filter((s) => s.priority.tier === "critical").length,
       suggested: routes.filter((r) => r.status === "suggested").length, approved: routes.filter((r) => r.status === "approved").length, active: routes.filter((r) => r.status === "in_progress").length,
       avgFill: (() => { const v = bins.map((b) => b.lastFillLevelPercent).filter((x) => x != null && x <= 100); return v.length ? Math.round(v.reduce((a, x) => a + x, 0) / v.length) : null; })(),
@@ -7078,6 +7137,29 @@ const ExecDashboard = ({ user, onLogout, stations, neighborhoods = [], bins = []
               </div>
               <button className="no-print" onClick={() => window.print()} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: "#f59e0b", color: "#000", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>تصدير PDF</button>
             </div>
+
+            <Card title="جودة الخدمة — من البيانات التشغيلية فقط" icon={<ShieldCheck size={16} color={C.muted} />}>
+              {(() => { const q = today.quality; const NA = "لا توجد بيانات بعد"; const tiles = [
+                ["الامتلاء عند التفريغ (7 أيام)", q.fillAtCollection.n ? `${q.fillAtCollection.median}%` : NA, q.fillAtCollection.n ? `وسيط ${q.fillAtCollection.n} تفريغ مؤكد · ${q.fillAtCollection.lowSharePct}% منها تحت 30%` : "من تأكيدات التفريغ عبر الخادم"],
+                ["ساعات الطفح (آخر 24 ساعة)", q.overflow.per100PerDay != null ? `${q.overflow.per100PerDay}` : NA, q.overflow.per100PerDay != null ? `لكل 100 حاوية يوميًا · من ${q.overflow.binsWithData} حاوية لها قراءات` : "قراءات ≥ 98% متتابعة"],
+                ["تجاوز الحد الصحي الحراري", q.hygiene.binsKnown ? `${q.hygiene.overLimit} / ${q.hygiene.wouldTrigger}` : NA, q.hygiene.binsKnown ? `تجاوزت الآن / ستبلغه قبل الجولة القادمة · ${({ off: "القيد موقوف", observe: "وضع المراقبة", active: "مفعّل في الأولوية" })[today.heatModelMode] || ""}` : "يحتاج وقت آخر تفريغ مؤكد"],
+                ["مستشعرات غير موثوقة", String(q.trust.untrusted), `${q.trust.estimatedCritical} منها امتلاؤها المقدَّر حرج`],
+              ]; return (<>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
+                  {tiles.map(([label, value, note]) => (
+                    <div key={label} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
+                      <div style={{ fontSize: 11.5, color: C.muted }}>{label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: value === NA ? C.dim : C.text, margin: "4px 0" }}>{value}</div>
+                      <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.6 }}>{note}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10, lineHeight: 1.8 }}>
+                  الموسم: في هذا الشهر تتراكم نحو {q.season.dailyDD} درجة-يوم يوميًا في الحاوية المكشوفة، فتبلغ الحد الصحي خلال نحو {q.season.daysToLimit} يوم من التفريغ
+                  {q.season.daysToLimit <= 2 ? " — الجمع شبه اليومي للنفايات العضوية المكشوفة مبرَّر صحيًا." : " — يمكن الجمع حسب الامتلاء دون خطر صحي يُذكر."}
+                </div>
+              </>); })()}
+            </Card>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
               {[
@@ -8621,7 +8703,10 @@ function SmartWasteManagement() {
   // Thermal alerts are derived from the bins' own temperature probes; the seeded
   // fire_sensors collection is no longer read. Same shape, so every consumer
   // (priority context, rankings, the thermal page) is unchanged.
-  const fireSensors = useMemo(() => thermalFeedFromBins(bins, neighborhoods), [bins, neighborhoods]);
+  // The heat-hygiene mode travels with the feed (withHeatModelMode) so every page scores like the server.
+  const { settings: dispatchSettingsMain } = useDispatchSettings(isStaffAccount);
+  const heatModelMode = dispatchSettingsMain?.heatModelMode || DEFAULT_DISPATCH_SETTINGS.heatModelMode;
+  const fireSensors = useMemo(() => withHeatModelMode(thermalFeedFromBins(bins, neighborhoods), heatModelMode), [bins, neighborhoods, heatModelMode]);
   // analytics/station_history is still written (below, via recordDailyStationHistory)
   // but no longer read here — StationsPage (its only reader) was replaced by
   // NeighborhoodsPage/BinsPage in this phase. Tracked as part of the existing

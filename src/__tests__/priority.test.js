@@ -83,3 +83,42 @@ describe("getBinPriority — §40", () => {
     expect(withAlert.reasons).toContain("تنبيه حراري نشط في الحي");
   });
 });
+
+describe("getBinPriority — heat hygiene and sensor trust (phases 1–2)", () => {
+  const H = 3600000;
+  const iso = (t) => new Date(t).toISOString();
+  const AUG = Date.UTC(2025, 7, 10, 12);
+
+  it("observe mode: the heat rule is reported but does not change the score", () => {
+    const b = { id: "B", deviceId: "D", wasteType: "مختلط", lastFillLevelPercent: 30, lastTemperatureCelsius: 30, lastReadingAt: iso(AUG - 60000), lastCollectionAt: iso(AUG - 40 * H) };
+    const off = getBinPriority(b, null, [], { heatModelMode: "off", now: AUG });
+    const observe = getBinPriority(b, null, [], { heatModelMode: "observe", now: AUG });
+    expect(observe.hygiene.wouldTrigger).toBe(true);
+    expect(observe.score).toBe(off.score);
+    expect(observe.reasons.some((x) => x.includes("وضع المراقبة"))).toBe(true);
+  });
+
+  it("active mode: a half-full summer bin over the hygiene limit becomes critical", () => {
+    const b = { id: "B", deviceId: "D", wasteType: "مختلط", lastFillLevelPercent: 30, lastTemperatureCelsius: 30, lastReadingAt: iso(AUG - 60000), lastCollectionAt: iso(AUG - 40 * H) };
+    const r = getBinPriority(b, null, [], { heatModelMode: "active", now: AUG });
+    expect(r.tier).toBe("critical");
+    expect(r.reasons.some((x) => x.includes("يتجاوز الحد الصحي"))).toBe(true);
+  });
+
+  it("an offline sensor stuck on a low reading no longer hides a filling bin", () => {
+    const b = { id: "B", deviceId: "D", lastFillLevelPercent: 20, lastReadingAt: iso(AUG - 5 * H), lastCollectionAt: iso(AUG - 48 * H), learnedFillRatePerDay: 50 };
+    const r = getBinPriority(b, null, [], { now: AUG });
+    expect(r.trusted).toBe(false);
+    expect(r.estimatedFill).toBeCloseTo(100);
+    expect(r.tier).toBe("critical");
+    expect(r.reasons.some((x) => x.includes("امتلاء مقدَّر"))).toBe(true);
+  });
+
+  it("a healthy sensor is believed — no estimate is used", () => {
+    const b = { id: "B", deviceId: "D", lastFillLevelPercent: 20, lastReadingAt: iso(AUG - 60000), lastCollectionAt: iso(AUG - 48 * H), learnedFillRatePerDay: 50 };
+    const r = getBinPriority(b, null, [], { now: AUG });
+    expect(r.trusted).toBe(true);
+    expect(r.estimatedFill).toBeNull();
+    expect(r.tier).toBe("low");
+  });
+});

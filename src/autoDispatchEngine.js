@@ -43,6 +43,7 @@ export const DISPATCH_SCOPES = { demo_only: "بيئة العرض فقط (حاو�
 /** Defaults — every number is a setting the authorised admin can change. */
 export const DEFAULT_DISPATCH_SETTINGS = {
   mode: "observe",            // off | observe | auto
+  heatModelMode: "observe",   // heat-hygiene rule: off | observe (reported, not scored) | active (raises priority)
   scope: "demo_only",         // demo_only | all
   periodMinutes: 15,          // periodic cycle spacing (urgent cases bypass it)
   minBinsPerRoute: 3,         // routine grouping (high-priority / predicted bins): don't send a truck for fewer bins…
