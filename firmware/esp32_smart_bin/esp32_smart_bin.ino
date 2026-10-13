@@ -5,7 +5,10 @@
  *   - ESP32 DevKit (any WiFi-capable module)
  *   - HC-SR04 ultrasonic sensor mounted under the lid, facing down
  *       TRIG → GPIO 5,  ECHO → GPIO 18 (through a 5V→3.3V divider)
- *   - DS18B20 temperature probe on GPIO 4 (4.7k pull-up to 3.3V)
+ *   - DS18B20 temperature probe on GPIO 4 (4.7k pull-up to 3.3V).
+ *     Mount it inside the bin near the sensor, in the air the echo travels
+ *     through — not on the board or in the sun-heated enclosure — because its
+ *     reading also corrects the ultrasonic distance for temperature.
  *
  * Behaviour:
  *   - Every REPORT_INTERVAL_MS it measures the free distance under the lid,
@@ -44,15 +47,25 @@ const int ONE_WIRE_PIN = 4;
 OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature temps(&oneWire);
 
-float measureDistanceCm() {
+// Speed of sound in cm/µs for the air inside the bin. Sound travels faster in
+// hot air (c ≈ 331.3 + 0.606·T m/s), so a fixed 20 °C constant makes a hot bin
+// read fuller than it is — about +5 percentage points on an empty bin at 50 °C.
+// Falls back to the 20 °C value when the probe is missing or reads implausibly.
+float speedOfSoundCmPerUs(float tempC) {
+  if (tempC < -20.0f || tempC > 85.0f) return 0.0343f;
+  return (331.3f + 0.606f * tempC) / 10000.0f;
+}
+
+float measureDistanceCm(float tempC) {
   // Median of 5 echoes — single ultrasonic echoes off loose waste are noisy.
+  const float soundCmPerUs = speedOfSoundCmPerUs(tempC);
   float samples[5];
   for (int i = 0; i < 5; i++) {
     digitalWrite(TRIG_PIN, LOW);  delayMicroseconds(2);
     digitalWrite(TRIG_PIN, HIGH); delayMicroseconds(10);
     digitalWrite(TRIG_PIN, LOW);
     long duration = pulseIn(ECHO_PIN, HIGH, 30000); // 30 ms timeout ≈ 5 m
-    samples[i] = duration > 0 ? (duration * 0.0343f) / 2.0f : -1.0f;
+    samples[i] = duration > 0 ? (duration * soundCmPerUs) / 2.0f : -1.0f;
     delay(60);
   }
   for (int i = 0; i < 5; i++) for (int j = i + 1; j < 5; j++) if (samples[j] < samples[i]) { float t = samples[i]; samples[i] = samples[j]; samples[j] = t; }
@@ -107,11 +120,12 @@ void setup() {
 
 void loop() {
   connectWiFi();
-  float distance = measureDistanceCm();
-  float fill = fillPercentFromDistance(distance);
+  // Temperature first: the distance calculation needs it.
   temps.requestTemperatures();
   float tempC = temps.getTempCByIndex(0);
   if (tempC == DEVICE_DISCONNECTED_C) tempC = -127; // server treats missing temp as null
+  float distance = measureDistanceCm(tempC);
+  float fill = fillPercentFromDistance(distance);
 
   if (fill >= 0) {
     Serial.printf("distance=%.1fcm fill=%.0f%% temp=%.1fC\n", distance, fill, tempC);
