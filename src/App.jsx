@@ -199,6 +199,7 @@ import { createOfflineQueue } from "./offlineQueue";
 import { DEFAULT_SIM_CONFIG, SIM_EVENTS, generateScenario } from "./simulation/simulationEngine";
 import { buildCollectionPlan, explainRoute, suggestAdditions } from "./collectionPlanner";
 import { makeThermalAlertFor, makeBinContext, thermalFeedFromBins, thermalRiskLevel, withHeatModelMode } from "./binContext";
+import { computeServiceQuality } from "./serviceQuality";
 import { DEFAULT_DISPATCH_SETTINGS, DISPATCH_MODES, DISPATCH_SCOPES, ACTION_LABELS, ESCALATION_LABELS, targetsOf, impactFactorsOf, TARGET_LABELS, DEFAULT_TARGETS } from "./autoDispatchEngine";
 import { EXPLANATION_VERSION, explanationSummary, minutesText, DECISION_TYPES, TRIGGER_TEXT, ALTERNATIVE_TEXT, CONSTRAINT_TEXT, reasonText, operationalImpact } from "./decisionExplain";
 import { DRIVER_STATE_LABELS, shiftWindow, driverOperationalState } from "./driverState";
@@ -2975,9 +2976,8 @@ const generatePredictionData = (events, actualMonthlyData = {}) => {
     const combined = monthEvents.reduce((acc, e) => acc + (e.wasteMultiplier - 1) * 0.6, 0);
     const effectiveMultiplier = 1 + Math.min(combined, maxMultiplier - 0.2);
     const predicted = Math.round(baseDaily * effectiveMultiplier);
-    const storedActual = actualMonthlyData[m] ?? null;
-    const actual = storedActual !== null ? storedActual
-      : (i < new Date().getMonth() ? Math.round(predicted * 0.96) : null);
+    // Only a recorded actual is shown — a missing month stays empty (never derived from the prediction).
+    const actual = actualMonthlyData[m] ?? null;
     return {
       month: m,
       المتوقع: predicted,
@@ -3142,7 +3142,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
   const peakMonth = predictionData.reduce((max, d) => d.المتوقع > max.المتوقع ? d : max, predictionData[0]);
   const avgAccuracy = (() => {
     const withActual = predictionData.filter(d => d.الفعلي);
-    if (!withActual.length) return 0;
+    if (!withActual.length) return null;
     return Math.round(withActual.reduce((a, d) => a + (1 - Math.abs(d.المتوقع - d.الفعلي) / d.المتوقع), 0) / withActual.length * 100);
   })();
 
@@ -3218,7 +3218,7 @@ const PredictionsPage = ({ stations, neighborhoods = [], bins = [], recentReadin
           {/* KPIs */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
             <StatCard title="إجمالي التوقعات السنوية" value={Math.round(totalPredicted / 1000)} unit="طن" icon={<LuLightbulb size={22} color="#fff" />} gradient="#f59e0b" />
-            <StatCard title="دقة التنبؤ" value={avgAccuracy} unit="%" icon={<Target size={22} color="#fff" />} gradient="#10b981" />
+            <StatCard title="دقة التنبؤ" value={avgAccuracy ?? "—"} unit={avgAccuracy != null ? "%" : "لا توجد قيم فعلية مسجّلة"} icon={<Target size={22} color="#fff" />} gradient="#10b981" />
             <StatCard title="ذروة متوقعة" value={peakMonth.month} icon={<BarChart2 size={22} color="#fff" />} gradient="#ef4444" />
             <StatCard title="أحداث مؤثرة" value={EVENTS_DB.length} icon={<Calendar size={22} color="#fff" />} gradient="#8b5cf6" />
           </div>
@@ -7069,7 +7069,8 @@ const ExecDashboard = ({ user, onLogout, stations, neighborhoods = [], bins = []
     offlineHeavy.forEach((x) => decisions.push({ icon: "⚫", title: `صيانة مستشعرات ${x.g.name}`, why: `${x.off.length} من ${x.nb.length} حاوية بلا بيانات موثوقة — القرارات هناك تعتمد على آخر قراءة قديمة`, state: "طلب فريق الصيانة" }));
     thermal.forEach((g) => decisions.push({ icon: "🔥", title: `متابعة التنبيه الحراري في ${g.name}`, why: "مستشعر حرارة/غاز فوق حد الإنذار", state: "إشعار الدفاع المدني عند استمرار الارتفاع" }));
     if (ctx.openCount > 0) decisions.push({ icon: "📣", title: `${ctx.openCount} بلاغ مواطن مفتوح`, why: "مرفوعة ضمن أولوية الحاويات المعنية تلقائيًا", state: "رد على المواطنين بعد الجمع" });
-    return { scored, ranked, fleet, offline, decisions: decisions.slice(0, 6), groupsCount: groups.length,
+    const quality = computeServiceQuality({ bins, events: collectionEvents, readings: recentReadings, scored });
+    return { scored, ranked, fleet, offline, quality, heatModelMode: ctx.heatModelMode, decisions: decisions.slice(0, 6), groupsCount: groups.length,
       critical: scored.filter((s) => s.priority.tier === "critical").length,
       suggested: routes.filter((r) => r.status === "suggested").length, approved: routes.filter((r) => r.status === "approved").length, active: routes.filter((r) => r.status === "in_progress").length,
       avgFill: (() => { const v = bins.map((b) => b.lastFillLevelPercent).filter((x) => x != null && x <= 100); return v.length ? Math.round(v.reduce((a, x) => a + x, 0) / v.length) : null; })(),
@@ -7136,6 +7137,29 @@ const ExecDashboard = ({ user, onLogout, stations, neighborhoods = [], bins = []
               </div>
               <button className="no-print" onClick={() => window.print()} style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: "#f59e0b", color: "#000", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: ARABIC_FONT }}>تصدير PDF</button>
             </div>
+
+            <Card title="جودة الخدمة — من البيانات التشغيلية فقط" icon={<ShieldCheck size={16} color={C.muted} />}>
+              {(() => { const q = today.quality; const NA = "لا توجد بيانات بعد"; const tiles = [
+                ["الامتلاء عند التفريغ (7 أيام)", q.fillAtCollection.n ? `${q.fillAtCollection.median}%` : NA, q.fillAtCollection.n ? `وسيط ${q.fillAtCollection.n} تفريغ مؤكد · ${q.fillAtCollection.lowSharePct}% منها تحت 30%` : "من تأكيدات التفريغ عبر الخادم"],
+                ["ساعات الطفح (آخر 24 ساعة)", q.overflow.per100PerDay != null ? `${q.overflow.per100PerDay}` : NA, q.overflow.per100PerDay != null ? `لكل 100 حاوية يوميًا · من ${q.overflow.binsWithData} حاوية لها قراءات` : "قراءات ≥ 98% متتابعة"],
+                ["تجاوز الحد الصحي الحراري", q.hygiene.binsKnown ? `${q.hygiene.overLimit} / ${q.hygiene.wouldTrigger}` : NA, q.hygiene.binsKnown ? `تجاوزت الآن / ستبلغه قبل الجولة القادمة · ${({ off: "القيد موقوف", observe: "وضع المراقبة", active: "مفعّل في الأولوية" })[today.heatModelMode] || ""}` : "يحتاج وقت آخر تفريغ مؤكد"],
+                ["مستشعرات غير موثوقة", String(q.trust.untrusted), `${q.trust.estimatedCritical} منها امتلاؤها المقدَّر حرج`],
+              ]; return (<>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
+                  {tiles.map(([label, value, note]) => (
+                    <div key={label} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
+                      <div style={{ fontSize: 11.5, color: C.muted }}>{label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: value === NA ? C.dim : C.text, margin: "4px 0" }}>{value}</div>
+                      <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.6 }}>{note}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10, lineHeight: 1.8 }}>
+                  الموسم: في هذا الشهر تتراكم نحو {q.season.dailyDD} درجة-يوم يوميًا في الحاوية المكشوفة، فتبلغ الحد الصحي خلال نحو {q.season.daysToLimit} يوم من التفريغ
+                  {q.season.daysToLimit <= 2 ? " — الجمع شبه اليومي للنفايات العضوية المكشوفة مبرَّر صحيًا." : " — يمكن الجمع حسب الامتلاء دون خطر صحي يُذكر."}
+                </div>
+              </>); })()}
+            </Card>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
               {[

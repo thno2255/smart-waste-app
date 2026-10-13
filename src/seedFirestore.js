@@ -171,10 +171,11 @@ export async function seedAllCollections() {
   // تُحدَّث يدوياً من Firebase Console كل شهر
   await setAnalyticsDoc("actual_monthly", {
     data: {
-      "يناير":   2550,
-      "فبراير":  3380,
-      "مارس":    3620,
-      "أبريل":   3180,   // قراءة جزئية (19 من 30 يوم)
+      // empty until real monthly tonnage is entered (no seeded "actuals")
+      "يناير":   null,
+      "فبراير":  null,
+      "مارس":    null,
+      "أبريل":   null,
       "مايو":    null,
       "يونيو":   null,
       "يوليو":   null,
