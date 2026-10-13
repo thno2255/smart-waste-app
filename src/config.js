@@ -41,6 +41,15 @@ export const THRESHOLDS = {
   // Phase 3 — decision engine (src/decisionEngine.js)
   predictedFullSoonHours: 3,        // "متوقع الامتلاء قريبًا" / route-eligibility cutoff
   longSinceCollectionHours: 72,     // 3 days — scores the "لم تُجمع منذ فترة طويلة" component at its max
+
+  // Heat-hygiene model (src/thermalExposure.js) — see docs/research: degree-days above the
+  // house-fly development threshold accumulated by the waste since the last emptying.
+  thermalBaseC: 12.42,              // Musca domestica lower development threshold (Wang et al. 2018)
+  hygieneDegreeDays: 50,            // ≈ 0.33 × 152 °C·d egg→adult — derived, not field-measured: tune in observe mode
+  thermalMaxGapHours: 6,            // a probe temperature is trusted for at most this long before climatology fills in
+
+  // Sensor trust (src/decisionEngine.js) — estimate fill from the learned rate when the sensor can't be trusted
+  maxEstimatedFillPct: 120,         // cap of a dead-reckoned fill estimate
 };
 
 export const STATUS_COLORS = {

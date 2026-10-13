@@ -18,6 +18,8 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { planDispatch, actionInScope, cheapestInsertion, driverBlocker, pendingStops, DEFAULT_DISPATCH_SETTINGS, ESCALATION_LABELS } from "../../src/autoDispatchEngine.js";
 import { makeBinContext, thermalFeedFromBins } from "../../src/binContext.js";
+import { hygieneRisk } from "../../src/thermalExposure.js";
+import { computeFillRate } from "../../src/prediction.js";
 import { driverOrigin } from "../../src/assignmentEngine.js";
 import { routeRemaining } from "../../src/driverState.js";
 import { analyzeResourceGaps } from "../../src/resourceGapEngine.js";
@@ -63,7 +65,45 @@ export async function readDispatchSettings(db) {
 }
 
 /** Snapshot of one municipality (only what the engine needs). */
-export async function loadMunicipalityState(db, mid, now = Date.now()) {
+/**
+ * Heat-hygiene shadow report for one cycle: how many bins the degree-day rule says
+ * need collecting before the next run, whether or not the rule is active.
+ */
+export function heatShadow(state, mode = "observe", now = Date.now()) {
+  let wouldTrigger = 0, overLimit = 0, unavailable = 0;
+  const binIds = [];
+  for (const b of state.bins) {
+    const h = hygieneRisk(b, state.readingsByBin[b.id] || [], now);
+    if (!h.applies) continue;
+    if (!h.available) { unavailable += 1; continue; }
+    if (h.overLimit) overLimit += 1;
+    if (h.wouldTrigger) { wouldTrigger += 1; if (binIds.length < 50) binIds.push(b.id); }
+  }
+  return { mode: mode || "observe", wouldTrigger, overLimit, unavailable, binIds };
+}
+
+/**
+ * Learn each bin's fill rate (%/day) from its reliable recent readings — the basis of the fill
+ * estimate used when a sensor goes silent. Exponential smoothing; written only when it moves ≥ 5 %.
+ */
+export async function updateLearnedFillRates(db, state, alpha = 0.3) {
+  const batch = db.batch();
+  let n = 0;
+  for (const b of state.bins) {
+    const r = computeFillRate(state.readingsByBin[b.id] || []);
+    if (!r.reliable || !(r.ratePerHour > 0)) continue;
+    const obs = r.ratePerHour * 24;
+    const old = Number(b.learnedFillRatePerDay);
+    const next = Number.isFinite(old) && old > 0 ? (1 - alpha) * old + alpha * obs : obs;
+    if (Number.isFinite(old) && old > 0 && Math.abs(next - old) / old < 0.05) continue;
+    batch.update(db.collection("bins").doc(b.id), { learnedFillRatePerDay: Math.round(next * 10) / 10, learnedFillRateAt: new Date().toISOString() });
+    n += 1;
+  }
+  if (n) await batch.commit();
+  return n;
+}
+
+export async function loadMunicipalityState(db, mid, now = Date.now(), opts = {}) {
   const byMun = (col) => db.collection(col).where("municipalityId", "==", mid).get().then(docs);
   const since = iso(now - READINGS_WINDOW_MS);
   const [bins, neighborhoods, profiles, vehicles, routesAll, incidents, reports, simReadings, devReadings] = await Promise.all([
@@ -79,7 +119,7 @@ export async function loadMunicipalityState(db, mid, now = Date.now()) {
   for (const r of [...simReadings, ...devReadings]) if (binIds.has(r.bin_id)) (readingsByBin[r.bin_id] ||= []).push(r);
   for (const k of Object.keys(readingsByBin)) readingsByBin[k].sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
   // thermal alerts from the bins' own probes (same rule as the browser; seeded fire_sensors retired)
-  const ctx = makeBinContext(thermalFeedFromBins(bins, neighborhoods, now), reports, neighborhoods);
+  const ctx = makeBinContext(thermalFeedFromBins(bins, neighborhoods, now), reports, neighborhoods, { heatModelMode: opts.heatModelMode || "observe" });
   const v = vehicles.find((x) => x.depotLat != null);
   return { municipalityId: mid, neighborhoods, bins, readingsByBin, contextFor: ctx.forBin, profiles, vehicles, routes: routesAll, incidents, depot: v ? { lat: v.depotLat, lng: v.depotLng } : null };
 }
@@ -234,7 +274,7 @@ export async function runDispatchCycle(db, { trigger = "manual", municipalityId 
   const result = { runId, trigger, mode: settings.mode, scope: settings.scope, startedAt: iso(now), municipalities: {} };
 
   for (const mid of mids) {
-    const state = await loadMunicipalityState(db, mid, now);
+    const state = await loadMunicipalityState(db, mid, now, { heatModelMode: settings.heatModelMode });
     if (state.bins.length === 0) continue;
     // Pass 1 groups the bins; pass 2 re-decides drivers with real road approach times (or a labelled fallback).
     let plan = planDispatch(state, settings, { now });
@@ -259,6 +299,8 @@ export async function runDispatchCycle(db, { trigger = "manual", municipalityId 
       else status = await execute(db, a, ctx);
       if (status === "executed") tally.executed += 1; else if (status === "observed") tally.observed += 1; else if (status === "rejected_at_commit") tally.rejected += 1; else if (status === "duplicate") tally.duplicates += 1; else if (status === "open") tally.escalationsOpen += 1;
     }
+    tally.heat = heatShadow(state, settings.heatModelMode, now);
+    try { tally.learnedRates = await updateLearnedFillRates(db, state); } catch (e) { tally.learnedRatesError = String(e?.message || e).slice(0, 120); }
     result.municipalities[mid] = tally;
     // Approved operational adjustments: measure their outcome from the collections confirmed so far.
     try { const { syncAdjustmentOutcomes } = await import("./adjustment.mjs"); tally.adjustmentsSynced = await syncAdjustmentOutcomes(db, mid, now); } catch (e) { tally.adjustmentsSyncError = String(e?.message || e).slice(0, 120); }

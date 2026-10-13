@@ -45,7 +45,14 @@ export const thermalFeedFromBins = (bins = [], neighborhoods = [], now = Date.no
 export const makeThermalAlertFor = (fireSensors = []) => (name) =>
   fireSensors.some((s) => normalizeNeighborhoodName(s.district) === normalizeNeighborhoodName(name) && (s.riskLevel === "خطر عالي" || s.riskLevel === "خطر متوسط"));
 
-export const makeBinContext = (fireSensors = [], citizenReports = [], neighborhoods = []) => {
+/**
+ * Attach the heat-hygiene mode (dispatch_settings.heatModelMode: off | observe | active) to a thermal
+ * feed, so every page that already receives the feed scores bins exactly like the dispatch server.
+ */
+export const withHeatModelMode = (feed = [], heatModelMode = "observe") => Object.assign([...feed], { heatModelMode });
+
+export const makeBinContext = (fireSensors = [], citizenReports = [], neighborhoods = [], opts = {}) => {
+  const heatModelMode = opts.heatModelMode ?? fireSensors.heatModelMode ?? "observe";
   const thermalFor = makeThermalAlertFor(fireSensors);
   const open = citizenReports.filter((r) => r.status !== "تم الحل" && r.status !== "مرفوض" && r.status !== "مغلق");
   const byBin = {}, byNeighborhoodKey = {};
@@ -57,9 +64,10 @@ export const makeBinContext = (fireSensors = [], citizenReports = [], neighborho
   return {
     forBin: (bin) => {
       const name = nameById[bin.neighborhoodId] || "";
-      return { thermalAlert: name ? thermalFor(name) : false, citizenReportCount: byBin[bin.id] || 0 };
+      return { thermalAlert: name ? thermalFor(name) : false, citizenReportCount: byBin[bin.id] || 0, heatModelMode };
     },
-    forNeighborhoodName: (name) => ({ thermalAlert: thermalFor(name), citizenReportCount: byNeighborhoodKey[normalizeNeighborhoodName(name)] || 0 }),
+    forNeighborhoodName: (name) => ({ thermalAlert: thermalFor(name), citizenReportCount: byNeighborhoodKey[normalizeNeighborhoodName(name)] || 0, heatModelMode }),
+    heatModelMode,
     reportCountForBin: (binId) => byBin[binId] || 0,
     reportCountForNeighborhood: (name) => (byNeighborhoodKey[normalizeNeighborhoodName(name)] || 0) + open.filter((r) => r.binId && nameById[r.binNeighborhoodId || ""] === name).length,
     openCount: open.length,

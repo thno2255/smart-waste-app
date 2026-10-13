@@ -62,7 +62,8 @@ export async function confirmCollectionServer(db, input, { failAt = null, now = 
     step("event");
     t.update(routeRef, { collectedBinIds: FieldValue.arrayUnion(binId), lastProgressAt: iso(now), updatedAt: iso(now) });
     step("route");
-    t.update(binRef, { lastCollectionAt: confirmedAt });
+    // An emptying restarts the heat-hygiene clock of the bin.
+    t.update(binRef, { lastCollectionAt: confirmedAt, thermalExposureDD: 0, thermalExposureAt: confirmedAt });
     step("bin");
     t.set(db.collection("audit_log").doc(), { action: "bin_collected", actorId: driver.uid, actorName: driver.name || "", municipalityId: route.municipalityId || null, details: { routeId, binId, distanceToBinM }, source: "server", createdAt: iso(now) });
     step("audit");

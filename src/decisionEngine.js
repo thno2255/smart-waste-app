@@ -15,6 +15,7 @@
 import { THRESHOLDS, STATE_LABELS, normalizeNeighborhoodName } from "./config.js";
 import { predictFullTime } from "./prediction.js";
 import { getSensorHealth } from "./sensorHealth.js";
+import { hygieneRisk } from "./thermalExposure.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -54,6 +55,28 @@ function tempScore(temp) {
   return 80 + Math.min(20, ((t - THRESHOLDS.tempDangerC) / 10) * 20);
 }
 
+// Heat-hygiene signal on the same 0-100 scale: reaching the degree-day limit before
+// the next run is a "collect today" signal (critical); approaching it is "high".
+function hygieneScore(h) {
+  if (!h?.available) return 0;
+  if (h.projectedRatio >= 1) return 85;
+  if (h.projectedRatio >= 0.75) return 55 + ((h.projectedRatio - 0.75) / 0.25) * 24;
+  return Math.max(0, h.projectedRatio) * 54 / 0.75;
+}
+
+/**
+ * Fill estimate when the sensor can't be trusted (offline, out-of-range, frozen):
+ * the bin's learned fill rate × time since the server-confirmed emptying.
+ * A silent sensor must never make a filling bin look empty.
+ */
+export function estimateFillWithoutSensor(bin, now = Date.now()) {
+  const rate = Number(bin?.learnedFillRatePerDay);
+  const t = bin?.lastCollectionAt ? new Date(bin.lastCollectionAt).getTime() : NaN;
+  if (!Number.isFinite(rate) || rate <= 0 || !Number.isFinite(t)) return null;
+  const days = Math.max(0, (now - t) / (24 * HOUR_MS));
+  return Math.min(THRESHOLDS.maxEstimatedFillPct, rate * days);
+}
+
 function predictedScore(prediction) {
   if (!prediction?.predictionAvailable || prediction.hoursToFull > THRESHOLDS.predictionWindowHours) return 0;
   return Math.max(0, 100 * (1 - prediction.hoursToFull / THRESHOLDS.predictionWindowHours));
@@ -67,16 +90,25 @@ function predictedScore(prediction) {
  * @returns {{score:number, tier:"low"|"medium"|"high"|"critical", reasons:string[], prediction:object, sensorHealth:object}}
  */
 export function getBinPriority(bin, latestReading, recentReadings = [], context = {}) {
-  const { thermalAlert = false, citizenReportCount = 0 } = context;
-  const fill = Number(latestReading?.fill_level_percent ?? bin?.lastFillLevelPercent);
+  const { thermalAlert = false, citizenReportCount = 0, heatModelMode = "observe", now = Date.now() } = context;
+  const measuredFill = Number(latestReading?.fill_level_percent ?? bin?.lastFillLevelPercent);
   const temp = latestReading?.temperature_celsius ?? bin?.lastTemperatureCelsius;
   const prediction = predictFullTime(bin, recentReadings);
-  const sensorHealth = getSensorHealth(bin, latestReading, recentReadings);
+  const sensorHealth = getSensorHealth(bin, latestReading, recentReadings, now);
 
+  // Sensor trust: an offline / out-of-range / frozen sensor is not believed; the fill is then
+  // dead-reckoned from the learned rate and the last emptying (never discounted downwards).
+  const untrusted = sensorHealth.connectivity === "offline" || sensorHealth.connectivity === "fault" || sensorHealth.stuck === true
+    || (sensorHealth.connectivity === "no_sensor" && Number.isNaN(measuredFill));
+  const estimatedFill = untrusted ? estimateFillWithoutSensor(bin, now) : null;
+  const fill = estimatedFill != null ? estimatedFill : measuredFill;
   const fillComponent = Number.isNaN(fill) ? 0 : Math.max(0, Math.min(100, fill));
   const fillComp = fillScore(fillComponent);
   const tempComp = tempScore(temp == null ? null : Number(temp));
   const predictedComp = predictedScore(prediction);
+  const hygiene = hygieneRisk(bin, recentReadings, now);
+  const hygieneActive = heatModelMode === "active" && hygiene.available;
+  const hygieneComp = hygieneActive ? hygieneScore(hygiene) : 0;
 
   let timeSinceCollectionComponent = 0;
   if (bin?.lastCollectionAt) {
@@ -87,7 +119,7 @@ export function getBinPriority(bin, latestReading, recentReadings = [], context 
   // The worst single signal sets the floor (so one severe factor alone can
   // reach "critical"); the second-worst contributes a smaller compounding
   // bonus, since two elevated signals together are worse than either alone.
-  const components = [fillComp, tempComp, predictedComp].sort((a, b) => b - a);
+  const components = [fillComp, tempComp, predictedComp, hygieneComp].sort((a, b) => b - a);
   const [primary, secondary] = components;
 
   let raw = primary + 0.15 * secondary + 0.10 * timeSinceCollectionComponent;
@@ -98,16 +130,14 @@ export function getBinPriority(bin, latestReading, recentReadings = [], context 
   raw += reportBonus;
   raw = Math.min(100, raw);
 
-  // Confidence discount — never silently erase a last-known-critical bin,
-  // but make clear the number is less trustworthy when sensor health is off.
-  let confidenceMultiplier = 1;
-  if (sensorHealth.status === "warning") confidenceMultiplier = 0.9;
-  else if (sensorHealth.status === "fault") confidenceMultiplier = 0.75;
-
-  const score = Math.round(Math.max(0, Math.min(100, raw * confidenceMultiplier)));
+  // No confidence discount: lowering the score of a bin whose sensor is unhealthy hides full bins
+  // behind a broken sensor (the research simulation: +57% overflow). Untrusted sensors are handled
+  // by the fill estimate above and flagged in the reasons instead.
+  const score = Math.round(Math.max(0, Math.min(100, raw)));
   const tier = scoreToTier(score);
 
   const reasons = [];
+  if (estimatedFill != null) reasons.push(`المستشعر غير موثوق — امتلاء مقدَّر ${Math.round(estimatedFill)}% من معدل الحاوية والوقت منذ آخر تفريغ`);
   if (fillComponent >= THRESHOLDS.fillCriticalPct) reasons.push(`نسبة الامتلاء ${Math.round(fillComponent)}%`);
   else if (fillComponent >= THRESHOLDS.fillHighPct) reasons.push(`نسبة الامتلاء مرتفعة (${Math.round(fillComponent)}%)`);
   else if (fillComponent >= THRESHOLDS.fillWarningPct) reasons.push(`نسبة الامتلاء ${Math.round(fillComponent)}% وتحتاج متابعة`);
@@ -119,6 +149,10 @@ export function getBinPriority(bin, latestReading, recentReadings = [], context 
     else if (prediction.hoursToFull <= THRESHOLDS.predictedFullSoonHours) reasons.push(`متوقع الامتلاء خلال نحو ${prediction.hoursToFull.toFixed(1)} ساعة`);
   }
 
+  if (hygiene.available && hygiene.wouldTrigger) {
+    const txt = `تعرّض حراري ${hygiene.projectedDD} من ${hygiene.limit} درجة-يوم متوقع قبل الجولة القادمة`;
+    reasons.push(hygieneActive ? `${txt} — يتجاوز الحد الصحي` : `(وضع المراقبة) ${txt} — كان قيد الحرارة سيرفع أولويتها`);
+  }
   if (thermalAlert) reasons.push("تنبيه حراري نشط في الحي");
   if (reportBonus > 0) reasons.push(`${citizenReportCount} بلاغ مواطن مفتوح على هذه الحاوية`);
 
@@ -127,13 +161,13 @@ export function getBinPriority(bin, latestReading, recentReadings = [], context 
     reasons.push(`لم يتم جمعها منذ ${days} يوم تقريبًا`);
   }
 
-  if (sensorHealth.status !== "healthy") {
+  if (sensorHealth.status !== "healthy" && estimatedFill == null) {
     reasons.push("بيانات المستشعر غير مكتملة الموثوقية — الثقة بهذه النتيجة أقل من المعتاد");
   }
 
   if (reasons.length === 0) reasons.push("جميع المؤشرات ضمن المعدل الطبيعي");
 
-  return { score, tier, reasons, prediction, sensorHealth };
+  return { score, tier, reasons, prediction, sensorHealth, hygiene, estimatedFill, trusted: !untrusted };
 }
 
 // ══════════════════════════════════════════════════════════════════════

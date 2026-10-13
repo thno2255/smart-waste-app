@@ -90,7 +90,7 @@ void connectWiFi() {
   while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) { delay(250); }
 }
 
-bool postReading(float fillPct, float tempC) {
+bool postReading(float fillPct, float tempC, float distanceCm) {
   if (WiFi.status() != WL_CONNECTED) return false;
   HTTPClient http;
   http.begin(INGEST_URL);
@@ -101,6 +101,8 @@ bool postReading(float fillPct, float tempC) {
   doc["device_id"] = DEVICE_ID;
   doc["fill_level_percent"] = fillPct;
   if (tempC > -100) doc["temperature_celsius"] = tempC;
+  doc["distance_cm"] = distanceCm;                                  // raw echo distance, for server-side audits
+  doc["temp_compensated"] = tempC >= -20.0f && tempC <= 85.0f;       // same validity test as speedOfSoundCmPerUs
   doc["signal"] = WiFi.RSSI();
   String body; serializeJson(doc, body);
 
@@ -129,7 +131,7 @@ void loop() {
 
   if (fill >= 0) {
     Serial.printf("distance=%.1fcm fill=%.0f%% temp=%.1fC\n", distance, fill, tempC);
-    postReading(fill, tempC);
+    postReading(fill, tempC, distance);
   } else {
     Serial.println("bad echo — skipping this cycle");
   }
