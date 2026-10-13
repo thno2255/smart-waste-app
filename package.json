@@ -17,7 +17,8 @@
     "test:admin": "firebase emulators:exec --only firestore,auth --project swm-admin-test \"node tests/integration/admin.users.test.mjs\"",
     "test:guards": "firebase emulators:exec --only firestore,auth --project swm-guards-test \"node tests/integration/server.guards.test.mjs\"",
     "test:command": "firebase emulators:exec --only firestore,auth --project swm-command-test \"node tests/integration/command.center.test.mjs\"",
-    "test:reservations": "firebase emulators:exec --only firestore,auth --project swm-reserve-test \"node tests/integration/transfer.reservations.test.mjs\""
+    "test:reservations": "firebase emulators:exec --only firestore,auth --project swm-reserve-test \"node tests/integration/transfer.reservations.test.mjs\"",
+    "test:adjustment": "firebase emulators:exec --only firestore,auth --project swm-adjust-test \"node tests/integration/operational.adjustment.test.mjs\""
   },
   "dependencies": {
     "firebase": "^12.12.0",

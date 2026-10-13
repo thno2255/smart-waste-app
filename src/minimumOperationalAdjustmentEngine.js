@@ -238,24 +238,20 @@ function monetary(evaluation, components, rates) {
  * @param {object} [opts.matrix]              road matrix for the receiver's points (optional)
  * @param {()=>number} [opts.clock]
  */
-export function analyzeMinimumAdjustment(state, opts = {}) {
+/** Shared preparation: base feasibility, model, donors and the intervention candidates. */
+function prepareAdjustment(state, opts = {}) {
   const now = opts.now ?? Date.now();
-  const clock = opts.clock || (() => Date.now());
-  const t0 = clock();
   const P = { ...DEFAULT_ADJUSTMENT_POLICY, ...(opts.policy || {}), allowed: { ...DEFAULT_ADJUSTMENT_POLICY.allowed, ...(opts.policy?.allowed || {}) }, weights: { ...DEFAULT_COST_WEIGHTS, ...(opts.policy?.weights || {}) } };
   const FP = { ...DEFAULT_FEASIBILITY_POLICY, ...(opts.feasibilityPolicy || {}) };
-  const base = evaluateFeasibility(state, { now, settings: opts.settings, policy: FP, matrix: opts.matrix, clock: opts.clock });
+  const base = evaluateFeasibility(state, { now, settings: opts.settings, policy: FP, matrix: opts.matrix, clock: opts.clock, routingStatus: opts.routingStatus });
   const meta = { engineVersion: ADJUSTMENT_ENGINE_VERSION, feasibilityVersion: base.engineVersion, policyVersion: policyVersion(P), analyzedAt: new Date(now).toISOString(), fingerprint: safe(() => stateFingerprint(state)), municipalityId: safe(() => state.municipalityId) };
-  if (base.feasibilityStatus === FEASIBILITY_STATUS.ERROR) return { ...meta, status: "ERROR", needed: null, base: stripBase(base), error: base.error, alternatives: [], rejectedCandidates: [], recommended: null };
-  if (base.feasible) return { ...meta, status: "NO_DEFICIT", needed: false, base: stripBase(base), alternatives: [], rejectedCandidates: [], recommended: null, search: null };
-
+  if (base.feasibilityStatus === FEASIBILITY_STATUS.ERROR) return { early: { ...meta, status: "ERROR", needed: null, base: stripBase(base), error: base.error, alternatives: [], rejectedCandidates: [], recommended: null } };
+  if (base.feasible) return { early: { ...meta, status: "NO_DEFICIT", needed: false, base: stripBase(base), alternatives: [], rejectedCandidates: [], recommended: null, search: null } };
   const model = base.model;
   model.policy.__w = P.weights;
   const simulatedEnv = model.due.length > 0 && model.due.every((d) => d.simulated);
   const rates = P.costRates || (simulatedEnv && P.useSimulationCostRates ? SIMULATION_COST_RATES : null);
   const donors = (opts.donors || []).map((d) => ({ ...d, model: buildOperationalModel(d.state, { now, settings: opts.settings, policy: FP }), base: evaluateFeasibility(d.state, { now, settings: opts.settings, policy: FP, clock: opts.clock }) }));
-
-  // 1. candidates
   const rejected = [];
   const candidates = [];
   for (const [code, type] of Object.entries(INTERVENTION_TYPES)) {
@@ -264,6 +260,74 @@ export function analyzeMinimumAdjustment(state, opts = {}) {
       candidates.push({ ...c, id: c.key, code, title: type.title, authority: c.authority || type.authority, components: c.components || [] });
     }
   }
+  return { now, P, FP, base, meta, model, simulatedEnv, rates, donors, rejected, candidates, opts, baseEval: evaluatePlan(model, base.plan, { weights: P.weights }) };
+}
+
+/** Apply one set of interventions to an isolated model copy, re-solve, check the lenders, describe the result. */
+function evaluateSet(ctx, set) {
+  const { model, P, FP, now, opts, donors, base, rates, baseEval } = ctx;
+  const m = cloneModel(model);
+  const freedoms = {};
+  for (const c of set) { if (c.apply) c.apply(m); Object.assign(freedoms, c.freedoms || {}); }
+  const fixed = set.reduce((a, c) => a + c.fixedUnits, 0);
+  const solved = solvePlan(m, null, { freedoms, timeLimitMs: P.perSetTimeLimitMs, weights: P.weights, extraCostUnits: fixed, clock: opts.clock });
+  const e = solved.evaluation;
+  // Loans: the lending municipality must still meet its own service level without ALL the crews this set takes from it.
+  const donorChecks = [];
+  for (const [did, loans] of Object.entries(groupBy(set.filter((c) => c.code === "LOAN"), (c) => c.donorMunicipalityId))) {
+    const d = donors.find((x) => x.municipalityId === did);
+    const taken = new Set(loans.map((c) => c.details.driverId));
+    const without = { ...d.state, profiles: (d.state.profiles || []).filter((p) => !taken.has(p.uid)) };
+    const after = evaluateFeasibility(without, { now, settings: opts.settings, policy: FP, clock: opts.clock });
+    const worse = after.unservedBins.length > d.base.unservedBins.length || (after.lateBins || []).length > (d.base.lateBins || []).length;
+    const ok = after.feasible || (!d.base.feasible && !worse);
+    donorChecks.push({ municipalityId: did, name: d.name || did, crewsLent: loans.length, ok, before: { status: d.base.feasibilityStatus, unserved: d.base.unservedBins.length }, after: { status: after.feasibilityStatus, unserved: after.unservedBins.length, late: (after.lateBins || []).length },
+      reason: ok ? null : `تفقد ${d.name || did} قدرتها على الوفاء بالتزاماتها خلال فترة الإعارة (${after.unservedBins.length} حاوية بلا خدمة${(after.lateBins || []).length ? `، ${after.lateBins.length} متأخرة` : ""})` });
+  }
+  const donorOk = donorChecks.every((x) => x.ok);
+  const valid = e.valid && donorOk;
+  const diff = planDiff(model, base.plan, m, solved.plan, baseEval, e);
+  return {
+    id: set.map((c) => c.id).join("+"), interventions: set.map(({ apply, freedoms: _f, ...rest }) => rest), // eslint-disable-line no-unused-vars
+    size: set.length, valid, slaMet: e.slaMet, success: valid && e.slaMet,
+    feasibilityStatus: valid && e.slaMet ? FEASIBILITY_STATUS.FEASIBLE : !donorOk ? "REJECTED_DONOR" : e.hardViolations.length ? "HARD_VIOLATION" : e.unverifiable ? FEASIBILITY_STATUS.INSUFFICIENT_DATA : "SERVICE_LEVEL_NOT_MET",
+    unserved: e.unserved, late: e.late, lateMin: e.lateMin, costUnits: e.costUnits, changeUnits: e.changeUnits, fixedUnits: fixed,
+    costBreakdown: [{ code: "drive", units: Math.round(e.driveMin * P.weights.driveMinute), minutes: e.driveMin }, ...(e.overtimeMin ? [{ code: "overtime", units: e.overtimeMin * P.weights.overtimeMinute, minutes: e.overtimeMin }] : []),
+      ...(e.change.movedBins ? [{ code: "movedBins", units: e.change.movedBins * P.weights.movedBin, count: e.change.movedBins }] : []), ...(e.change.resequencedRoutes ? [{ code: "resequencedRoutes", units: e.change.resequencedRoutes * P.weights.resequencedRoute, count: e.change.resequencedRoutes }] : []),
+      ...set.flatMap((c) => c.components)],
+    money: monetary(e, set.flatMap((c) => c.components), rates),
+    driveMin: e.driveMin, km: e.km, overtimeMin: e.overtimeMin, completionMin: e.completionMin,
+    hardViolations: [...new Set(e.hardViolations.map((v) => v.code))], missing: [...new Set(e.missing.map((x) => x.code))], donorChecks,
+    // For an alternative that leaves bins unserved: which HARD constraints prevented serving them (never traded for cost).
+    blockedBy: e.unserved.length ? [...new Set(explainUnserved(m, solved.plan, e.unserved).map((v) => v.code))] : [],
+    authority: set.reduce((a, c) => (ROLE_RANK[c.authority] > ROLE_RANK[a] ? c.authority : a), "employee"),
+    requiresExternalAction: set.some((c) => c.requiresExternalAction), simulated: set.some((c) => c.simulated),
+    crews: Object.fromEntries(m.crews.map((c) => [c.id, { driverId: c.driverId, driverName: c.driverName, vehicleId: c.vehicleId, vehicleNumber: c.vehicleNumber, availableAtMin: c.availableAtMin || 0, loan: c.loan || null, simulated: !!c.simulated, commitments: c.commitments.map((k) => k.routeId) }])),
+    diff, plan: solved.plan, times: e.times, solver: { iterations: solved.solver.iterations, elapsedMs: solved.solver.elapsedMs, timedOut: solved.solver.timedOut },
+    key: [valid ? 0 : 1, e.unverifiable ? 1 : 0, e.unserved.length, e.late.length, Math.round(e.lateMin), e.costUnits, e.changeUnits, set.length],
+  };
+}
+
+/**
+ * Re-check ONE alternative on a fresh snapshot (server, at approval time). The alternative id lists its
+ * interventions ("SHIFT_TIMING:D2+RESEQUENCE"); each must still be generated and the set must still succeed.
+ */
+export function verifyAdjustmentSet(state, alternativeId, opts = {}) {
+  const ctx = prepareAdjustment(state, opts);
+  if (ctx.early) return { ok: false, code: ctx.early.status === "NO_DEFICIT" ? "NO_DEFICIT" : "ERROR", reason: ctx.early.status === "NO_DEFICIT" ? "لم يعد هناك عجز — الخطة الحالية تحقق مستوى الخدمة" : "تعذر إعادة التقييم", fingerprint: ctx.early.fingerprint };
+  const ids = String(alternativeId || "").split("+");
+  const set = ids.map((id) => ctx.candidates.find((c) => c.id === id));
+  if (set.some((c) => !c)) return { ok: false, code: "UNAVAILABLE", reason: "أحد التعديلات لم يعد متاحًا في الحالة الحالية", fingerprint: ctx.meta.fingerprint };
+  const alt = evaluateSet(ctx, set);
+  return { ok: alt.success, code: alt.success ? "OK" : alt.feasibilityStatus, reason: alt.success ? null : `لم يعد البديل صالحًا: ${alt.feasibilityStatus}`, alternative: stripAlt(alt), fingerprint: ctx.meta.fingerprint, base: stripBase(ctx.base), model: ctx.model };
+}
+
+export function analyzeMinimumAdjustment(state, opts = {}) {
+  const clock = opts.clock || (() => Date.now());
+  const t0 = clock();
+  const ctx = prepareAdjustment(state, opts);
+  if (ctx.early) return ctx.early;
+  const { P, base, meta, model, simulatedEnv, rates, rejected, candidates } = ctx;
 
   // 2. sets: size 1..k, compatible (no shared resource, one of each global freedom), cheapest fixed cost first.
   const sets = [];
@@ -285,48 +349,9 @@ export function analyzeMinimumAdjustment(state, opts = {}) {
   // 3. evaluate every set (bounded by the time limit)
   const evaluated = [];
   let timedOut = false;
-  const baseEval = evaluatePlan(model, base.plan, { weights: P.weights });
   for (const set of sets) {
     if (clock() - t0 > P.timeLimitMs) { timedOut = true; break; }
-    const m = cloneModel(model);
-    const freedoms = {};
-    for (const c of set) { if (c.apply) c.apply(m); Object.assign(freedoms, c.freedoms || {}); }
-    const fixed = set.reduce((a, c) => a + c.fixedUnits, 0);
-    const solved = solvePlan(m, null, { freedoms, timeLimitMs: P.perSetTimeLimitMs, weights: P.weights, extraCostUnits: fixed, clock: opts.clock });
-    const e = solved.evaluation;
-    // Loans: the lending municipality must still meet its own service level without ALL the crews this set takes from it.
-    const donorChecks = [];
-    for (const [did, loans] of Object.entries(groupBy(set.filter((c) => c.code === "LOAN"), (c) => c.donorMunicipalityId))) {
-      const d = donors.find((x) => x.municipalityId === did);
-      const taken = new Set(loans.map((c) => c.details.driverId));
-      const without = { ...d.state, profiles: (d.state.profiles || []).filter((p) => !taken.has(p.uid)) };
-      const after = evaluateFeasibility(without, { now, settings: opts.settings, policy: FP, clock: opts.clock });
-      const worse = after.unservedBins.length > d.base.unservedBins.length || (after.lateBins || []).length > (d.base.lateBins || []).length;
-      const ok = after.feasible || (!d.base.feasible && !worse);
-      donorChecks.push({ municipalityId: did, name: d.name || did, crewsLent: loans.length, ok, before: { status: d.base.feasibilityStatus, unserved: d.base.unservedBins.length }, after: { status: after.feasibilityStatus, unserved: after.unservedBins.length, late: (after.lateBins || []).length },
-        reason: ok ? null : `تفقد ${d.name || did} قدرتها على الوفاء بالتزاماتها خلال فترة الإعارة (${after.unservedBins.length} حاوية بلا خدمة${(after.lateBins || []).length ? `، ${after.lateBins.length} متأخرة` : ""})` });
-    }
-    const donorOk = donorChecks.every((x) => x.ok);
-    const valid = e.valid && donorOk;
-    const diff = planDiff(model, base.plan, m, solved.plan, baseEval, e);
-    evaluated.push({
-      id: set.map((c) => c.id).join("+"), interventions: set.map(({ apply, freedoms: _f, ...rest }) => rest), // eslint-disable-line no-unused-vars
-      size: set.length, valid, slaMet: e.slaMet, success: valid && e.slaMet,
-      feasibilityStatus: valid && e.slaMet ? FEASIBILITY_STATUS.FEASIBLE : !donorOk ? "REJECTED_DONOR" : e.hardViolations.length ? "HARD_VIOLATION" : e.unverifiable ? FEASIBILITY_STATUS.INSUFFICIENT_DATA : "SERVICE_LEVEL_NOT_MET",
-      unserved: e.unserved, late: e.late, lateMin: e.lateMin, costUnits: e.costUnits, changeUnits: e.changeUnits, fixedUnits: fixed,
-      costBreakdown: [{ code: "drive", units: Math.round(e.driveMin * P.weights.driveMinute), minutes: e.driveMin }, ...(e.overtimeMin ? [{ code: "overtime", units: e.overtimeMin * P.weights.overtimeMinute, minutes: e.overtimeMin }] : []),
-        ...(e.change.movedBins ? [{ code: "movedBins", units: e.change.movedBins * P.weights.movedBin, count: e.change.movedBins }] : []), ...(e.change.resequencedRoutes ? [{ code: "resequencedRoutes", units: e.change.resequencedRoutes * P.weights.resequencedRoute, count: e.change.resequencedRoutes }] : []),
-        ...set.flatMap((c) => c.components)],
-      money: monetary(e, set.flatMap((c) => c.components), rates),
-      driveMin: e.driveMin, km: e.km, overtimeMin: e.overtimeMin, completionMin: e.completionMin,
-      hardViolations: [...new Set(e.hardViolations.map((v) => v.code))], missing: [...new Set(e.missing.map((x) => x.code))], donorChecks,
-      // For an alternative that leaves bins unserved: which HARD constraints prevented serving them (never traded for cost).
-      blockedBy: e.unserved.length ? [...new Set(explainUnserved(m, solved.plan, e.unserved).map((v) => v.code))] : [],
-      authority: set.reduce((a, c) => (ROLE_RANK[c.authority] > ROLE_RANK[a] ? c.authority : a), "employee"),
-      requiresExternalAction: set.some((c) => c.requiresExternalAction), simulated: set.some((c) => c.simulated),
-      diff, plan: solved.plan, times: e.times, solver: { iterations: solved.solver.iterations, elapsedMs: solved.solver.elapsedMs, timedOut: solved.solver.timedOut },
-      key: [valid ? 0 : 1, e.unverifiable ? 1 : 0, e.unserved.length, e.late.length, Math.round(e.lateMin), e.costUnits, e.changeUnits, set.length],
-    });
+    evaluated.push(evaluateSet(ctx, set));
   }
   evaluated.sort((a, b) => compareKeys(a.key, b.key));
   const winners = evaluated.filter((x) => x.success);

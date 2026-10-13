@@ -118,8 +118,9 @@ export function makeTravel(policy = DEFAULT_FEASIBILITY_POLICY, matrix = null) {
   let fallbacks = 0, roads = 0;
   const fn = (a, b) => {
     if (!a || !b || a.lat == null || b.lat == null) return null;
-    if (index && a.id != null && b.id != null && index.has(a.id) && index.has(b.id)) {
-      const i = index.get(a.id), j = index.get(b.id);
+    const ai = a.id ?? a.binId, bi = b.id ?? b.binId;
+    if (index && ai != null && bi != null && index.has(ai) && index.has(bi)) {
+      const i = index.get(ai), j = index.get(bi);
       const d = matrix.durations?.[i]?.[j], k = matrix.distances?.[i]?.[j];
       if (d != null && d < 1e5) { roads += 1; return { min: d, km: k != null && k < 1e5 ? k : null, source: matrix.source || "osrm" }; }
     }
@@ -631,6 +632,7 @@ export function evaluateFeasibility(state, opts = {}) {
     const affectedResources = Object.entries(solved.plan.crews).filter(([, segs]) => segs.some((s) => !s.routeId && s.binIds.length)).map(([cid]) => cid);
     const travelStats = model.travel.stats();
     const quality = [];
+    if (opts.routingStatus === "failed") quality.push({ code: "ROUTING_FAILED", text: "تعذر الاتصال بخدمة المسارات — كل الأزمنة تقديرية بالمسافة الجوية" });
     if (travelStats.estimatedPairs > 0) quality.push({ code: "TRAVEL_ESTIMATED", text: "أزمنة القيادة تقديرية بالمسافة الجوية لبعض الأزواج أو كلها" });
     if (model.due.some((d) => d.simulated)) quality.push({ code: "SIMULATED_READINGS", text: "قراءات امتلاء من بيئة المحاكاة" });
     if (model.excluded.length) quality.push({ code: "BINS_EXCLUDED", text: `${model.excluded.length} حاوية مستبعدة لقرار بشري (حرارة أو مستشعر غير موثوق)` });

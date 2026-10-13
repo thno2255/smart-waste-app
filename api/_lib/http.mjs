@@ -49,6 +49,8 @@ export const DEFAULT_LIMITS = {
   "admin.transfers": { limit: 10,  windowSec: 60 },
   "field.confirm":   { limit: 60,  windowSec: 60 },
   "dispatch.manual": { limit: 6,   windowSec: 60 },
+  "ops.adjustment":  { limit: 6,   windowSec: 60 },   // analyses are heavy (whole-municipality search)
+  "ops.adjustment.decide": { limit: 20, windowSec: 60 },
   "ai.minute":       { limit: 20,  windowSec: 60 },
   "ai.day":          { limit: 200, windowSec: 86400 },
 };

@@ -85,7 +85,7 @@ export async function loadMunicipalityState(db, mid, now = Date.now()) {
 }
 
 /** Municipality ids that have bins (the six official ones in this deployment). */
-async function municipalityIds(db) {
+export async function municipalityIds(db) {
   const snap = await db.collection("municipalities").get();
   if (!snap.empty) return snap.docs.map((d) => d.id);
   const bins = await db.collection("bins").select("municipalityId").get();
@@ -260,6 +260,8 @@ export async function runDispatchCycle(db, { trigger = "manual", municipalityId 
       if (status === "executed") tally.executed += 1; else if (status === "observed") tally.observed += 1; else if (status === "rejected_at_commit") tally.rejected += 1; else if (status === "duplicate") tally.duplicates += 1; else if (status === "open") tally.escalationsOpen += 1;
     }
     result.municipalities[mid] = tally;
+    // Approved operational adjustments: measure their outcome from the collections confirmed so far.
+    try { const { syncAdjustmentOutcomes } = await import("./adjustment.mjs"); tally.adjustmentsSynced = await syncAdjustmentOutcomes(db, mid, now); } catch (e) { tally.adjustmentsSyncError = String(e?.message || e).slice(0, 120); }
   }
   result.finishedAt = iso(Date.now());
   await db.collection("dispatch_runs").doc(runId).set({ ...result, actor: actor ? { uid: actor.uid, name: actor.name || "" } : null, settings: { mode: settings.mode, scope: settings.scope, periodMinutes: settings.periodMinutes } });

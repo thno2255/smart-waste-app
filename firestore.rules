@@ -134,6 +134,12 @@ service cloud.firestore {
       allow write: if false;
     }
     match /resource_locks/{id} { allow read, write: if false; }
+    // Minimum operational adjustment analyses — written ONLY by /api/ops/adjustment (analysis, approval, rejection,
+    // outcome). Back-office staff read their municipality's; drivers and citizens never.
+    match /adjustment_analyses/{id} {
+      allow read: if isEmployee() && inMun(resource.data);
+      allow write: if false;
+    }
     match /optimization_runs/{id}    { allow read: if isEmployee() && inMun(resource.data); allow create: if isEmployee() && inMun(request.resource.data); allow update, delete: if isAdmin() && resource.data.get("demo", false) == true; }
     match /simulation_scenarios/{id} { allow read: if isEmployee() && inMun(resource.data); allow create: if (isAdmin() || isManager()) && inMun(request.resource.data); allow update, delete: if isAdmin(); }
     match /decision_recommendations/{id} { allow read: if isEmployee() && inMun(resource.data); allow create, update: if isEmployee() && inMun(request.resource.data); allow delete: if false; }

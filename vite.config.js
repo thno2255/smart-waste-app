@@ -32,6 +32,7 @@ function devServerFunctions() {
       mount('/api/admin/users', 'api/admin/users.js')
       mount('/api/admin/transfers', 'api/admin/transfers.js')
       mount('/api/field/confirm-collection', 'api/field/confirm-collection.js')
+      mount('/api/ops/adjustment', 'api/ops/adjustment.js')
       mount('/api/ai', 'api/ai.js')
     },
   }

@@ -68,6 +68,8 @@ await env.withSecurityRulesDisabled(async (c) => {
   await put("simulation_scenarios/scN", { municipalityId: "north", verdict: "worse" });
   await put("dispatch_decisions/escE", { municipalityId: "east", type: "escalate", status: "open" });
   await put("dispatch_settings/config", { mode: "observe", scope: "demo_only" });
+  await put("adjustment_analyses/adjE", { municipalityId: "east", status: "PROPOSED", recommendedId: "RESEQUENCE" });
+  await put("resource_reservations/resE", { resourceId: "VE", status: "active", municipalityIds: ["east", "north"] });
 });
 
 const fs = (uid) => env.authenticatedContext(uid).firestore();
@@ -203,6 +205,13 @@ const CASES = [
   ["ALLOW", "amanah", "عميل", "resource_transfers", "تحديث", "الأمانة ترفض نقلًا مقترحًا", "allow", (f) => updateDoc(doc(f, "resource_transfers/T0"), { status: "rejected", decidedBy: "amanah", decidedAt: "t" })],
   ["SEC-16", "amanah", "عميل", "resource_reservations", "إنشاء", "إنشاء حجز مورد من العميل", "deny", (f) => setDoc(doc(f, "resource_reservations/X"), { resourceId: "VE", status: "active" })],
   ["SEC-16", "amanah", "عميل", "resource_locks", "قراءة", "قراءة أقفال الموارد", "deny", (f) => getDoc(doc(f, "resource_locks/VE"))],
+  // ── SEC-17 operational adjustments: analysis, approval and outcome are server-only; reads stay in-municipality ──
+  ["SEC-17", "opsE", "عميل", "adjustment_analyses", "تحديث", "موظف العمليات يعتمد توصية من العميل متجاوزًا الخادم", "deny", (f) => updateDoc(doc(f, "adjustment_analyses/adjE"), { status: "APPROVED", approvedAlternativeId: "RESEQUENCE" })],
+  ["SEC-17", "amanah", "عميل", "adjustment_analyses", "إنشاء", "الأمانة تنشئ تحليلًا مزوّرًا من العميل", "deny", (f) => setDoc(doc(f, "adjustment_analyses/forged"), { municipalityId: "east", status: "APPROVED" })],
+  ["SEC-17", "opsN", "عميل", "adjustment_analyses", "قراءة", "موظف بلدية أخرى يقرأ تحليل الشرق", "deny", (f) => getDoc(doc(f, "adjustment_analyses/adjE"))],
+  ["SEC-17", "drvE", "عميل", "adjustment_analyses", "قراءة", "السائق يقرأ تحليلات التعديل", "deny", (f) => getDoc(doc(f, "adjustment_analyses/adjE"))],
+  ["ALLOW", "opsE", "عميل", "adjustment_analyses", "قراءة", "موظف العمليات يقرأ تحليل بلديته", "allow", (f) => getDoc(doc(f, "adjustment_analyses/adjE"))],
+  ["ALLOW", "opsE", "عميل", "resource_reservations", "قراءة", "موظف بلدية طرف في الحجز يقرؤه", "allow", (f) => getDoc(doc(f, "resource_reservations/resE"))],
   // ── SEC-14 operational targets / impact factors are decision inputs: Amanah only, typed and bounded ──
   ["SEC-14", "opsE", "عميل", "dispatch_settings", "تحديث", "موظف العمليات يغيّر الأهداف التشغيلية", "deny", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "observe", scope: "demo_only", targets: { criticalCollectionMin: 30 } })],
   ["SEC-14", "amanah", "عميل", "dispatch_settings", "تحديث", "هدف خارج المدى (0 دقيقة)", "deny", (f) => setDoc(doc(f, "dispatch_settings/config"), { mode: "observe", scope: "demo_only", targets: { criticalCollectionMin: 0 } })],
